@@ -124,6 +124,32 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
+    /// One type of each registered kind. The differential tests read these types as each of their readable
+    /// element types.
+    /// </summary>
+    internal static readonly string[] RegisteredTypes =
+    {
+        "UInt8", "Int32", "UInt64", "Int128", "Float32", "Float64", "Bool", "String", "FixedString(4)",
+        "Date", "Date32", "DateTime", "DateTime('Europe/Berlin')", "DateTime64(3)", "DateTime64(9, 'UTC')",
+        "Time", "Time64(3)", "UUID", "IPv4", "IPv6", "Decimal(9, 2)", "Decimal(38, 10)", "Enum8('a' = 1)",
+        "Nullable(Int32)", "Nullable(String)", "Nullable(DateTime)", "Nullable(Time64(3))",
+        "LowCardinality(String)", "LowCardinality(UInt32)", "LowCardinality(Nullable(DateTime))",
+        "Array(Int32)", "Map(String, Int32)", "Tuple(Int32, String)", "Variant(Int32, String)", "Dynamic",
+    };
+
+    /// <summary>
+    /// <c>Nullable</c> and <c>LowCardinality</c> types over projecting and non-projecting inners. The differential
+    /// tests read these types as each of their readable element types.
+    /// </summary>
+    internal static readonly string[] WrappedTypes =
+    {
+        "Nullable(DateTime('UTC'))", "Nullable(DateTime64(3, 'UTC'))", "Nullable(Time)", "Nullable(Time64(3))",
+        "Nullable(String)", "Nullable(Int32)", "Nullable(UUID)",
+        "LowCardinality(String)", "LowCardinality(UInt32)", "LowCardinality(DateTime('UTC'))",
+        "LowCardinality(Nullable(String))", "LowCardinality(Nullable(DateTime('UTC')))",
+    };
+
+    /// <summary>
     /// Keeps the diagnostic list honest in the one direction that stays true: every type a codec advertises must
     /// actually be projectable, so the failure message a caller is shown never names a reading that does not exist.
     /// The converse is deliberately not asserted — <see cref="IColumnCodec.TryProjectRead"/> is the authority, and a
@@ -132,19 +158,9 @@ public class ColumnReadProjectionTests
     [Test]
     public void ReadableElementTypes_EveryRegisteredType_LeadsWithElementTypeAndIsProjectable()
     {
-        string[] types =
-        {
-            "UInt8", "Int32", "UInt64", "Int128", "Float32", "Float64", "Bool", "String", "FixedString(4)",
-            "Date", "Date32", "DateTime", "DateTime('Europe/Berlin')", "DateTime64(3)", "DateTime64(9, 'UTC')",
-            "Time", "Time64(3)", "UUID", "IPv4", "IPv6", "Decimal(9, 2)", "Decimal(38, 10)", "Enum8('a' = 1)",
-            "Nullable(Int32)", "Nullable(String)", "Nullable(DateTime)", "Nullable(Time64(3))",
-            "LowCardinality(String)", "LowCardinality(UInt32)", "LowCardinality(Nullable(DateTime))",
-            "Array(Int32)", "Map(String, Int32)", "Tuple(Int32, String)", "Variant(Int32, String)", "Dynamic",
-        };
-
         Assert.Multiple(() =>
         {
-            foreach (string type in types)
+            foreach (string type in RegisteredTypes)
             {
                 IColumnCodec codec = Codec(type);
                 IReadOnlyList<Type> readable = codec.ReadableElementTypes;
@@ -554,17 +570,9 @@ public class ColumnReadProjectionTests
     [Test]
     public void TryProjectRead_WrappedCodecs_ProjectEveryAdvertisedTypeToExactlyThatType()
     {
-        string[] wrapped =
-        {
-            "Nullable(DateTime('UTC'))", "Nullable(DateTime64(3, 'UTC'))", "Nullable(Time)", "Nullable(Time64(3))",
-            "Nullable(String)", "Nullable(Int32)", "Nullable(UUID)",
-            "LowCardinality(String)", "LowCardinality(UInt32)", "LowCardinality(DateTime('UTC'))",
-            "LowCardinality(Nullable(String))", "LowCardinality(Nullable(DateTime('UTC')))",
-        };
-
         Assert.Multiple(() =>
         {
-            foreach (string type in wrapped)
+            foreach (string type in WrappedTypes)
             {
                 IColumnCodec codec = Codec(type);
                 foreach (Type target in codec.ReadableElementTypes)
@@ -952,7 +960,7 @@ public class ColumnReadProjectionTests
         });
     }
 
-    private static IEnumerable<TestCaseData> ColumnReadCandidates()
+    internal static IEnumerable<TestCaseData> ColumnReadCandidates()
     {
         yield return ColumnReadCase("String", typeof(byte[]), true);
         yield return ColumnReadCase("Nullable(String)", typeof(byte[]), true);
