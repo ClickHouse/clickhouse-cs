@@ -9,8 +9,8 @@ using ClickHouse.Driver.Tcp.Tests.Utilities;
 namespace ClickHouse.Driver.Tcp.Tests.Poco;
 
 /// <summary>
-/// The POCO read plan against the plan before it moved onto the converter derivation
-/// (<see cref="PocoReadPlan{T}.BuildLegacy"/>), for the matrix of column types and CLR targets of
+/// The POCO read plan against the reference plan of the differential tests (<see cref="PocoReadPlan{T}.BuildLegacy"/>),
+/// for the matrix of column types and CLR targets of
 /// <see cref="ReadRulesTests"/> (enums, casts, nullable targets, tuples, maps, the array casts), which the differential
 /// case list does not have. Each scatter tier must give the outcome of the old plan: the same refusal, the same values,
 /// or the same failure, for all the rows and for a window that starts past the first row of the block and past the
@@ -81,7 +81,7 @@ public class PocoReadRulesTests
         }
         catch (Exception e)
         {
-            return (null, $"failed: {e.GetType().Name}: {e.Message}");
+            return (null, $"failed: {e.GetType().Name}: {e.Message} (inner exception: {e.InnerException?.GetType().Name ?? "none"})");
         }
 
         return (Array.ConvertAll(rows, row => row.Value), null);

@@ -15,9 +15,8 @@ namespace ClickHouse.Driver.Tcp.Poco;
 /// </summary>
 internal static class PocoValueProjection
 {
-    private static readonly MethodInfo NullNotAssignableMethod = typeof(PocoReadErrors).GetMethod(
-        nameof(PocoReadErrors.NullNotAssignable),
-        new[] { typeof(string), typeof(string), typeof(string), typeof(string), typeof(string), typeof(long) });
+    private static readonly MethodInfo NullNotAssignableMethod =
+        typeof(PocoReadErrors).GetMethod(nameof(PocoReadErrors.NullNotAssignable), BindingFlags.Public | BindingFlags.Static);
 
     /// <summary>Builds the projection from one decoded value to one property value.</summary>
     /// <param name="codec">The column's codec, consulted for codec-owned conversions.</param>

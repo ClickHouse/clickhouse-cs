@@ -159,7 +159,7 @@ internal static class PocoColumnScatterFactory
 
         // The reader names the row of the column. rows[0] holds column row start, and is row rowOffset of the result.
         public Exception NullFailure(NullValueException failure, int start, long rowOffset)
-            => PocoReadErrors.NullNotAssignable(columnName, columnType, pocoTypeName, memberName, memberType, rowOffset + (failure.Row - start), failure);
+            => PocoReadErrors.NullNotAssignable(columnName, columnType, pocoTypeName, memberName, memberType, rowOffset + (failure.Row - start));
     }
 
     /// <summary>The scatter of <see cref="PocoScatterTier.Emit"/>: one compiled loop.</summary>
