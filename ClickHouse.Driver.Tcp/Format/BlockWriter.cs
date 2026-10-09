@@ -92,8 +92,8 @@ internal static class BlockWriter
     }
 
     /// <summary>
-    /// Writes a populated data block covering rows <c>[start, start + rowCount)</c> of each column, read straight
-    /// from its borrowed span. Each column's header and codec come from the descriptor (the target schema's
+    /// Writes a populated data block covering rows <c>[start, start + rowCount)</c> of each column, with the column's
+    /// <see cref="InsertColumn.Write"/>. Each column's header and codec come from the descriptor (the target schema's
     /// authoritative name and resolved type), not the value column.
     /// </summary>
     /// <param name="writer">The writer to encode into.</param>
