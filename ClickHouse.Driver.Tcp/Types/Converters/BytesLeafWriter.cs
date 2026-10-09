@@ -7,8 +7,8 @@ using ClickHouse.Driver.Tcp.Protocol;
 namespace ClickHouse.Driver.Tcp.Types.Converters;
 
 /// <summary>
-/// A write leaf whose canonical value is a run of bytes: <c>String</c>, <c>FixedString(N)</c> and <c>JSON</c>. The
-/// LowCardinality writer uses <see cref="ToCanonical"/> and <see cref="Encode"/> to intern and write its dictionary.
+/// A write leaf whose canonical value is a run of bytes: <c>String</c>, <c>FixedString(N)</c> and <c>JSON</c>. A
+/// LowCardinality writer can intern and write its dictionary with <see cref="ToCanonical"/> and <see cref="Encode"/>.
 /// </summary>
 /// <typeparam name="T">The CLR type that the leaf writes.</typeparam>
 internal abstract class BytesLeafWriter<T> : ColumnWriter<T>
@@ -240,9 +240,10 @@ internal sealed class FixedStringBytesWriter : BytesLeafWriter<byte[]>
                 {
                     writer.WriteBytes(placeholder);
                 }
-                else if (values.IsSegmented)
+                else if (values.IsSegmented && !marked)
                 {
-                    // A segment is the array of one row, so a message names the element of that array.
+                    // A segment is the array of one row, so a message names the element of that array. Under marks
+                    // the values come from a Nullable child, and a message names the flat position, as for a column.
                     writer.WriteBytes(Checked(run[i], i, "element"));
                 }
                 else

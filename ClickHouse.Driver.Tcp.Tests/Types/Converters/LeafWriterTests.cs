@@ -71,6 +71,59 @@ public class LeafWriterTests
         ConverterHarness.AssertSameFailure(expected, actual, "segments");
     }
 
+    /// <summary>
+    /// Under marks, the values of a segmented source come from a <c>Nullable</c> child of an <c>Array</c>. The current
+    /// write reaches the leaf through a flat view there, so a refusal names the flat row.
+    /// </summary>
+    [Test]
+    public async Task Write_RefusedValueInMarkedSegments_NamesTheFlatRowAsTheCurrentNullableArrayWriteDoes()
+    {
+        byte[][][] rows = { new[] { "ab"u8.ToArray(), null }, new[] { "c"u8.ToArray() } };
+        byte[] marks = { 0, 1, 0 };
+        ColumnWriter<byte[]> writer = Derivation.Writer<byte[]>("FixedString(2)", ConverterHarness.Context);
+
+        Exception expected = await ConverterHarness.CatchAsync(() => ConverterHarness.WriteOldAsync("Array(Nullable(FixedString(2)))", rows, 0, rows.Length));
+        Exception actual = await ConverterHarness.CatchAsync(
+            () => CodecTestHarness.WriteAsync(w => writer.Write(w, ValueSource<byte[]>.OfSegments(rows).WithAbsent(marks), null)));
+
+        ConverterHarness.AssertSameFailure(expected, actual, "marked segments");
+    }
+
+    /// <summary>
+    /// The leaf converts in chunks of 4,096 bytes. Values, marks and a refusal past the first chunk give the bytes and
+    /// the position of the current write.
+    /// </summary>
+    [Test]
+    public async Task Write_MoreValuesThanOneChunk_GivesTheCurrentBytesAndPositions()
+    {
+        DateTimeOffset[] instants = Enumerable.Range(0, 2_500).Select(i => DateTimeOffset.FromUnixTimeSeconds(i * 1_000L)).ToArray();
+        ColumnWriter<DateTimeOffset> writer = Derivation.Writer<DateTimeOffset>("DateTime", ConverterHarness.Context);
+        byte[] whole = await ConverterHarness.WriteOldAsync("DateTime", instants, 7, instants.Length - 7);
+        byte[] newWhole = await ConverterHarness.WriteNewAsync(writer, instants, 7, instants.Length - 7);
+
+        byte[] marks = Marks(instants.Length);
+        DateTimeOffset?[] nullable = instants.Select((value, i) => marks[i] != 0 ? (DateTimeOffset?)null : value).ToArray();
+        byte[] marked = await ConverterHarness.WriteOldAsync("Nullable(DateTime)", nullable, 0, nullable.Length);
+        byte[] newMarked = await CodecTestHarness.WriteAsync(w =>
+        {
+            w.WriteBytes(marks);
+            writer.Write(w, ValueSource<DateTimeOffset>.Of(instants).WithAbsent(marks), null);
+        });
+
+        decimal[] amounts = Enumerable.Range(0, 1_500).Select(i => i == 1_300 ? 10_000_000m : i / 4m).ToArray();
+        ColumnWriter<decimal> decimals = Derivation.Writer<decimal>("Decimal(9, 2)", ConverterHarness.Context);
+        Exception expected = await ConverterHarness.CatchAsync(() => ConverterHarness.WriteOldAsync("Decimal(9, 2)", amounts, 5, amounts.Length - 5));
+        Exception actual = await ConverterHarness.CatchAsync(() => ConverterHarness.WriteNewAsync(decimals, amounts, 5, amounts.Length - 5));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(newWhole, Is.EqualTo(whole), "slice from row 7");
+            Assert.That(newMarked, Is.EqualTo(marked), "marks");
+            ConverterHarness.AssertSameFailure(expected, actual, "refusal past the first chunk");
+            Assert.That(actual?.Message, Does.Contain("index 1295"));
+        });
+    }
+
     [Test]
     public async Task Write_Json_WritesTheVersionPrefix()
     {
