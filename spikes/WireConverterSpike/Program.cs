@@ -1,7 +1,8 @@
 // SPIKE for ClickHouse/integrations#801. Not production code.
 //
 //   dotnet run -c Release -- verify          compare every candidate result with the current client
-//   dotnet run -c Release -- bench [filter]  BenchmarkDotNet, e.g. bench '*Read*'
+//   dotnet run -c Release -- quick [rounds]  interleaved min/median timings (SPIKE_ONLY=Shape,... to filter)
+//   dotnet run -c Release -- bench --filter X  BenchmarkDotNet
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -35,6 +36,21 @@ public sealed class NdtRow
     public DateTimeOffset? ndt { get; set; }
 }
 
+public sealed class SRow
+{
+    public string s { get; set; }
+}
+
+public sealed class DtRow
+{
+    public DateTimeOffset dt { get; set; }
+}
+
+public sealed class LcnRow
+{
+    public string lcn { get; set; }
+}
+
 public sealed class WideRow
 {
     public byte[][] arr { get; set; }
@@ -58,6 +74,9 @@ public enum ReadShape
     LowCardinalityStringAsBytes,
     NullableDateTimeAsOffset,
     Wide,
+    StringAsString,
+    DateTimeAsOffset,
+    LowCardinalityNullableStringAsString,
 }
 
 public enum WriteShape
@@ -93,6 +112,24 @@ internal static class Data
         {
             columns.Add(Decode("ndt", "Nullable(DateTime('UTC'))", new ArrayColumn<DateTimeOffset?>("ndt", "Nullable(DateTime('UTC'))",
                 Enumerable.Range(0, rows).Select(i => i % 5 == 0 ? (DateTimeOffset?)null : DateTimeOffset.FromUnixTimeSeconds(1_700_000_000 + i)).ToArray())));
+        }
+
+        if (shape is ReadShape.StringAsString)
+        {
+            columns.Add(Decode("s", "String", new ArrayColumn<string>("s", "String",
+                Enumerable.Range(0, rows).Select(i => $"text-{i}").ToArray())));
+        }
+
+        if (shape is ReadShape.DateTimeAsOffset)
+        {
+            columns.Add(Decode("dt", "DateTime('UTC')", new ArrayColumn<DateTimeOffset>("dt", "DateTime('UTC')",
+                Enumerable.Range(0, rows).Select(i => DateTimeOffset.FromUnixTimeSeconds(1_600_000_000 + i)).ToArray())));
+        }
+
+        if (shape is ReadShape.LowCardinalityNullableStringAsString)
+        {
+            columns.Add(Decode("lcn", "LowCardinality(Nullable(String))", new ArrayColumn<string>("lcn", "LowCardinality(Nullable(String))",
+                Enumerable.Range(0, rows).Select(i => i % 10 == 0 ? null : $"tag-{i % 30}").ToArray())));
         }
 
         if (shape is ReadShape.Wide)
@@ -204,15 +241,26 @@ internal static class Verify
             PocoReadPlan<WideRow>.Build(PocoTypeDescriptor<WideRow>.Build(), wide, null).Materialize(wide, current, 0);
             WideRow[] candidate = new WideRow[rows];
             ConverterPocoPlan<WideRow>.Build(wide).Materialize(wide, candidate, 0, rows);
+            WideRow[] fused = new WideRow[rows];
+            FusedPocoPlan<WideRow> fusedPlan = FusedPocoPlan<WideRow>.Build(wide);
+            for (int start = 0; start < rows; start += 4096)
+            {
+                // Windows, as the client reads, so the dictionary cache and the start offset are both exercised.
+                int n = Math.Min(4096, rows - start);
+                var window = new WideRow[n];
+                fusedPlan.Materialize(wide, window, start, n);
+                Array.Copy(window, 0, fused, start, n);
+            }
+
+            int bad = 0;
             for (int i = 0; i < rows; i++)
             {
-                if (!SameRow(current[i], candidate[i]))
-                {
-                    Console.WriteLine($"POCO Wide: row {i} differs");
-                    failures++;
-                    break;
-                }
+                bad += SameRow(current[i], candidate[i]) ? 0 : 1;
+                bad += SameRow(current[i], fused[i]) ? 0 : 1;
             }
+
+            Console.WriteLine($"poco  Wide, bulk and fused (windows of 4096)    {(bad == 0 ? "same rows" : $"{bad} rows DIFFERENT")}");
+            failures += bad == 0 ? 0 : 1;
         }
 
         foreach (WriteShape shape in Enum.GetValues<WriteShape>())
@@ -269,12 +317,18 @@ internal static class Verify
     };
 }
 
+// One invocation per iteration, each on a freshly decoded block: the current client's String and
+// LowCardinality columns cache their decoded values, so a reused block measures cache hits.
 [MemoryDiagnoser]
+[InvocationCount(1, 1)]
+[WarmupCount(5)]
+[IterationCount(30)]
 public class ReadBenchmarks
 {
     private Block block;
     private object currentPlan;
     private object candidatePlan;
+    private object fusedPlan;
     private Array[] columnarOut;
 
     [Params(100_000)]
@@ -292,12 +346,26 @@ public class ReadBenchmarks
             case ReadShape.ArrayStringAsBytes: Plans<ArrayRow>(); break;
             case ReadShape.LowCardinalityStringAsBytes: Plans<LcRow>(); break;
             case ReadShape.NullableDateTimeAsOffset: Plans<NdtRow>(); break;
+            case ReadShape.StringAsString: Plans<SRow>(); break;
+            case ReadShape.DateTimeAsOffset: Plans<DtRow>(); break;
+            case ReadShape.LowCardinalityNullableStringAsString: Plans<LcnRow>(); break;
             default: Plans<WideRow>(); break;
         }
     }
 
     [GlobalCleanup]
     public void Cleanup() => block.Dispose();
+
+    /// <summary>
+    /// Replaces the block with a freshly decoded one. <c>StringColumn</c> and the LowCardinality columns cache
+    /// their decoded values on first access, so a reused block measures cache hits for the current client.
+    /// </summary>
+    [IterationSetup]
+    public void Fresh()
+    {
+        block.Dispose();
+        block = Data.Block(Shape, Rows);
+    }
 
     /// <summary>Current columnar tier: <c>Block.ReadAs&lt;T&gt;(i).Values</c> for every column.</summary>
     [Benchmark(Baseline = true)]
@@ -334,6 +402,9 @@ public class ReadBenchmarks
         ReadShape.ArrayStringAsBytes => PocoCurrent<ArrayRow>(),
         ReadShape.LowCardinalityStringAsBytes => PocoCurrent<LcRow>(),
         ReadShape.NullableDateTimeAsOffset => PocoCurrent<NdtRow>(),
+        ReadShape.StringAsString => PocoCurrent<SRow>(),
+        ReadShape.DateTimeAsOffset => PocoCurrent<DtRow>(),
+        ReadShape.LowCardinalityNullableStringAsString => PocoCurrent<LcnRow>(),
         _ => PocoCurrent<WideRow>(),
     };
 
@@ -344,7 +415,23 @@ public class ReadBenchmarks
         ReadShape.ArrayStringAsBytes => PocoCandidate<ArrayRow>(),
         ReadShape.LowCardinalityStringAsBytes => PocoCandidate<LcRow>(),
         ReadShape.NullableDateTimeAsOffset => PocoCandidate<NdtRow>(),
+        ReadShape.StringAsString => PocoCandidate<SRow>(),
+        ReadShape.DateTimeAsOffset => PocoCandidate<DtRow>(),
+        ReadShape.LowCardinalityNullableStringAsString => PocoCandidate<LcnRow>(),
         _ => PocoCandidate<WideRow>(),
+    };
+
+    [Benchmark]
+    [BenchmarkCategory("Poco")]
+    public int Poco_Fused() => Shape switch
+    {
+        ReadShape.ArrayStringAsBytes => PocoFused<ArrayRow>(),
+        ReadShape.LowCardinalityStringAsBytes => PocoFused<LcRow>(),
+        ReadShape.NullableDateTimeAsOffset => PocoFused<NdtRow>(),
+        ReadShape.StringAsString => PocoFused<SRow>(),
+        ReadShape.DateTimeAsOffset => PocoFused<DtRow>(),
+        ReadShape.LowCardinalityNullableStringAsString => PocoFused<LcnRow>(),
+        _ => PocoFused<WideRow>(),
     };
 
     private void Plans<TRow>()
@@ -352,6 +439,15 @@ public class ReadBenchmarks
     {
         currentPlan = PocoReadPlan<TRow>.Build(PocoTypeDescriptor<TRow>.Build(), block, null);
         candidatePlan = ConverterPocoPlan<TRow>.Build(block);
+        fusedPlan = FusedPocoPlan<TRow>.Build(block);
+    }
+
+    private int PocoFused<TRow>()
+        where TRow : class, new()
+    {
+        var rows = new TRow[Rows];
+        ((FusedPocoPlan<TRow>)fusedPlan).Materialize(block, rows, 0, Rows);
+        return rows.Length;
     }
 
     // POCO reads run in windows in the client; one whole-block window is the best case for both.
@@ -463,40 +559,57 @@ internal static class Quick
     public static void Run(int rounds)
     {
         Console.WriteLine($"{"case",-62} {"cur min",9} {"cand min",9} {"min ratio",9} {"cur med",9} {"cand med",9} {"med ratio",9}");
+        string only = Environment.GetEnvironmentVariable("SPIKE_ONLY");
         foreach (ReadShape shape in Enum.GetValues<ReadShape>())
         {
+            if (only is not null && !only.Split(',').Contains(shape.ToString()))
+            {
+                continue;
+            }
+
             var bench = new ReadBenchmarks { Rows = 100_000, Shape = shape };
             bench.Setup();
-            Report($"read  columnar {shape}", rounds, () => bench.Columnar_Current(), () => bench.Columnar_Candidate());
-            Report($"read  poco     {shape}", rounds, () => bench.Poco_Current(), () => bench.Poco_Candidate());
+            Report($"read  columnar {shape}", rounds, () => bench.Columnar_Current(), () => bench.Columnar_Candidate(), bench.Fresh);
+            Report($"read  poco     {shape}", rounds, () => bench.Poco_Current(), () => bench.Poco_Candidate(), bench.Fresh);
+            Report($"read  poco fused {shape}", rounds, () => bench.Poco_Current(), () => bench.Poco_Fused(), bench.Fresh);
             bench.Cleanup();
         }
 
         foreach (WriteShape shape in Enum.GetValues<WriteShape>())
         {
+            if (only is not null && !only.Split(',').Contains(shape.ToString()))
+            {
+                continue;
+            }
+
             var bench = new WriteBenchmarks { Rows = 100_000, Shape = shape };
             bench.Setup();
             Report($"write          {shape}", rounds, () => bench.Current(), () => bench.Candidate());
         }
     }
 
-    private static void Report(string name, int rounds, Func<long> current, Func<long> candidate)
+    private static void Report(string name, int rounds, Func<long> current, Func<long> candidate, Action fresh = null)
     {
+        fresh ??= static () => { };
         var a = new double[rounds];
         var b = new double[rounds];
         for (int i = 0; i < 5; i++)
         {
+            fresh();
             current();
+            fresh();
             candidate();
         }
 
         for (int i = 0; i < rounds; i++)
         {
+            fresh();
             GC.Collect();
             GC.WaitForPendingFinalizers();
             long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             current();
             long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
+            fresh();
             GC.Collect();
             GC.WaitForPendingFinalizers();
             long t2 = System.Diagnostics.Stopwatch.GetTimestamp();

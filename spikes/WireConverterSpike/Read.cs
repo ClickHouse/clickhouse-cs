@@ -8,6 +8,7 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq.Expressions;
 using System.Text;
 using ClickHouse.Driver.Tcp;
 using ClickHouse.Driver.Tcp.Types;
@@ -19,6 +20,34 @@ namespace WireConverterSpike;
 internal abstract class ColumnReader<T>
 {
     public abstract BoundReader<T> Bind(IColumn column);
+
+    /// <summary>
+    /// Emits the per-block setup into <paramref name="scope"/> (casts, span locals, a converted dictionary) and
+    /// returns an expression of type <typeparamref name="T"/> for the value at <paramref name="row"/>. The POCO
+    /// scatter splices this into its loop, so the whole tree compiles into one loop per column.
+    /// </summary>
+    public abstract Expression Emit(Expression column, ParameterExpression row, EmitScope scope);
+}
+
+/// <summary>Locals and statements that run once per scatter call, before the loop.</summary>
+internal sealed class EmitScope
+{
+    public List<ParameterExpression> Locals { get; } = new();
+
+    public List<Expression> Prologue { get; } = new();
+
+    public ParameterExpression Local(Type type, string name, Expression init)
+    {
+        ParameterExpression local = Expression.Variable(type, name + Locals.Count);
+        Locals.Add(local);
+        Prologue.Add(Expression.Assign(local, init));
+        return local;
+    }
+
+    public static Expression At<TElement>(Expression span, Expression index)
+        => Expression.Call(typeof(EmitScope).GetMethod(nameof(SpanAt)).MakeGenericMethod(typeof(TElement)), span, index);
+
+    public static TElement SpanAt<TElement>(ReadOnlySpan<TElement> span, int index) => span[index];
 }
 
 /// <summary>A converter bound to one decoded column. Per-block state (a converted dictionary) lives here.</summary>
@@ -75,6 +104,14 @@ internal sealed class FixedLeafReader<TCanon, T, TConv> : ColumnReader<T>
 
     public override BoundReader<T> Bind(IColumn column) => new Bound((IColumn<TCanon>)column, make(column));
 
+    public override Expression Emit(Expression column, ParameterExpression row, EmitScope scope)
+    {
+        ParameterExpression conv = scope.Local(typeof(TConv), "conv", Expression.Invoke(Expression.Constant(make), column));
+        ParameterExpression values = scope.Local(
+            typeof(ReadOnlySpan<TCanon>), "values", Expression.Property(Expression.Convert(column, typeof(IColumn<TCanon>)), "Values"));
+        return Expression.Call(conv, typeof(TConv).GetMethod(nameof(IFixedLeaf<TCanon, T>.Read)), EmitScope.At<TCanon>(values, row));
+    }
+
     private sealed class Bound : BoundReader<T>
     {
         private readonly IColumn<TCanon> column;
@@ -102,6 +139,17 @@ internal sealed class BytesLeafReader<T, TConv> : ColumnReader<T>
     where TConv : struct, IBytesLeaf<T>
 {
     public override BoundReader<T> Bind(IColumn column) => new Bound((IStringColumn)column);
+
+    public override Expression Emit(Expression column, ParameterExpression row, EmitScope scope)
+    {
+        ParameterExpression text = scope.Local(typeof(IStringColumn), "text", Expression.Convert(column, typeof(IStringColumn)));
+        ParameterExpression blob = scope.Local(typeof(ReadOnlySpan<byte>), "blob", Expression.Property(text, nameof(IStringColumn.Bytes)));
+        ParameterExpression offsets = scope.Local(typeof(ReadOnlySpan<int>), "offsets", Expression.Property(text, nameof(IStringColumn.Offsets)));
+        return Expression.Call(typeof(BytesLeafReader<T, TConv>).GetMethod(nameof(ReadAt)), blob, offsets, row);
+    }
+
+    public static T ReadAt(ReadOnlySpan<byte> blob, ReadOnlySpan<int> offsets, int row)
+        => default(TConv).Read(blob[offsets[row]..offsets[row + 1]]);
 
     private sealed class Bound : BoundReader<T>
     {
@@ -132,6 +180,9 @@ internal sealed class LiftRef<T> : ColumnReader<T>
     private readonly ColumnReader<T> inner;
 
     public LiftRef(ColumnReader<T> inner) => this.inner = inner;
+
+    public override Expression Emit(Expression column, ParameterExpression row, EmitScope scope)
+        => LiftEmit.Emit(inner, column, row, scope, typeof(T));
 
     public override BoundReader<T> Bind(IColumn column)
     {
@@ -177,6 +228,9 @@ internal sealed class LiftValue<T> : ColumnReader<T?>
 
     public LiftValue(ColumnReader<T> inner) => this.inner = inner;
 
+    public override Expression Emit(Expression column, ParameterExpression row, EmitScope scope)
+        => LiftEmit.Emit(inner, column, row, scope, typeof(T?));
+
     public override BoundReader<T?> Bind(IColumn column)
     {
         var nullable = (INullableColumn)column;
@@ -221,6 +275,30 @@ internal sealed class Each<T> : ColumnReader<T[]>
     private readonly ColumnReader<T> inner;
 
     public Each(ColumnReader<T> inner) => this.inner = inner;
+
+    // Per row: allocate the row's array and fill it with one bulk call into the bound child.
+    public override Expression Emit(Expression column, ParameterExpression row, EmitScope scope)
+    {
+        ParameterExpression array = scope.Local(typeof(IArrayColumn), "array", Expression.Convert(column, typeof(IArrayColumn)));
+        ParameterExpression child = scope.Local(
+            typeof(BoundReader<T>), "child", Expression.Call(Expression.Constant(inner), nameof(Bind), null, Expression.Property(array, nameof(IArrayColumn.Inner))));
+        ParameterExpression offsets = scope.Local(typeof(ReadOnlySpan<int>), "offsets", Expression.Property(array, nameof(IArrayColumn.Offsets)));
+        return Expression.Call(typeof(Each<T>).GetMethod(nameof(RowAt)), child, offsets, row);
+    }
+
+    public static T[] RowAt(BoundReader<T> child, ReadOnlySpan<int> offsets, int row)
+    {
+        int from = offsets[row];
+        int length = offsets[row + 1] - from;
+        if (length == 0)
+        {
+            return Array.Empty<T>();
+        }
+
+        var values = new T[length];
+        child.Fill(from, values);
+        return values;
+    }
 
     public override BoundReader<T[]> Bind(IColumn column)
     {
@@ -270,7 +348,18 @@ internal sealed class DictionaryReader<T> : ColumnReader<T>
 
     public DictionaryReader(ColumnReader<T> inner) => this.inner = inner;
 
-    public override BoundReader<T> Bind(IColumn column)
+    public override BoundReader<T> Bind(IColumn column) => new Bound((ILowCardinalityColumn)column, Entries(column));
+
+    // The converted dictionary is cached by column identity, so windows over one block convert it once.
+    public override Expression Emit(Expression column, ParameterExpression row, EmitScope scope)
+    {
+        ParameterExpression entries = scope.Local(typeof(T[]), "entries", Expression.Call(Expression.Constant(new EntryCache(this)), nameof(EntryCache.For), null, column));
+        ParameterExpression keys = scope.Local(
+            typeof(ReadOnlySpan<int>), "keys", Expression.Property(Expression.Convert(column, typeof(ILowCardinalityColumn)), nameof(ILowCardinalityColumn.Keys)));
+        return Expression.ArrayIndex(entries, EmitScope.At<int>(keys, row));
+    }
+
+    private T[] Entries(IColumn column)
     {
         var lc = (ILowCardinalityColumn)column;
         IColumn dictionary = lc.Dictionary;
@@ -281,7 +370,28 @@ internal sealed class DictionaryReader<T> : ColumnReader<T>
             entries[0] = default;
         }
 
-        return new Bound(lc, entries);
+        return entries;
+    }
+
+    private sealed class EntryCache
+    {
+        private readonly DictionaryReader<T> owner;
+        private (IColumn Column, T[] Entries) last;
+
+        public EntryCache(DictionaryReader<T> owner) => this.owner = owner;
+
+        public T[] For(IColumn column)
+        {
+            (IColumn Column, T[] Entries) current = last;
+            if (ReferenceEquals(current.Column, column))
+            {
+                return current.Entries;
+            }
+
+            T[] entries = owner.Entries(column);
+            last = (column, entries);
+            return entries;
+        }
     }
 
     private sealed class Bound : BoundReader<T>
@@ -306,6 +416,66 @@ internal sealed class DictionaryReader<T> : ColumnReader<T>
     }
 }
 
+/// <summary>Experiment: the DateTime leaf emits a direct static call with the time zone as a constant.</summary>
+internal sealed class DirectDateTimeReader : ColumnReader<DateTimeOffset>
+{
+    private readonly ColumnReader<DateTimeOffset> bulk;
+    private readonly ResolvedTimeZone zone;
+
+    public DirectDateTimeReader(ColumnReader<DateTimeOffset> bulk, ResolvedTimeZone zone)
+    {
+        this.bulk = bulk;
+        this.zone = zone;
+    }
+
+    public override BoundReader<DateTimeOffset> Bind(IColumn column) => bulk.Bind(column);
+
+    public override Expression Emit(Expression column, ParameterExpression row, EmitScope scope)
+    {
+        ParameterExpression values = scope.Local(
+            typeof(ReadOnlySpan<uint>), "values", Expression.Property(Expression.Convert(column, typeof(IColumn<uint>)), "Values"));
+        return Expression.Call(
+            typeof(ColumnValueProjections).GetMethod(nameof(ColumnValueProjections.DateTimeToOffset)),
+            EmitScope.At<uint>(values, row),
+            Expression.Constant(zone));
+    }
+}
+
+/// <summary>Experiment: the String leaf emits the column's own indexer, as the current scatter does.</summary>
+internal sealed class DirectStringReader : ColumnReader<string>
+{
+    private readonly ColumnReader<string> bulk;
+
+    public DirectStringReader(ColumnReader<string> bulk) => this.bulk = bulk;
+
+    public override BoundReader<string> Bind(IColumn column) => bulk.Bind(column);
+
+    public override Expression Emit(Expression column, ParameterExpression row, EmitScope scope)
+    {
+        ParameterExpression typed = scope.Local(typeof(IColumn<string>), "typed", Expression.Convert(column, typeof(IColumn<string>)));
+        return Expression.MakeIndex(typed, typeof(IColumn<string>).GetProperty("Item"), new Expression[] { row });
+    }
+}
+
+/// <summary>
+/// The Nullable emit for both lifts. The conditional converts only the non-null rows, so a leaf converter
+/// never sees the placeholder here, unlike the bulk <c>Fill</c> path.
+/// </summary>
+internal static class LiftEmit
+{
+    public static Expression Emit<TInner>(ColumnReader<TInner> inner, Expression column, ParameterExpression row, EmitScope scope, Type surface)
+    {
+        ParameterExpression nullable = scope.Local(typeof(INullableColumn), "nullable", Expression.Convert(column, typeof(INullableColumn)));
+        ParameterExpression nulls = scope.Local(typeof(ReadOnlySpan<byte>), "nulls", Expression.Property(nullable, nameof(INullableColumn.NullMap)));
+        ParameterExpression innerColumn = scope.Local(typeof(IColumn), "innerColumn", Expression.Property(nullable, nameof(INullableColumn.Inner)));
+        Expression value = inner.Emit(innerColumn, row, scope);
+        return Expression.Condition(
+            Expression.NotEqual(EmitScope.At<byte>(nulls, row), Expression.Constant((byte)0)),
+            Expression.Default(surface),
+            value.Type == surface ? value : Expression.Convert(value, surface));
+    }
+}
+
 // ---------------------------------------------------------------- derivation
 
 /// <summary>A derived converter tree, or the reason there is none.</summary>
@@ -322,6 +492,10 @@ internal static class ReadDerivation
 {
     private static readonly ConcurrentDictionary<(string, string, Type), Derivation> Cache = new();
 
+    // Experiment switch: leaves emit the same direct calls as the current scatter instead of the struct-converter
+    // helpers. Bind (the bulk path) is the same either way.
+    private static readonly bool DirectLeaves = Environment.GetEnvironmentVariable("SPIKE_LEAF") == "direct";
+
     // (leaf name, target) -> factory. Adding a leaf conversion is one line here, and nothing else.
     private static readonly Dictionary<(string, Type), Func<TypeNode, ResolveContext, object>> Leaves = new()
     {
@@ -330,9 +504,12 @@ internal static class ReadDerivation
         {
             string tz = node.Arguments.Count > 0 ? DateTimeZones.UnquoteTimezone(node.Arguments[0]) : null;
             ResolvedTimeZone zone = DateTimeZones.Resolve(tz, ctx.ServerTimezone);
-            return new FixedLeafReader<uint, DateTimeOffset, DateTimeToOffset>(_ => new DateTimeToOffset(zone));
+            var reader = new FixedLeafReader<uint, DateTimeOffset, DateTimeToOffset>(_ => new DateTimeToOffset(zone));
+            return DirectLeaves ? new DirectDateTimeReader(reader, zone) : reader;
         },
-        [("String", typeof(string))] = static (_, _) => new BytesLeafReader<string, BytesToString>(),
+        [("String", typeof(string))] = static (_, _) => DirectLeaves
+            ? new DirectStringReader(new BytesLeafReader<string, BytesToString>())
+            : new BytesLeafReader<string, BytesToString>(),
         [("String", typeof(byte[]))] = static (_, _) => new BytesLeafReader<byte[], BytesToArray>(),
     };
 

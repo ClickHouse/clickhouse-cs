@@ -11,7 +11,11 @@ A quick, partial prototype. It is not production code and it is not for merge.
   (LowCardinality, including `LowCardinality(Nullable(X))` for reference types). Write: `LiftValueWriter`,
   `EachWriter`, `DictionaryWriter`.
 - **One derivation** (`ReadDerivation.Derive(type, context, T)`), cached by type string, timezone, and `T`.
-  The columnar tier and a small POCO tier (`ConverterPocoPlan`) both use it.
+  The columnar tier and the POCO tier both use it.
+- **Two ways to run a derived tree.** Each node has `Bind(column).Fill(start, span)`, a bulk path with no
+  dynamic code. Each node also has `Emit(column, row, scope)`, which returns an expression for one row and
+  puts its per-block setup (casts, span locals, the converted dictionary) before the loop. The fused POCO
+  plan (`FusedPocoPlan`) splices the whole tree into one compiled loop per column (issue item 5).
 - **No new wire layer.** The current decoders already produce the dense layout: `DateTimeColumn` holds raw
   `uint` seconds, `StringColumn` holds a blob and offsets, LowCardinality holds a dictionary and keys,
   Nullable holds a null map and an inner column, Array holds offsets and a flat child. The spike reads those
@@ -24,7 +28,8 @@ The only change outside `spikes/` is one `InternalsVisibleTo` line in `ClickHous
 `dotnet run -c Release -- verify` compares every result with the current client, on 10,000 rows:
 
 - Every columnar read gives the same values as `Block.ReadAs<T>`.
-- The POCO read of a 6-column mixed row gives the same rows as `PocoReadPlan<T>`.
+- The POCO read of a 6-column mixed row gives the same rows as `PocoReadPlan<T>`, for the bulk plan and for
+  the fused plan. The fused plan reads in windows of 4,096 rows, as the client does.
 - Every write gives **the same bytes** as `IColumnCodec.WriteFull`, including the LowCardinality dictionary
   order and the reserved slots.
 - `LowCardinality(FixedString(N))` from `string`: the current client refuses it (`CanWrite` is false,
@@ -33,63 +38,94 @@ The only change outside `spikes/` is one `InternalsVisibleTo` line in `ClickHous
 
 ## Measurements
 
-100,000 rows, in memory (no server), .NET 10. **The box was shared and loaded** (load average 15 to 26 on
-4 cores), so BenchmarkDotNet means had errors larger than the means. The numbers below come from
-`dotnet run -c Release -- quick 61`: it runs the two arms alternately and reports the minimum and the
-median. Ratio < 1 means the candidate is faster. Two passes gave the same direction for every case.
+100,000 rows, in memory (no server), .NET 10, on a quiet 4-core box (load average below 2). Ratio < 1 means
+the candidate is faster. The table comes from `dotnet run -c Release -- quick 61`, which runs the two arms
+alternately, decodes a fresh block before each timed run, and reports the minimum and the median. Each cell
+gives pass 1 / pass 2.
 
 | Case | min ratio | median ratio |
 |---|---:|---:|
-| Columnar read, `Array(String)` as `byte[][]` | 0.54 to 0.82 | 0.66 to 0.70 |
-| Columnar read, `LowCardinality(String)` as `byte[]` | 0.28 to 0.46 | 0.06 to 0.14 |
-| Columnar read, `Nullable(DateTime)` as `DateTimeOffset?` | 0.57 to 0.61 | 0.50 to 0.55 |
-| Columnar read, wide mixed row (6 columns) | 1.03 to 1.05 | 1.08 to 1.10 |
-| POCO read, `Array(String)` as `byte[][]` | 1.15 to 1.43 | 0.90 to 0.92 |
-| POCO read, `LowCardinality(String)` as `byte[]` | 0.98 to 1.07 | 0.95 |
-| POCO read, `Nullable(DateTime)` as `DateTimeOffset?` | 1.17 to 1.19 | 1.26 to 1.44 |
-| POCO read, wide mixed row | 1.22 to 1.29 | 1.16 to 1.26 |
-| Write `LowCardinality(String)` from `string`, 100 distinct | 1.33 to 1.35 | 1.33 to 1.39 |
-| Write `LowCardinality(String)` from `string`, all distinct | 0.78 to 0.93 | 0.82 to 0.84 |
-| Write `LowCardinality(FixedString(16))` from `byte[]`, 100 distinct | 0.85 to 0.91 | 0.88 to 0.90 |
-| Write `LowCardinality(FixedString(16))` from `byte[]`, all distinct | 0.66 to 0.70 | 0.55 to 0.65 |
-| Write `Nullable(DateTime)` from `DateTimeOffset?` | 0.86 to 0.97 | 0.88 to 1.01 |
-| Write `Array(String)` from `string[]` | 0.95 to 0.97 | 0.92 to 1.01 |
+| Columnar read, `Array(String)` as `byte[][]` | 0.86 / 0.84 | 0.82 / 0.80 |
+| Columnar read, `LowCardinality(String)` as `byte[]` | 0.49 / 0.49 | 0.49 / 0.48 |
+| Columnar read, `Nullable(DateTime)` as `DateTimeOffset?` | 0.70 / 0.72 | 0.71 / 0.71 |
+| Columnar read, `DateTime` as `DateTimeOffset` | 0.70 / 0.70 | 0.69 / 0.71 |
+| Columnar read, `String` as `string` | 1.09 / 1.06 | 1.09 / 1.08 |
+| Columnar read, `LowCardinality(Nullable(String))` as `string` | 0.86 / 0.73 | 0.79 / 0.72 |
+| Columnar read, wide mixed row (6 columns) | 0.83 / 0.79 | 0.81 / 0.82 |
+| POCO read, fused, `Array(String)` as `byte[][]` | 0.79 / 0.81 | 0.80 / 0.81 |
+| POCO read, fused, `LowCardinality(String)` as `byte[]` | 0.71 / 0.69 | 0.69 / 0.67 |
+| POCO read, fused, `Nullable(DateTime)` as `DateTimeOffset?` | 0.84 / 0.85 | 0.83 / 0.85 |
+| POCO read, fused, `DateTime` as `DateTimeOffset` | 0.96 / 0.98 | 0.94 / 0.98 |
+| POCO read, fused, `String` as `string` | 0.97 / 1.00 | 0.97 / 0.97 |
+| POCO read, fused, `LowCardinality(Nullable(String))` as `string` | 0.77 / 0.75 | 0.76 / 0.73 |
+| POCO read, fused, wide mixed row | 0.82 / 0.82 | 0.82 / 0.83 |
+| POCO read, bulk (fill, then assign), wide mixed row | 1.11 / 1.08 | 1.11 / 1.08 |
+| Write `LowCardinality(String)` from `string`, 100 distinct | 1.61 / 1.60 | 1.91 / 1.90 |
+| Write `LowCardinality(String)` from `string`, all distinct | 0.89 / 0.91 | 0.89 / 0.94 |
+| Write `LowCardinality(FixedString(16))` from `byte[]`, 100 distinct | 0.85 / 0.82 | 0.83 / 0.77 |
+| Write `LowCardinality(FixedString(16))` from `byte[]`, all distinct | 0.64 / 0.63 | 0.66 / 0.64 |
+| Write `Nullable(DateTime)` from `DateTimeOffset?` | 0.99 / 0.94 | see below |
+| Write `Array(String)` from `string[]` | 1.37 / 1.03 | 1.30 / 1.03 |
 
-Not measured: `InsertRowsAsync<T>` (the POCO write tier), anything against a server, and reads in windows
-smaller than a block.
+BenchmarkDotNet (`bench --filter '*'`, one invocation per iteration on a fresh block) gives the same
+directions. Means, current against fused POCO: wide row 13.3 ms against 10.2 ms, `Array(String)` 5.4 ms
+against 4.4 ms, `DateTime` 3.0 ms against 3.0 ms. The bulk POCO plan is between the two.
+Writes, with errors of 2% to 4%: `LowCardinality(String)` 100 distinct 1.50, all distinct 0.85;
+`LowCardinality(FixedString(16))` 0.82 and 0.68; `Nullable(DateTime)` 0.93; `Array(String)` 0.98.
+BenchmarkDotNet puts `LowCardinality(Nullable(String))` as `string` at 0.24 for the fused POCO plan. The
+interleaved timings give 0.75. The spike did not find the cause of that difference.
+
+The `Nullable(DateTime)` write medians are about 2x their minimums for **both** arms. The run is too short
+for tiered compilation to finish on that fast case. With `DOTNET_TieredCompilation=0`, the candidate is
+0.75x.
+
+Not measured: `InsertRowsAsync<T>` (the POCO write tier), anything against a server.
+
+### Measurement traps found on the way
+
+- **Column caches.** `StringColumn` and the LowCardinality columns cache their decoded values on the first
+  access. A benchmark that reuses one block measures cache hits for the current client after the first
+  round. This made the wide row look 1.2x slower for the candidate, when it is 0.8x. Decode a fresh block
+  for each timed run.
+- **`new TRow()`.** A generic `new()` compiles to `Activator.CreateInstance<TRow>()`. The current plan uses a
+  compiled constructor. Before the spike used one too (`PocoActivator`), every single-column POCO read looked
+  10% to 30% slower. Emitting the exact expressions of the current scatter did not change that, which is how
+  the activator was found.
+- **Shared box.** Under load 15 to 48, BenchmarkDotNet means had errors larger than the means, and its
+  out-of-process build hit its 2-minute timeout.
 
 ## Answers to the questions in the issue
 
-**Read performance.**
+**Read performance.** Yes, a derived tree compiled into a loop is as fast as the current spliced
+expressions, and faster for composites.
 
-- Columnar: the candidate is as fast or faster. A bulk `Fill(start, Span<T>)` per combinator amortizes the
-  virtual call over a run of values. LowCardinality gains the most, because the dictionary converts once
-  when the reader binds to the column, and each row is then one array load.
-- POCO: the candidate is slower at the minimum in 3 of 4 shapes (ratio 1.15 to 1.43), and the
-  medians are mixed (0.90 to 1.44). The spike fills a pooled buffer with a bulk pass
-  and then runs a second pass that assigns the properties. The current scatter puts the conversion inside
-  the assignment loop, so it makes one pass with no buffer. The derived tree must be compiled into the
-  scatter loop (issue item 5) to match. The spike does not do that. **This is the open question that
-  decides the result.** The next step is a fused path, for example an `Expression` (or a struct `Get(row)`)
-  for each leaf, spliced into the scatter loop. Combinators then only build that expression.
+- Columnar: 0.5x to 0.85x, except `String` as `string` at about 1.08x. In that case the arms do not return
+  the same thing: the current `ReadAs<string>` returns the column itself, whose `Values` decodes into a
+  pooled array that the block owns. The spike fills a new `string[]` that the caller owns, which is a
+  large-object-heap allocation at 100,000 rows.
+- POCO, fused: 0.67x to 1.0x. The leaf-only cases (`String`, `DateTime`) are at parity, as they must be:
+  each row does the same work. The composites are faster. LowCardinality converts its dictionary once per
+  block, and Nullable converts only the non-null rows.
+- POCO, bulk: 0.85x to 1.1x. It makes two passes (fill a pooled buffer, then assign). It needs no compiled
+  code to read values, so it is the fallback when dynamic code is not available.
 
 **Write performance.** Parity or better for Nullable, Array, and the FixedString dictionary.
 
-**LowCardinality writes.** "Convert, then intern canonical values" is faster when values are mostly distinct,
-and faster for `FixedString` from `byte[]`. The spike did not isolate the cause. It can be the canonical
-key or only the open-addressing table (`ByteInterner`) against `Dictionary<TKey, int>`. It is **33% slower for `String` from `string` with many repeats**: the
-canonical value of a `string` is its UTF-8 bytes, so each row is encoded before it is hashed, while the
-current writer hashes the `string` directly. To fix this, the leaf can offer an optional "CLR key" fast
-path when CLR equality agrees with canonical equality (`string` and `String`). That brings back one
-comparer for each write type, but only as an optimization, not as a requirement for correctness.
+**LowCardinality writes.** "Convert, then intern canonical values" is faster for `FixedString` from
+`byte[]` (0.65x to 0.85x) and for `String` when values are mostly distinct (0.9x). It is **1.5x to 1.6x
+slower for `String` from `string` with many repeats**. The canonical value of a `string` is its UTF-8 bytes,
+so each row is encoded before it is hashed, while the current writer hashes the `string` directly. To fix
+this, the leaf can offer an optional "CLR key" fast path when equal CLR values always have equal canonical
+values (`string` into `String`). That brings back one comparer for each write type, but only as an
+optimization, not as a requirement for correctness. The spike does not implement it.
 
 **Public API.** No change is necessary. `StringColumn` already stores bytes plus offsets and decodes text
 when asked. Text stays the default read type.
 
 **Migration.** Reads can change in steps. The converter layer sits on the existing column surfaces, so a
-derived reader can go behind `ColumnProjection.For` one composite at a time, with no change to the codecs.
-Writes are harder: the codecs' `WriteColumn` takes an `IColumn` and the write shapes, so the write
-combinators need their own entry point next to `IColumnCodec`.
+derived reader can go behind `ColumnProjection.For` and `PocoColumnScatterFactory` one composite at a time,
+with no change to the codecs. Writes are harder: the codecs' `WriteColumn` takes an `IColumn` and the write
+shapes, so the write combinators need their own entry point next to `IColumnCodec`.
 
 **Members that go away.**
 
@@ -103,20 +139,24 @@ combinators need their own entry point next to `IColumnCodec`.
 **Ahead-of-time compilation.**
 
 - Leaves work: the table has closed generic types over struct converters, written in source.
-- Combinators do not: `Derive` builds `LiftValue<T>`, `Each<T>`, and `DictionaryReader<T>` with
+- Building the tree does not: `Derive` makes `LiftValue<T>`, `Each<T>`, and `DictionaryReader<T>` with
   `MakeGenericType` from a runtime `Type`. A generic `Derive<T>()` entry point does not help, because the
   recursion must take `T[]` apart into `T`, which needs reflection. For value-type arguments this needs
-  dynamic code. Options: a source generator for the POCO types, or an interpreted fallback over `object`.
+  dynamic code. Options: a source generator for the POCO types, or a tree over `object`.
+- The fused loop does not: it uses `Expression.Compile` with `ReadOnlySpan` locals, which the expression
+  interpreter cannot run. The current code has the same limit, and it falls back to its indexer tier. Here
+  the fallback is the bulk `Fill` path, at 0.85x to 1.1x.
 
 ## Problems found
 
 1. **The value and reference doubling stays in Nullable.** A `Span<T?>` cannot be passed where a `Span<T>`
-   is expected. So `LiftValue<T>` fills a pooled scratch buffer and copies, and `LiftRef<T>` fills in place.
-   On write, `LiftValueWriter<T>` makes one virtual call into the leaf for each value. The doubling is now
-   in one place and not in each family of shapes, but it does not go away.
-2. **A read converter runs on the placeholder rows too.** `LiftRef` and `LiftValue` convert every row and
-   then overwrite the null rows. So a leaf converter must accept the placeholder value. A converter that
-   rejects some canonical values (for example a narrowing one) would need a masked fill.
+   is expected. So the bulk `LiftValue<T>` fills a pooled scratch buffer and copies, and `LiftRef<T>` fills
+   in place. On write, `LiftValueWriter<T>` makes one virtual call into the leaf for each value. In the
+   fused path the two lifts share one emit (`LiftEmit`). The doubling is now in one place and not in each
+   family of shapes, but it does not go away.
+2. **The bulk read path converts placeholder rows too.** `LiftRef.Fill` and `LiftValue.Fill` convert every
+   row and then overwrite the null rows, so a leaf converter must accept the placeholder value. The fused
+   path does not have this problem: its conditional converts only non-null rows.
 3. **A composite writes each stream across all rows.** `Array(Nullable(X))` writes all the offsets, then
    the whole null map, then all values. So `EachWriter` cannot call its child once for each row. The spike
    passes the rows' arrays to the child as a list of segments, with no flat copy, but each Array level
@@ -125,24 +165,33 @@ combinators need their own entry point next to `IColumnCodec`.
    column with NULL in slot 0. So the derivation for LowCardinality must unwrap a Nullable child, and a
    value-type target needs a lifting dictionary. This is a small special case, but it is a special case.
 5. **Identity reads.** The current `ReadAs<T>` returns the column itself when it is already an `IColumn<T>`.
-   The candidate always converts. A real version needs the same identity shortcut. This can explain part of
-   the gap in the wide columnar case (the `String` and `LowCardinality(Nullable(String))` columns as
-   `string`), but the spike did not measure that.
-6. **Shared arrays.** LowCardinality read as `byte[]` gives the same array instance to every row that has the
+   The candidate always converts. A real version needs the same shortcut, which is the `String` as `string`
+   columnar case above.
+6. **Two definitions per node.** Each node has a bulk `Fill` and an `Emit`. They must agree, and the spike
+   checks that only through `verify`. A real version could derive the bulk path from `Emit` when dynamic
+   code is available, and keep `Fill` only as the fallback.
+7. **Shared arrays.** LowCardinality read as `byte[]` gives the same array instance to every row that has the
    same key. The current client does the same.
 
 ## Decision proposed by the spike
 
-**Adopt in part.** Adopt it for the columnar read tier and for LowCardinality and Nullable writes now. The
-results are faster or equal, the code is simpler (one table entry for each leaf conversion), and it adds a
-missing write (`LowCardinality(FixedString)` from `string`). Before the POCO tier moves, prove that a fused,
-compiled scatter over the derived tree is as fast as the current one. That is the next experiment.
+**Adopt.** The fused loop removes the POCO regression. Reads in both tiers are as fast or faster, the
+writes are as fast or faster except one case, each leaf conversion is one table entry, and the design adds a
+missing write (`LowCardinality(FixedString)` from `string`). Two items to do before or during the change:
+
+- The CLR-key fast path for `LowCardinality(String)` from `string`, so the high-repeat write is not 1.5x
+  slower.
+- The identity shortcut, and a decision on whether the columnar tier returns a borrowed or an owned array.
 
 ## How to run
 
 ```
 cd spikes/WireConverterSpike
 dotnet run -c Release -- verify
-dotnet run -c Release -- quick 61
-dotnet run -c Release -- bench --filter '*' --inProcess   # BenchmarkDotNet; needs a quiet box
+dotnet run -c Release -- quick 61                     # interleaved min/median timings
+SPIKE_ONLY=Wide,StringAsString dotnet run -c Release -- quick 61
+dotnet run -c Release -- bench --filter '*'           # BenchmarkDotNet; needs a quiet box
 ```
+
+Experiment switches: `SPIKE_LEAF=direct` makes the `String` and `DateTime` leaves emit the same expressions
+as the current scatter. `SPIKE_NEW=generic` makes the POCO plans construct rows with `new TRow()`.
