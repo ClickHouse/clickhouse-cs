@@ -49,9 +49,15 @@ public enum ConverterReadShape
 /// the two implementations. The shapes are the read shapes of the converter spike.
 /// </para>
 /// <para>
-/// Each invocation reads a block that <see cref="FreshBlock"/> decodes for that invocation only, with the block reader
-/// that a query uses. <c>StringColumn</c> and the <c>LowCardinality</c> columns keep their decoded values after the
-/// first read, so a block that two invocations share measures cache hits.
+/// One operation reads one block of <see cref="Rows"/> rows. An invocation reads <see cref="BlocksPerInvocation"/>
+/// different blocks, which <see cref="FreshBlocks"/> decodes for that invocation only, with the block reader that a
+/// query uses. <c>StringColumn</c> and the <c>LowCardinality</c> columns keep their decoded values after the first
+/// read, so a block that two invocations share measures cache hits. The blocks of an invocation hold rows
+/// <c>[0, 100,000)</c> of the spike's data, so most per-row arrays are smaller than the large-object-heap threshold.
+/// </para>
+/// <para>
+/// The class runs with tiered compilation off (<see cref="TieredCompilationOffAttribute"/>), so the code does not
+/// change during a run.
 /// </para>
 /// <para>
 /// <see cref="Columnar"/> reads <c>Values</c> of each column, which converts every row. <see cref="Poco"/> reads in
@@ -63,8 +69,13 @@ public enum ConverterReadShape
 [Config(typeof(ComparisonConfig))]
 [MemoryDiagnoser(true)]
 [InvocationCount(1, 1)]
+[WarmupCount(5)]
+[TieredCompilationOff]
 public class TcpConverterRead
 {
+    /// <summary>The number of blocks that one invocation reads; each block is one operation.</summary>
+    public const int BlocksPerInvocation = 10;
+
     // ClickHouseTcpClient.MaterializationWindowRows.
     private const int WindowRows = 256;
 
@@ -72,24 +83,29 @@ public class TcpConverterRead
 
     private static readonly ResolveContext Context = new() { ServerTimezone = "UTC" };
 
-    private byte[] encoded;
-    private Block block;
+    private readonly Block[] blocks = new Block[BlocksPerInvocation];
+    private byte[][] encoded;
     private Func<Block, int> poco;
 
-    /// <summary>The number of rows in the block.</summary>
-    [Params(100_000)]
+    /// <summary>The number of rows in one block.</summary>
+    [Params(10_000)]
     public int Rows { get; set; }
 
     /// <summary>The columns of the block.</summary>
     [ParamsAllValues]
     public ConverterReadShape Shape { get; set; }
 
-    /// <summary>Encodes the block once, and builds the POCO read plan for its shape.</summary>
+    /// <summary>Encodes the blocks once, and builds the POCO read plan for their shape.</summary>
     [GlobalSetup]
     public void Setup()
     {
-        encoded = Encode(Columns(Shape, Rows), Rows);
-        block = Decode();
+        encoded = new byte[BlocksPerInvocation][];
+        for (int b = 0; b < BlocksPerInvocation; b++)
+        {
+            encoded[b] = Encode(Columns(Shape, firstRow: b * Rows, Rows), Rows);
+        }
+
+        using Block block = Decode(encoded[0]);
         poco = Shape switch
         {
             ConverterReadShape.ArrayStringAsBytes => PocoReader<ItemsRow>(block),
@@ -102,22 +118,56 @@ public class TcpConverterRead
         };
     }
 
-    /// <summary>Decodes the block again, so that no column cache is filled.</summary>
+    /// <summary>Decodes the blocks again, so that no column cache is filled.</summary>
     [IterationSetup]
-    public void FreshBlock()
+    public void FreshBlocks()
     {
-        block?.Dispose();
-        block = Decode();
+        for (int b = 0; b < BlocksPerInvocation; b++)
+        {
+            blocks[b]?.Dispose();
+            blocks[b] = Decode(encoded[b]);
+        }
     }
 
-    /// <summary>Releases the last block.</summary>
+    /// <summary>Releases the last blocks.</summary>
     [GlobalCleanup]
-    public void Cleanup() => block?.Dispose();
+    public void Cleanup()
+    {
+        foreach (Block block in blocks)
+        {
+            block?.Dispose();
+        }
+    }
 
-    /// <summary><c>Block.ReadAs&lt;T&gt;(i).Values</c> for each column.</summary>
+    /// <summary><c>Block.ReadAs&lt;T&gt;(i).Values</c> for each column of each block.</summary>
     /// <returns>The number of values read.</returns>
-    [Benchmark]
+    [Benchmark(OperationsPerInvoke = BlocksPerInvocation)]
     public int Columnar()
+    {
+        int values = 0;
+        foreach (Block block in blocks)
+        {
+            values += ReadColumns(block);
+        }
+
+        return values;
+    }
+
+    /// <summary>The POCO read plan, in windows of 256 rows, for each block.</summary>
+    /// <returns>The number of rows read.</returns>
+    [Benchmark(OperationsPerInvoke = BlocksPerInvocation)]
+    public int Poco()
+    {
+        int rows = 0;
+        foreach (Block block in blocks)
+        {
+            rows += poco(block);
+        }
+
+        return rows;
+    }
+
+    private static int ReadColumns(Block block)
     {
         int values = 0;
         for (int i = 0; i < block.ColumnCount; i++)
@@ -134,11 +184,6 @@ public class TcpConverterRead
 
         return values;
     }
-
-    /// <summary>The POCO read plan, in windows of 256 rows.</summary>
-    /// <returns>The number of rows read.</returns>
-    [Benchmark]
-    public int Poco() => poco(block);
 
     private static Func<Block, int> PocoReader<TRow>(Block first)
         where TRow : class
@@ -171,7 +216,7 @@ public class TcpConverterRead
         };
     }
 
-    private static List<(string Name, string Type, IColumn Values)> Columns(ConverterReadShape shape, int rows)
+    private static List<(string Name, string Type, IColumn Values)> Columns(ConverterReadShape shape, int firstRow, int rows)
     {
         var columns = new List<(string Name, string Type, IColumn Values)>();
         bool wide = shape == ConverterReadShape.Wide;
@@ -179,42 +224,42 @@ public class TcpConverterRead
         {
             columns.Add(("items", "Array(String)", ClickHouseTcpColumn.Create(
                 "items",
-                Enumerable.Range(0, rows).Select(i => Enumerable.Range(0, i % 5).Select(j => $"item-{i}-{j}").ToArray()).ToArray())));
+                Enumerable.Range(firstRow, rows).Select(i => Enumerable.Range(0, i % 5).Select(j => $"item-{i}-{j}").ToArray()).ToArray())));
         }
 
         if (wide || shape == ConverterReadShape.LowCardinalityStringAsBytes)
         {
             columns.Add(("category", "LowCardinality(String)", ClickHouseTcpColumn.Create(
                 "category",
-                Enumerable.Range(0, rows).Select(i => $"category-{i % 100}").ToArray())));
+                Enumerable.Range(firstRow, rows).Select(i => $"category-{i % 100}").ToArray())));
         }
 
         if (wide || shape == ConverterReadShape.NullableDateTimeAsOffset)
         {
             columns.Add(("seen_at", "Nullable(DateTime('UTC'))", ClickHouseTcpColumn.Create(
                 "seen_at",
-                Enumerable.Range(0, rows).Select(i => i % 5 == 0 ? (DateTimeOffset?)null : DateTimeOffset.FromUnixTimeSeconds(1_700_000_000 + i)).ToArray())));
+                Enumerable.Range(firstRow, rows).Select(i => i % 5 == 0 ? (DateTimeOffset?)null : DateTimeOffset.FromUnixTimeSeconds(1_700_000_000 + i)).ToArray())));
         }
 
         if (wide || shape == ConverterReadShape.StringAsString)
         {
             columns.Add(("text", "String", ClickHouseTcpColumn.Create(
                 "text",
-                Enumerable.Range(0, rows).Select(i => $"text-{i}").ToArray())));
+                Enumerable.Range(firstRow, rows).Select(i => $"text-{i}").ToArray())));
         }
 
         if (wide || shape == ConverterReadShape.DateTimeAsOffset)
         {
             columns.Add(("created_at", "DateTime('UTC')", ClickHouseTcpColumn.Create(
                 "created_at",
-                Enumerable.Range(0, rows).Select(i => DateTimeOffset.FromUnixTimeSeconds(1_600_000_000 + i)).ToArray())));
+                Enumerable.Range(firstRow, rows).Select(i => DateTimeOffset.FromUnixTimeSeconds(1_600_000_000 + i)).ToArray())));
         }
 
         if (wide || shape == ConverterReadShape.LowCardinalityNullableStringAsString)
         {
             columns.Add(("tag", "LowCardinality(Nullable(String))", ClickHouseTcpColumn.Create(
                 "tag",
-                Enumerable.Range(0, rows).Select(i => i % 10 == 0 ? null : $"tag-{i % 30}").ToArray())));
+                Enumerable.Range(firstRow, rows).Select(i => i % 10 == 0 ? null : $"tag-{i % 30}").ToArray())));
         }
 
         return columns;
@@ -239,7 +284,7 @@ public class TcpConverterRead
     }
 
     // The block as a query reads it.
-    private Block Decode()
+    private static Block Decode(byte[] encoded)
     {
         using var reader = new ClickHouseBinaryReader(new MemoryStream(encoded));
         return BlockReader.ReadBlockAsync(reader, Negotiated, ColumnCodecRegistry.Default, Context, CancellationToken.None)
