@@ -53,7 +53,8 @@ public enum ConverterReadShape
 /// different blocks, which <see cref="FreshBlocks"/> decodes for that invocation only, with the block reader that a
 /// query uses. <c>StringColumn</c> and the <c>LowCardinality</c> columns keep their decoded values after the first
 /// read, so a block that two invocations share measures cache hits. The blocks of an invocation hold rows
-/// <c>[0, 100,000)</c> of the spike's data, so most per-row arrays are smaller than the large-object-heap threshold.
+/// <c>[0, 100,000)</c> of the spike's data. An array of references with one entry for each row of a block is 80,000
+/// bytes, smaller than the large-object-heap threshold of 85,000 bytes.
 /// </para>
 /// <para>
 /// The class runs with tiered compilation off (<see cref="TieredCompilationOffAttribute"/>), so the code does not
