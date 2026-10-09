@@ -179,7 +179,7 @@ public sealed class Block : IDisposable
     /// <exception cref="ArgumentNullException"><paramref name="name"/> is null.</exception>
     /// <exception cref="ArgumentException">The block has no column with that name.</exception>
     /// <exception cref="InvalidCastException">The column's ClickHouse type offers no reading as <typeparamref name="T"/>.</exception>
-    public IColumn<T> ReadAs<T>(string name) => Codecs.Projections.ReadAs<T>(this[name], Context, Views);
+    public IColumn<T> ReadAs<T>(string name) => ReadColumnAs<T>(this[name]);
 
     /// <summary>
     /// Reads the column at <paramref name="index"/> with the same conversion and lifetime rules as
@@ -190,7 +190,7 @@ public sealed class Block : IDisposable
     /// <returns>The column read as <typeparamref name="T"/>.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a column of this block.</exception>
     /// <exception cref="InvalidCastException">The column's ClickHouse type offers no reading as <typeparamref name="T"/>.</exception>
-    public IColumn<T> ReadAs<T>(int index) => Codecs.Projections.ReadAs<T>(At(index), Context, Views);
+    public IColumn<T> ReadAs<T>(int index) => ReadColumnAs<T>(At(index));
 
     /// <summary>Releases the columns' storage and the values of its <see cref="ReadAs{T}(string)"/> views (returning any pooled buffers). Idempotent.</summary>
     public void Dispose()
@@ -202,9 +202,13 @@ public sealed class Block : IDisposable
         }
     }
 
-    // A set made after Dispose is never seen: Dispose puts the released set in the field, and the exchange keeps it.
+    // Dispose puts the released set in the field, so a ReadAs after Dispose gets a view that fails on its first access.
     private DerivedViews Views
         => Volatile.Read(ref views) ?? Interlocked.CompareExchange(ref views, new DerivedViews(), null) ?? views;
+
+    // A column that already reads as T is returned before the set of views is made, so it costs no allocation.
+    private IColumn<T> ReadColumnAs<T>(IColumn column)
+        => column as IColumn<T> ?? Codecs.Projections.ReadAs<T>(column, Context, Views);
 
     private static IColumn<T> Typed<T>(IColumn column)
         => column as IColumn<T>
