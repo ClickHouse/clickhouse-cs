@@ -323,14 +323,15 @@ internal sealed class FixedStringTextWriter : BytesLeafWriter<string>
     public override void Encode(ClickHouseBinaryWriter writer, ReadOnlySpan<byte> canonical) => writer.WriteBytes(canonical);
 
     /// <inheritdoc/>
+    // The N-byte buffer is rented at the first value that is not marked, so a write of no values or of marked
+    // positions only rents nothing.
     public override void Write(ClickHouseBinaryWriter writer, ValueSource<string> values, IColumnWriteState state)
     {
         ReadOnlySpan<byte> absent = values.Absent;
         bool marked = values.HasAbsent;
-        byte[] scratch = ArrayPool<byte>.Shared.Rent(size);
+        byte[] scratch = Array.Empty<byte>();
         try
         {
-            Span<byte> padded = scratch.AsSpan(0, size);
             int position = 0;
             for (int r = 0; r < values.RunCount; r++)
             {
@@ -343,6 +344,9 @@ internal sealed class FixedStringTextWriter : BytesLeafWriter<string>
                     }
                     else
                     {
+                        LeafBytes.EnsureScratch(ref scratch, size);
+                        Span<byte> padded = scratch.AsSpan(0, size);
+
                         // The positions are named as for raw bytes (see FixedStringBytesWriter).
                         if (values.IsSegmented && !marked)
                         {
@@ -362,7 +366,10 @@ internal sealed class FixedStringTextWriter : BytesLeafWriter<string>
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(scratch);
+            if (scratch.Length != 0)
+            {
+                ArrayPool<byte>.Shared.Return(scratch);
+            }
         }
     }
 

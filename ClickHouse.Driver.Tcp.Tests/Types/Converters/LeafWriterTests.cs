@@ -282,6 +282,51 @@ public class LeafWriterTests
         Assert.That(placeholder, Is.EqualTo(new byte[size]));
     }
 
+    /// <summary>
+    /// A wide <c>FixedString</c> writer rents its N-byte buffer only for a value: a write of no values (an empty span,
+    /// or segments that are all empty) or of marked positions only allocates little. The widths are in pool sizes that
+    /// no other case rents (the marked case writes into a buffer of 2N), so a buffer that one case gives back to the
+    /// pool does not hide a rent of another case.
+    /// </summary>
+    [TestCase(6_000_000, "empty span")]
+    [TestCase(3_000_000, "empty segments")]
+    [TestCase(24_000_000, "marked positions only")]
+    public void Write_WideFixedStringWithNoValueToEncode_AllocatesLittle(int size, string source)
+    {
+        string type = $"FixedString({size})";
+        var text = Derivation.Writer<string>(type, ConverterHarness.Context);
+        var bytes = Derivation.Writer<byte[]>(type, ConverterHarness.Context);
+        string[][] emptySegments = { Array.Empty<string>(), Array.Empty<string>() };
+        byte[][][] emptyByteSegments = { Array.Empty<byte[]>() };
+        byte[] marks = { 1, 1 };
+        string[] absentTexts = new string[2];
+        byte[][] absentBytes = new byte[2][];
+
+        // For marked positions, a buffer that already holds two placeholders, so the measured writes do not grow it.
+        int bufferSize = source == "marked positions only" ? (2 * size) + 1024 : 65536;
+        using var output = new ClickHouse.Driver.Tcp.Protocol.ClickHouseBinaryWriter(System.IO.Stream.Null, bufferSize, writesToTransport: false);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        switch (source)
+        {
+            case "empty span":
+                text.Write(output, ValueSource<string>.Of(ReadOnlySpan<string>.Empty), null);
+                bytes.Write(output, ValueSource<byte[]>.Of(ReadOnlySpan<byte[]>.Empty), null);
+                break;
+            case "empty segments":
+                text.Write(output, ValueSource<string>.OfSegments(emptySegments), null);
+                bytes.Write(output, ValueSource<byte[]>.OfSegments(emptyByteSegments), null);
+                break;
+            default:
+                text.Write(output, ValueSource<string>.Of(absentTexts).WithAbsent(marks), null);
+                output.Reset();
+                bytes.Write(output, ValueSource<byte[]>.Of(absentBytes).WithAbsent(marks), null);
+                break;
+        }
+
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.That(allocated, Is.LessThan(64 * 1024), $"bytes allocated to write {source} as {type}");
+    }
+
     [Test]
     public void ConvertScalar_Uuids_GivesTheBytesOfTheCurrentWrite()
     {
