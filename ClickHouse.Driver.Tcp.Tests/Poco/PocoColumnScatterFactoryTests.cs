@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Poco;
 using ClickHouse.Driver.Tcp.Tests.Types.Converters;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -77,6 +79,34 @@ public class PocoColumnScatterFactoryTests
     }
 
 
+    // A setter that throws on row 0 and a NULL on row 1 (or the other order): the first failure in row order wins in
+    // each tier and in the old plan, also in the Fill tier, which reads the whole window before it calls a setter.
+    [TestCase(1, null, "SetterFailure: the setter refuses 1")]
+    [TestCase(null, 1, "InvalidOperationException: Column 'Value' (Nullable(Int32)) is NULL at row 100 of the result")]
+    public void Materialize_SetterThatThrowsAndANull_ThrowsTheFirstFailureInRowOrderInEveryTier(int? first, int? second, string expected)
+    {
+        var failures = new List<string>();
+        foreach ((string name, Func<Block, PocoReadPlan<RefusingRow>> build) in new (string, Func<Block, PocoReadPlan<RefusingRow>>)[]
+        {
+            ("old plan", block => PocoReadPlan<RefusingRow>.BuildLegacy(PocoTypeDescriptor<RefusingRow>.Build(), block)),
+            ("Emit", block => PocoReadPlan<RefusingRow>.Build(PocoTypeDescriptor<RefusingRow>.Build(), block, PocoScatterTier.Emit)),
+            ("Fill", block => PocoReadPlan<RefusingRow>.Build(PocoTypeDescriptor<RefusingRow>.Build(), block, PocoScatterTier.Fill)),
+        })
+        {
+            using Block block = PocoReadPlanTests.BlockOf(2, PocoReadPlanTests.Decoded(new ArrayColumn<int?>("Value", "Nullable(Int32)", new[] { first, second })));
+            Exception failure = Assert.Catch(() => build(block).Materialize(block, new RefusingRow[2], 0, 2, rowOffset: 100), name);
+            failures.Add($"{name}: {failure.GetType().Name}: {failure.Message}");
+        }
+
+        Assert.Multiple(() =>
+        {
+            foreach (string failure in failures)
+            {
+                Assert.That(failure, Does.Contain(": " + expected));
+            }
+        });
+    }
+
     [Test]
     public void ForReader_FillTier_ReadsWithoutTheExpressionOfTheTree()
     {
@@ -129,6 +159,27 @@ public class PocoColumnScatterFactoryTests
 
             Assert.That(values, Is.EqualTo(text), $"{tier}");
             Assert.That(leaf.Fills, Is.EqualTo(1), $"{tier}: bulk reads of the dictionary");
+        }
+    }
+
+    /// <summary>A row whose setter refuses the value 1.</summary>
+    internal sealed class RefusingRow
+    {
+        private int value;
+
+        public int Value
+        {
+            get => value;
+            set => this.value = value == 1 ? throw new SetterFailure("the setter refuses 1") : value;
+        }
+    }
+
+    /// <summary>The failure of <see cref="RefusingRow.Value"/>.</summary>
+    internal sealed class SetterFailure : Exception
+    {
+        public SetterFailure(string message)
+            : base(message)
+        {
         }
     }
 
