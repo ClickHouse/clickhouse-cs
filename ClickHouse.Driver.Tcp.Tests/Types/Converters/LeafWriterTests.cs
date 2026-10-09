@@ -11,9 +11,10 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// Compares each write pair of the leaf table with the current codec write: the same bytes for a whole column, for
-/// a slice that starts after row 0, and for the same values given as segments. Under marked positions the leaf
-/// writes its canonical placeholder, which gives the bytes of the current <c>Nullable</c> write.
+/// The write tests of the leaves that the differential tests (<see cref="LeafConverterRegistration"/>) do not run: the
+/// pairs that no differential case reaches, compared here with the current codec write (a whole column and a slice
+/// that starts after row 0); segments against one span; marked positions against the current <c>Nullable</c> write;
+/// refused values (type, message and parameter name); <c>FixedString</c> from text, which no codec writes.
 /// </summary>
 [TestFixture]
 public class LeafWriterTests
@@ -23,27 +24,23 @@ public class LeafWriterTests
     // Texts of at most 4 UTF-8 bytes. A lone surrogate encodes as the 3 bytes EF BF BD.
     private static readonly string[] FixedStringTexts = { string.Empty, "a", "abcd", "é", "\uD800", "ab", "a" };
 
-    // The pairs that a codec writes today, so the current write is the reference.
-    public static IEnumerable<TestCaseData> WritePairs()
-    {
-        foreach (string type in LeafSamples.Types)
-        {
-            IColumnCodec codec = ConverterHarness.Codec(type);
-            foreach (Type clrType in LeafTableTests.LeafOf(type).WriteTypes(codec))
-            {
-                if (codec.CanWriteElementType(clrType))
-                {
-                    yield return new TestCaseData(type, clrType).SetArgDisplayNames(type, clrType.Name);
-                }
-            }
-        }
-    }
+    public static IEnumerable<TestCaseData> WritePairs() => Pairs(static (_, _, _) => true);
 
-    [TestCaseSource(nameof(WritePairs))]
-    public Task Write_LeafPair_GivesTheCurrentBytes(string type, Type clrType)
+    public static IEnumerable<TestCaseData> WritePairsOfTheCodecs() => Pairs(static (_, codec, clrType) => codec.CanWriteElementType(clrType));
+
+    public static IEnumerable<TestCaseData> WritePairsNotInTheCaseList()
+        => Pairs(static (leaf, _, clrType) => LeafConverterRegistrationTests.NotInTheCaseList.Contains(new LeafPairKey(leaf.Name, clrType, ConversionDirection.Write)));
+
+    [TestCaseSource(nameof(WritePairsNotInTheCaseList))]
+    public Task Write_LeafPairNotInTheCaseList_GivesTheCurrentBytes(string type, Type clrType)
         => (Task)ConverterHarness.InvokeGeneric(typeof(LeafWriterTests), nameof(AssertWritesLikeTheCurrentPathAsync), new[] { clrType }, type);
 
+    /// <summary>Segments (the row arrays of an <c>Array</c>) give the bytes of the same values in one span.</summary>
     [TestCaseSource(nameof(WritePairs))]
+    public Task Write_Segments_GiveTheBytesOfOneSpan(string type, Type clrType)
+        => (Task)ConverterHarness.InvokeGeneric(typeof(LeafWriterTests), nameof(AssertSegmentsWriteLikeOneSpanAsync), new[] { clrType }, type);
+
+    [TestCaseSource(nameof(WritePairsOfTheCodecs))]
     public Task Write_MarkedPositions_GiveTheBytesOfTheCurrentNullableWrite(string type, Type clrType)
         => (Task)ConverterHarness.InvokeGeneric(
             typeof(LeafWriterTests),
@@ -337,20 +334,30 @@ public class LeafWriterTests
 
         byte[] whole = await ConverterHarness.WriteOldAsync(type, values, 0, values.Length);
         byte[] slice = await ConverterHarness.WriteOldAsync(type, values, 1, values.Length - 1);
-
-        // Segments of 1, of the middle rows, empty, and of the last row, as an Array writes its rows.
-        T[][] segments = { values[..1], values[1..^1], Array.Empty<T>(), values[^1..] };
-
         byte[] newWhole = await ConverterHarness.WriteNewAsync(writer, values, 0, values.Length);
         byte[] newSlice = await ConverterHarness.WriteNewAsync(writer, values, 1, values.Length - 1);
-        byte[] newSegments = await ConverterHarness.WriteSegmentsAsync(writer, segments);
 
         Assert.Multiple(() =>
         {
             Assert.That(newWhole, Is.EqualTo(whole), "whole column");
             Assert.That(newSlice, Is.EqualTo(slice), "slice from row 1");
-            Assert.That(newSegments, Is.EqualTo(whole), "segments");
         });
+    }
+
+    private static async Task AssertSegmentsWriteLikeOneSpanAsync<T>(string type)
+    {
+        T[] values = typeof(T) == typeof(string) && LeafTableTests.LeafOf(type).Name == "FixedString"
+            ? (T[])(object)FixedStringTexts
+            : (T[])LeafSamples.Writable(type, typeof(T));
+        Assert.That(values, Has.Length.GreaterThanOrEqualTo(3), "a sample needs a first, a middle and a last segment");
+        ColumnWriter<T> writer = Derivation.Writer<T>(type, ConverterHarness.Context);
+
+        // Segments of 1, of the middle rows, empty, and of the last row, as an Array writes its rows.
+        T[][] segments = { values[..1], values[1..^1], Array.Empty<T>(), values[^1..] };
+        byte[] span = await ConverterHarness.WriteNewAsync(writer, values, 0, values.Length);
+        byte[] fromSegments = await ConverterHarness.WriteSegmentsAsync(writer, segments);
+
+        Assert.That(fromSegments, Is.EqualTo(span));
     }
 
     // The current Nullable write: the inner prefix, the null map, then the inner values with the placeholder of the
@@ -436,6 +443,22 @@ public class LeafWriterTests
             Assert.That(encoded, Is.EqualTo(written), "bulk");
             Assert.That(one, Is.EqualTo(writtenOne), "one value");
         });
+    }
+
+    private static IEnumerable<TestCaseData> Pairs(Func<Leaf, IColumnCodec, Type, bool> include)
+    {
+        foreach (string type in LeafSamples.Types)
+        {
+            IColumnCodec codec = ConverterHarness.Codec(type);
+            Leaf leaf = LeafTableTests.LeafOf(type);
+            foreach (Type clrType in leaf.WriteTypes(codec))
+            {
+                if (include(leaf, codec, clrType))
+                {
+                    yield return new TestCaseData(type, clrType).SetArgDisplayNames(type, clrType.Name);
+                }
+            }
+        }
     }
 
     private static byte[] Padded(string text, int size)

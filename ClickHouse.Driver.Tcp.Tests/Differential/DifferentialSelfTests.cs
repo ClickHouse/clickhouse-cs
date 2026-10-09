@@ -353,7 +353,7 @@ public class DifferentialSelfTests
 
     [Test]
     public void Current_Registry_HasTheRegistrationsOfTheAssembly()
-        => Assert.That(DifferentialRegistry.Current.Candidates.Select(a => a.Name), Does.Contain("Old path again: ReadAs"));
+        => Assert.That(DifferentialRegistry.Current.Candidates.Select(a => a.Name), Does.Contain("Leaf converters: Fill"));
 
     [TestCase(0f, -0f)]
     [TestCase(double.NaN, 0d)]

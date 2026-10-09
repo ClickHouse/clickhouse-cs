@@ -7,68 +7,27 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// Compares each read pair of the leaf table with the current read (<see cref="ColumnReadProjections.ReadAs{T}"/>),
-/// through <see cref="BoundReader{T}.Fill"/> and through a compiled <see cref="ColumnReader.Emit"/>, over the whole
-/// column and over a window that starts after row 0.
+/// The read tests of the leaves that the differential tests (<see cref="LeafConverterRegistration"/>) do not run: the
+/// pairs that no differential case reaches, compared here with the current read
+/// (<see cref="ColumnReadProjections.ReadAs{T}"/>) through <see cref="BoundReader{T}.Fill"/> and a compiled
+/// <see cref="ColumnReader.Emit"/>; zero rows; columns that a caller built; the surface messages.
 /// </summary>
 [TestFixture]
 public class LeafReaderTests
 {
     private static readonly ConverterDerivation Derivation = ConverterDerivation.Default;
 
-    public static IEnumerable<TestCaseData> ReadPairs()
-    {
-        foreach (string type in LeafSamples.Types)
-        {
-            IColumnCodec codec = ConverterHarness.Codec(type);
-            foreach (Type clrType in LeafTableTests.LeafOf(type).ReadTypes(codec))
-            {
-                yield return new TestCaseData(type, clrType).SetArgDisplayNames(type, clrType.Name);
-            }
-        }
-    }
+    public static IEnumerable<TestCaseData> ReadPairs() => Pairs(onlyNotInTheCaseList: false);
 
-    [TestCaseSource(nameof(ReadPairs))]
-    public Task Read_LeafPair_GivesTheCurrentValuesThroughFillAndEmit(string type, Type clrType)
+    public static IEnumerable<TestCaseData> ReadPairsNotInTheCaseList() => Pairs(onlyNotInTheCaseList: true);
+
+    [TestCaseSource(nameof(ReadPairsNotInTheCaseList))]
+    public Task Read_LeafPairNotInTheCaseList_GivesTheCurrentValuesThroughFillAndEmit(string type, Type clrType)
         => (Task)ConverterHarness.InvokeGeneric(typeof(LeafReaderTests), nameof(AssertReadsLikeTheCurrentPathAsync), new[] { clrType }, type);
 
     [TestCaseSource(nameof(ReadPairs))]
     public Task Read_ZeroRows_GivesNoValues(string type, Type clrType)
         => (Task)ConverterHarness.InvokeGeneric(typeof(LeafReaderTests), nameof(AssertReadsNoRowsAsync), new[] { clrType }, type);
-
-    /// <summary>
-    /// A value that the CLR type cannot hold fails the same way in all three paths: the same exception and message.
-    /// </summary>
-    [TestCase("Time", typeof(TimeOnly), new object[] { -1 })]
-    [TestCase("Time", typeof(TimeOnly), new object[] { 86_400 })]
-    [TestCase("Time64(3)", typeof(TimeOnly), new object[] { -1L })]
-    [TestCase("Time64(3)", typeof(TimeOnly), new object[] { 86_400_000L })]
-    [TestCase("DateTime64(0, 'UTC')", typeof(DateTimeOffset), new object[] { long.MaxValue })]
-    [TestCase("DateTime64(0, 'UTC')", typeof(DateTime), new object[] { long.MinValue })]
-    [TestCase("DateTime('Fixed/UTC+00:00:30')", typeof(DateTimeOffset), new object[] { 0u })]
-    [TestCase("DateTime64(3, 'Fixed/UTC-00:00:07')", typeof(DateTime), new object[] { 0L })]
-    public Task Read_ValueOutOfRangeForTheClrType_FailsAsTheCurrentReadDoes(string type, Type clrType, object[] stored)
-    {
-        Type storedType = stored[0].GetType();
-        Array values = Array.CreateInstance(storedType, stored.Length);
-        Array.Copy(stored, values, stored.Length);
-        var source = (IColumn)Activator.CreateInstance(typeof(ArrayColumn<>).MakeGenericType(storedType), "c", type, values);
-        return (Task)ConverterHarness.InvokeGeneric(typeof(LeafReaderTests), nameof(AssertFailsLikeTheCurrentPathAsync), new[] { clrType }, type, source);
-    }
-
-    /// <summary>
-    /// A timezone that the platform cannot represent fails only a calendar reading: the raw count still reads, as on
-    /// the current path.
-    /// </summary>
-    [Test]
-    public async Task Read_UnrepresentableTimezoneAsTheStoredCount_Succeeds()
-    {
-        const string type = "DateTime('Fixed/UTC+00:00:30')";
-        using IColumn column = await ConverterHarness.DecodeAsync(type, new ArrayColumn<uint>("c", type, new uint[] { 1, 2 }));
-        ColumnReader<uint> reader = Derivation.Reader<uint>(type, ConverterHarness.Context);
-
-        Assert.That(ConverterHarness.ReadFill(reader, column, 0, 2), Is.EqualTo(new uint[] { 1, 2 }));
-    }
 
     /// <summary>
     /// A column that a caller built can carry a <c>FixedString</c> type name without the decoded storage. The current
@@ -159,17 +118,20 @@ public class LeafReaderTests
         });
     }
 
-    private static async Task AssertFailsLikeTheCurrentPathAsync<T>(string type, IColumn source)
+    private static IEnumerable<TestCaseData> Pairs(bool onlyNotInTheCaseList)
     {
-        using IColumn column = await ConverterHarness.DecodeAsync(type, source);
-        ColumnReader<T> reader = Derivation.Reader<T>(type, ConverterHarness.Context);
-        Exception expected = ConverterHarness.Catch(() => ConverterHarness.ReadOld<T>(column, 0, column.RowCount));
-
-        Assert.Multiple(() =>
+        foreach (string type in LeafSamples.Types)
         {
-            ConverterHarness.AssertSameFailure(expected, ConverterHarness.Catch(() => ConverterHarness.ReadFill(reader, column, 0, column.RowCount)), "Fill");
-            ConverterHarness.AssertSameFailure(expected, ConverterHarness.Catch(() => ConverterHarness.ReadEmit(reader, column, 0, column.RowCount)), "Emit");
-        });
+            IColumnCodec codec = ConverterHarness.Codec(type);
+            Leaf leaf = LeafTableTests.LeafOf(type);
+            foreach (Type clrType in leaf.ReadTypes(codec))
+            {
+                if (!onlyNotInTheCaseList || LeafConverterRegistrationTests.NotInTheCaseList.Contains(new LeafPairKey(leaf.Name, clrType, ConversionDirection.Read)))
+                {
+                    yield return new TestCaseData(type, clrType).SetArgDisplayNames(type, clrType.Name);
+                }
+            }
+        }
     }
 
     private static IColumn EmptySource(string type)
