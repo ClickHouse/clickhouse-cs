@@ -254,8 +254,7 @@ public class StringColumnCodecTests
     {
         var text = new ArrayColumn<string>("c", "String", new[] { "a" });
 
-        IColumn<byte[]> bytes = ReadAs<byte[]>(text);
-        var thrown = Assert.Throws<InvalidOperationException>(() => _ = bytes[0]);
+        var thrown = Assert.Throws<InvalidOperationException>(() => ReadAs<byte[]>(text));
 
         Assert.That(thrown.Message, Does.Contain("Column 'c' (String)").And.Contain("IStringColumn"));
     }
