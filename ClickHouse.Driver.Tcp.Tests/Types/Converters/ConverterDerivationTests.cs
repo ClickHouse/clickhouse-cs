@@ -98,19 +98,21 @@ public class ConverterDerivationTests
         });
     }
 
-    /// <summary>A composite has no write converter yet, so its write is refused, not thrown.</summary>
-    [TestCase("Nullable(Int32)")]
-    [TestCase("Array(String)")]
-    [TestCase("LowCardinality(String)")]
-    [TestCase("Tuple(Int32, String)")]
-    [TestCase("Map(String, Int32)")]
-    [TestCase("Variant(Int32, String)")]
-    [TestCase("Point")]
-    public void Derive_CompositeWrite_RefusesWithNoConverter(string type)
+    /// <summary>A composite refuses a CLR type of another shape than the one it is written from, and says which shape.</summary>
+    [TestCase("Nullable(Int32)", typeof(int), "'Nullable(Int32)' cannot be written from System.Int32, which cannot hold NULL. It is written from a nullable type.")]
+    [TestCase("Nullable(Int32)", typeof(object), "'Int32' cannot be written from System.Object. It is written from: System.Int32. It is inside the column type 'Nullable(Int32)'.")]
+    [TestCase("Array(String)", typeof(object), "'Array(String)' cannot be written from System.Object. It is written from an array.")]
+    [TestCase("LowCardinality(String)", typeof(object), "'String' cannot be written from System.Object. It is written from: System.String, System.Byte[]. It is inside the column type 'LowCardinality(String)'.")]
+    [TestCase("LowCardinality(Nullable(Int32))", typeof(int), "'LowCardinality(Nullable(Int32))' cannot be written from System.Int32, which cannot hold NULL. It is written from a nullable type.")]
+    [TestCase("Tuple(Int32, String)", typeof(object), "'Tuple(Int32, String)' cannot be written from System.Object. It is written from a ValueTuple of 2 element(s).")]
+    [TestCase("Map(String, Int32)", typeof(object), "'Map(String, Int32)' cannot be written from System.Object. It is written from an array of KeyValuePair<TKey, TValue>.")]
+    [TestCase("Variant(Int32, String)", typeof(int), "'Variant(Int32, String)' cannot be written from System.Int32. It is written from: System.Object.")]
+    [TestCase("Point", typeof(object), "'Point' cannot be written from System.Object. It is written from: System.ValueTuple`2[System.Double,System.Double].")]
+    public void Derive_CompositeWriteOfAnotherShape_RefusesWithTheShapeItIsWrittenFrom(string type, Type clrType, string refusal)
     {
-        Derivation derivation = Fresh().Derive(type, ConverterHarness.Context, typeof(object), ConversionDirection.Write);
+        Derivation derivation = Fresh().Derive(type, ConverterHarness.Context, clrType, ConversionDirection.Write);
 
-        Assert.That(derivation.Refusal, Is.EqualTo($"'{type}' has no converter for System.Object."));
+        Assert.That(derivation.Refusal, Is.EqualTo(refusal));
     }
 
     /// <summary>A type that does not parse, or that the client does not support, throws as a codec resolution does.</summary>
