@@ -19,6 +19,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 [TestFixture]
 [Category("Integration")]
 [Category("Cloud")]
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Structure", "NUnit1034:Base TestFixtures should be abstract", Justification = "The fixture runs its tests in the tier that the runtime chooses, and PocoReadFillIntegrationTests runs them again in the Fill tier.")]
 public class PocoReadIntegrationTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
@@ -550,42 +551,6 @@ public class PocoReadIntegrationTests
             async () => await client.QueryAsync<Row<Guid>>("SELECT toInt32(1) AS value", cancellationToken: None).ToListAsync());
 
         Assert.That(error.Message, Does.Contain("Int32").And.Contain("System.Guid"));
-    }
-
-    [Test]
-    public async Task Materialize_EveryScatterTier_ReadsTheSameRows()
-    {
-        // The tiers are compared here as well as in the unit tests because these values come off a real server: the
-        // compiled loop and the bulk read with a setter for each row have to agree on decoded storage, not just on
-        // columns a test built. QueryAsync<T> leaves the tier to the runtime, so the plan is built directly to name
-        // one; each tier reads its own block, since materializing one block twice would let the first tier fill the
-        // caches the second reads.
-        const string sql = "SELECT toUInt64(number) AS Id, toString(number) AS Name FROM numbers(3)";
-        await using var client = new ClickHouseTcpClient(TcpServerFixture.Options());
-        var byTier = new Dictionary<PocoScatterTier, List<Numbered>>();
-
-        foreach (PocoScatterTier tier in Enum.GetValues<PocoScatterTier>())
-        {
-            var read = new List<Numbered>();
-            await foreach (Block block in client.StreamAsync(sql, cancellationToken: None))
-            {
-                var rows = new Numbered[block.RowCount];
-                PocoReadPlan<Numbered>.Build(PocoTypeDescriptor<Numbered>.Build(), block, tier)
-                    .Materialize(block, rows, read.Count);
-                read.AddRange(rows);
-            }
-
-            byTier[tier] = read;
-        }
-
-        Assert.Multiple(() =>
-        {
-            foreach ((PocoScatterTier tier, List<Numbered> rows) in byTier)
-            {
-                Assert.That(rows.ConvertAll(row => row.Id), Is.EqualTo(new ulong[] { 0, 1, 2 }), $"{tier}: Id");
-                Assert.That(rows.ConvertAll(row => row.Name), Is.EqualTo(new[] { "0", "1", "2" }), $"{tier}: Name");
-            }
-        });
     }
 
     /// <summary>Creates a client against the test server, for the tests that query through <c>QueryAsync&lt;T&gt;</c>.</summary>

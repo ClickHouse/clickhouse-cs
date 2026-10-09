@@ -13,6 +13,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Poco;
 /// through the tier of a runtime without dynamic code.
 /// </summary>
 [TestFixture]
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Structure", "NUnit1034:Base TestFixtures should be abstract", Justification = "The fixture runs its tests in the tier that the runtime chooses, and PocoReadPlanFillTests runs them again in the Fill tier.")]
 public class PocoReadPlanTests
 {
     /// <summary>The scatter tier of the plans that a test does not build with a tier of its own, or null to choose one.</summary>
@@ -64,16 +65,14 @@ public class PocoReadPlanTests
         Assert.That(rows[0].UserId, Is.EqualTo(42));
     }
 
-    [TestCase(true)]
-    [TestCase(false)]
-    public void Materialize_WindowStartingPastTheFirstRow_ReadsThatWindowIntoTheFirstRows(bool fillTier)
+    [Test]
+    public void Materialize_WindowStartingPastTheFirstRow_ReadsThatWindowIntoTheFirstRows()
     {
-        PocoScatterTier tier = fillTier ? PocoScatterTier.Fill : PocoScatterTier.Emit;
         // The window's start has to rebase the column read while leaving the destination at 0, and a start of 0
         // would not show that: a scatter ignoring the parameter passes. Both tiers source a value differently, so
-        // proving one says nothing about the other.
+        // proving one says nothing about the other: each fixture of these tests reads in its own tier.
         Block block = BlockOf(5, Ints("value", 10, 11, 12, 13, 14));
-        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, tier);
+        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, Tier);
         var rows = new Row<int>[2];
 
         plan.Materialize(block, rows, start: 2, count: 2, rowOffset: 2);
@@ -403,30 +402,6 @@ public class PocoReadPlanTests
         Assert.That(rows[0].Value, Is.EqualTo(1_700_000_000u));
     }
 
-    // The tiers are cases of one loop rather than [TestCase]s, because the enum is internal and a public test
-    // method cannot take it as a parameter. Iterating the enum also covers a tier added later for free.
-    [Test]
-    public void Materialize_EveryTier_ProducesTheSameRows()
-    {
-        // The tiers differ only in how they run the converter tree, so they must agree, also on the conversions, which
-        // is why the block mixes a raw type, a projected one, a nullable and a composite. This doubles as the proof
-        // that the tier with no compiled code, which a runtime without dynamic code falls back to, is equivalent.
-        Assert.Multiple(() =>
-        {
-            foreach (PocoScatterTier tier in Enum.GetValues<PocoScatterTier>())
-            {
-                MixedRow[] rows = Materialize<MixedRow>(MixedBlock(), tier);
-
-                Assert.That(Array.ConvertAll(rows, row => row.Id), Is.EqualTo(new[] { 1, 2 }), $"{tier}: Id");
-                Assert.That(Array.ConvertAll(rows, row => row.Name), Is.EqualTo(new[] { "a", "b" }), $"{tier}: Name");
-                Assert.That(Array.ConvertAll(rows, row => row.Stamp), Is.EqualTo(new[] { DateTime.UnixEpoch.AddSeconds(1_700_000_000), DateTime.UnixEpoch }), $"{tier}: Stamp");
-                Assert.That(Array.ConvertAll(rows, row => row.Score), Is.EqualTo(new double?[] { 1.5, null }), $"{tier}: Score");
-                Assert.That(Array.ConvertAll(rows, row => row.Tags), Is.EqualTo(new[] { new[] { "x", "y" }, Array.Empty<string>() }), $"{tier}: Tags");
-                Assert.That(Array.ConvertAll(rows, row => row.Level), Is.EqualTo(new[] { Level.Low, Level.High }), $"{tier}: Level");
-            }
-        });
-    }
-
     [Test]
     public void Build_ColumnNotSurfacingItsElementType_ReportsTheCodecMismatch()
     {
@@ -529,18 +504,6 @@ public class PocoReadPlanTests
     }
 
     [Test]
-    public void ReadPlanFor_DifferentForcedTiers_CompileTheirOwnPlans()
-    {
-        var registry = new PocoTypeRegistry();
-        Block block = BlockOf(1, Ints("value", 1));
-
-        PocoReadPlan<Row<int>> emit = registry.ReadPlanFor<Row<int>>(block, PocoScatterTier.Emit);
-        PocoReadPlan<Row<int>> fill = registry.ReadPlanFor<Row<int>>(block, PocoScatterTier.Fill);
-
-        Assert.That(fill, Is.Not.SameAs(emit));
-    }
-
-    [Test]
     public void ReadPlanFor_BuildFailure_IsNotCached()
     {
         var registry = new PocoTypeRegistry();
@@ -570,7 +533,7 @@ public class PocoReadPlanTests
         });
     }
 
-    private static Block MixedBlock() => BlockOf(
+    internal static Block MixedBlock() => BlockOf(
         2,
         Ints("Id", 1, 2),
         Decoded(new ArrayColumn<string>("Name", "String", new[] { "a", "b" })),
@@ -595,19 +558,19 @@ public class PocoReadPlanTests
         return codec.ReadColumnAsync(reader, source.Name, source.TypeName, source.RowCount, CodecTestHarness.None).AsTask().GetAwaiter().GetResult();
     }
 
-    private static Block BlockOf(int rowCount, params IColumn[] columns)
+    internal static Block BlockOf(int rowCount, params IColumn[] columns)
         => BlockOf(new ResolveContext { ServerTimezone = "UTC" }, rowCount, columns);
 
     private static Block BlockOf(ResolveContext context, int rowCount, params IColumn[] columns)
         => new(string.Empty, BlockInfo.Default, rowCount, columns, ColumnCodecRegistry.Default, context);
 
-    private static IColumn Ints(string name, params int[] values) => PrimitiveColumn<int>.FromValues(name, "Int32", values);
+    internal static IColumn Ints(string name, params int[] values) => PrimitiveColumn<int>.FromValues(name, "Int32", values);
 
     private T[] Materialize<T>(Block block)
         where T : class
         => Materialize<T>(block, Tier);
 
-    private static T[] Materialize<T>(Block block, PocoScatterTier? tier)
+    internal static T[] Materialize<T>(Block block, PocoScatterTier? tier)
         where T : class
     {
         PocoReadPlan<T> plan = PocoReadPlan<T>.Build(PocoTypeDescriptor<T>.Build(), block, tier);
@@ -643,7 +606,7 @@ public class PocoReadPlanTests
         }
     }
 
-    private enum Level : sbyte
+    internal enum Level : sbyte
     {
         Low = -1,
         High = 127,
@@ -670,7 +633,7 @@ public class PocoReadPlanTests
         public int Score { get; set; }
     }
 
-    private sealed class MixedRow
+    internal sealed class MixedRow
     {
         public int Id { get; set; }
 
