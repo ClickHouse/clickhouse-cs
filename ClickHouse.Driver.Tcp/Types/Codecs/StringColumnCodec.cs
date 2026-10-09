@@ -153,6 +153,9 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     public bool CanWrite(IColumn column) => column is IColumn<string> or IColumn<byte[]>;
 
     /// <inheritdoc/>
+    public bool WritesFromStorage(IColumn column) => column is StringColumn;
+
+    /// <inheritdoc/>
     // Read per element through the indexer so a scattered write-path view (a substitute for a nullable string, a
     // Tuple field) writes with no materialized copy.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)

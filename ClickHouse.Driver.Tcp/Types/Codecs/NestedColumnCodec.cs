@@ -205,6 +205,10 @@ internal sealed class NestedColumnCodec : IColumnCodec
     public bool CanWriteElementType(Type elementType) => false;
 
     /// <inheritdoc/>
+    // The only column that a Nested type writes is its own dense column.
+    public bool WritesFromStorage(IColumn column) => CanWrite(column);
+
+    /// <inheritdoc/>
     public bool CanWrite(IColumn column)
     {
         if (column is not NestedColumn nested || nested.FieldCount != children.Length)

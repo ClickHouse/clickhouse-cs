@@ -91,6 +91,16 @@ internal interface IColumnCodec
     /// <returns><see langword="true"/> if <see cref="WriteColumn"/> accepts <paramref name="column"/>.</returns>
     bool CanWrite(IColumn column);
 
+    /// <summary>
+    /// Whether <see cref="WriteColumn"/> writes this column from its own storage, with no conversion of its values: a
+    /// column that this client decoded, or a dense column in the wire layout of the type (the raw bytes of a
+    /// <c>String</c>, a LowCardinality dictionary and its keys, the child columns of a composite). Such a write keeps the
+    /// bytes that the server sent. The default is false.
+    /// </summary>
+    /// <param name="column">The column to test.</param>
+    /// <returns>Whether the codec writes the column from its storage.</returns>
+    bool WritesFromStorage(IColumn column) => false;
+
     /// <summary>Whether a row-oriented column with <paramref name="elementType"/> can be written.</summary>
     /// <param name="elementType">The candidate CLR element type.</param>
     /// <returns>Whether a column of that element type can be written.</returns>
