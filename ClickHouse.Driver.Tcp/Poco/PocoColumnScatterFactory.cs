@@ -206,8 +206,8 @@ internal static class PocoColumnScatterFactory
 
         public void Run(IColumn column, T[] rows, int start, int rowCount, long rowOffset)
         {
-            // Bind is cheap for every reader. A LowCardinality reader keeps the converted dictionary of each column, so
-            // the windows of one block convert it once.
+            // Bind reads no rows. A LowCardinality reader keeps the converted dictionary of each column, so the windows
+            // of one block convert it once.
             BoundReader<TProp> bound = reader.Bind(column);
             TProp[] values = ArrayPool<TProp>.Shared.Rent(rowCount);
             try

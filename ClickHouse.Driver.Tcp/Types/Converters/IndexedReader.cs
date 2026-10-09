@@ -8,9 +8,10 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// <summary>
 /// Reads a decoded column through its indexer (<c>IColumn&lt;T&gt;[row]</c>), as its canonical type
 /// <typeparamref name="T"/>: the reader of the types that read only as their canonical type (Variant, Dynamic, Nested,
-/// QBit, the geo types and <c>Tuple()</c>). The columns of these types make each value when it is read, and their
-/// <see cref="IColumn{T}.Values"/> makes the values of all the rows into a cache that the column keeps. Through the
-/// indexer, a read of some rows makes only the values of those rows.
+/// QBit, the geo types and <c>Tuple()</c>). The decoded columns of Variant, Dynamic, Nested, QBit and the geo types make
+/// each value when it is read, and their <see cref="IColumn{T}.Values"/> makes the values of all the rows into a cache
+/// that the column keeps. Through the indexer, a read of some rows makes only the values of those rows. (A
+/// <c>Tuple()</c> column stores its values.)
 /// </summary>
 /// <typeparam name="T">The canonical type of the column.</typeparam>
 internal sealed class IndexedReader<T> : ColumnReader<T>
