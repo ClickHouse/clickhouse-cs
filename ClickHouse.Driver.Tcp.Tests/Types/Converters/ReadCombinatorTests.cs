@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
+using ClickHouse.Driver.Tcp.Poco;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Differential;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -428,14 +429,21 @@ public class ReadCombinatorTests
         ConverterHarness.AssertSameFailure(old, emit, "Emit");
     }
 
-    // POCO mapping, Fill and Emit fail alike: the same type and text, or a NULL at the same row.
+    // The old POCO plan (the reference of the differential tests), Fill and Emit fail alike: the same type and text, or
+    // a NULL at the same row. The client's POCO plan, in each tier, gives the failure of the old plan.
     private static void AssertFailsAsPocoMapping<T>(IColumn column)
     {
         ColumnReader<T> reader = Reader<T>(column.TypeName);
         using var block = new Block(string.Empty, BlockInfo.Default, column.RowCount, new[] { column }, ColumnCodecRegistry.Default, Context);
-        RowReader<T> poco = ClientArms.Poco.Bind<T>(block);
+        RowReader<T> poco = ReferenceArms.Poco.Bind<T>(block);
         Exception expected = ConverterHarness.Catch(() => poco(0, column.RowCount));
         Assert.That(expected, Is.Not.Null, "POCO mapping must fail for this case.");
+        foreach (ReadArm client in new[] { ClientArms.Poco, new ClientArms.PocoArm("Client.Poco: Fill", PocoScatterTier.Fill) })
+        {
+            RowReader<T> plan = client.Bind<T>(block);
+            ConverterHarness.AssertSameFailure(expected, ConverterHarness.Catch(() => plan(0, column.RowCount)), client.Name);
+        }
+
         foreach ((string path, Exception actual) in new[]
         {
             ("Fill", ConverterHarness.Catch(() => ConverterHarness.ReadFill(reader, column, 0, column.RowCount))),
