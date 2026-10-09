@@ -18,6 +18,7 @@ public class DifferentialSelfTests
     private const string UInt64Case = "ColumnReadProjection: UInt64";
     private const string NullableDateTimeCase = "ColumnReadProjection: Nullable(DateTime('UTC'))";
     private const string LowCardinalityStringCase = "ColumnReadProjection: LowCardinality(String)";
+    private const string OneRowArrayCase = "InsertRoundTrip: Array(Int16) [1 rows]";
 
     [Test]
     public void Run_CandidateThatReadsOtherValues_ReportsTheFirstDifferentValue()
@@ -64,7 +65,7 @@ public class DifferentialSelfTests
     [Test]
     public void Run_CandidateWithAnotherAnswer_ReportsTheAnswer()
     {
-        CaseReport report = RunWith(UInt64Case, r => r.Add(new NegatingAnswerArm(Tier.CanRead), expectedFacets: 2));
+        CaseReport report = RunWith(UInt64Case, r => r.Add(new NegatingAnswerArm(Tier.CanRead), expectedFacets: 3));
 
         Assert.That(report.Mismatches, Has.Some.Contains("CanRead<ulong?>: Negating CanRead gives answer True; Client.CanRead gives answer False"));
     }
@@ -73,7 +74,7 @@ public class DifferentialSelfTests
     public void Run_ArmRefusal_MatchesARefusalOfTheReferenceButNotValues()
     {
         // The reference refuses ReadAs<ulong?> and reads ReadAs<ulong>.
-        CaseReport report = RunWith(UInt64Case, r => r.Add(new RefusingReadArm(), expectedFacets: 2));
+        CaseReport report = RunWith(UInt64Case, r => r.Add(new RefusingReadArm(), expectedFacets: 3));
 
         Assert.Multiple(() =>
         {
@@ -85,7 +86,7 @@ public class DifferentialSelfTests
     [Test]
     public void Run_CandidateWithAnUndeclaredChange_ReportsTheChange()
     {
-        CaseReport report = RunWith(UInt64Case, r => r.Add(new PocoAsReadAsArm(UInt64Case), expectedFacets: 2));
+        CaseReport report = RunWith(UInt64Case, r => r.Add(new PocoAsReadAsArm(UInt64Case, typeof(ulong), typeof(ulong?)), expectedFacets: 2));
 
         Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<ulong?> rows [0, 5): Poco as ReadAs gives 5 values").And.Contains("the kind is Values, not Refused"));
     }
@@ -104,7 +105,7 @@ public class DifferentialSelfTests
 
         CaseReport report = RunWith(UInt64Case, r =>
         {
-            r.Add(new PocoAsReadAsArm(UInt64Case), expectedFacets: 2);
+            r.Add(new PocoAsReadAsArm(UInt64Case, typeof(ulong), typeof(ulong?)), expectedFacets: 2);
             r.DeclareChange(UInt64Case, Tier.ReadAs, typeof(ulong?), expected, "a test");
         });
 
@@ -151,11 +152,54 @@ public class DifferentialSelfTests
     }
 
     [Test]
+    public void Run_OneRowCaseWithAReaderThatIgnoresTheStart_ReportsTheTail()
+    {
+        CaseReport report = RunWith(OneRowArrayCase, r => r.Add(new StartIgnoringReadArm(OneRowArrayCase), expectedFacets: 1));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.TailStart, Is.EqualTo(1));
+            Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<short[]> rows [1, 2) after a preceding row: Start ignoring gives").And.Contains("an array of 8 elements, not 4"));
+        });
+    }
+
+    [Test]
+    public void Run_OneRowCaseWithAWriterThatIgnoresTheStart_ReportsTheSlice()
+    {
+        CaseReport report = RunWith(OneRowArrayCase, r => r.Add(new StartIgnoringWriteArm(OneRowArrayCase), expectedFacets: 2));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Mismatches, Has.Some.Contains("Write[insert] rows [1, 2) after a preceding row: Start ignoring gives"));
+            Assert.That(report.Mismatches, Has.Some.Contains("Write[decoded] rows [1, 2) after a preceding row: Start ignoring gives"));
+            Assert.That(report.Mismatches, Has.None.Contains("rows [0, 1)"), "the write of all rows is right");
+        });
+    }
+
+    [Test]
+    public void Run_StatedOutcomeThatTheReferenceDoesNotGive_IsReported()
+    {
+        // The reference reads Time 0 as TimeOnly 00:00:00, not as 00:00:01.
+        var testCase = new DifferentialCase(
+            "A case that states a wrong value",
+            CaseSource.ColumnReadScenario,
+            "Time",
+            1,
+            new[] { typeof(int), typeof(TimeOnly) },
+            new[] { WriteInput.Built("canonical", typeof(int), name => new ArrayColumn<int>(name, "Time", new[] { 0 })) },
+            new[] { new StatedOutcome(Tier.ReadAs, typeof(TimeOnly), Expectation.Values(new TimeOnly(0, 0, 1))) });
+
+        CaseReport report = DifferentialEngine.Run(testCase, DifferentialRegistry.WithReference());
+
+        Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<TimeOnly> rows [0, 1): Client.ReadAs gives").And.Contains("the source test states the values [00:00:01.0000000]").And.Contains("value 0: 00:00:00.0000000, not 00:00:01.0000000"));
+    }
+
+    [Test]
     public void Run_DeclaredChangeThatIsTheReferenceOutcome_ReportsThatItIsNoChange()
     {
         CaseReport report = RunWith(UInt64Case, r =>
         {
-            r.Add(new PocoAsReadAsArm(UInt64Case), expectedFacets: 2);
+            r.Add(new PocoAsReadAsArm(UInt64Case, typeof(ulong), typeof(ulong?)), expectedFacets: 2);
             r.DeclareChange(UInt64Case, Tier.ReadAs, typeof(ulong?), Expectation.Refused<InvalidCastException>("cannot be read as"), "a test");
         });
 
@@ -171,7 +215,7 @@ public class DifferentialSelfTests
     {
         CaseReport report = RunWith(UInt64Case, r =>
         {
-            r.Add(new PocoAsReadAsArm(UInt64Case), expectedFacets: 2);
+            r.Add(new PocoAsReadAsArm(UInt64Case, typeof(ulong), typeof(ulong?)), expectedFacets: 2);
             r.DeclareChange(UInt64Case, Tier.ReadAs, typeof(ulong?), Expectation.Values(1UL, 2UL, 3UL, 4UL, 5UL), "a test");
         });
 
@@ -258,7 +302,7 @@ public class DifferentialSelfTests
     public void Validate_TwoChangesOfOneFacet_AreReported()
     {
         DifferentialRegistry registry = DifferentialRegistry.WithReference();
-        registry.Add(new PocoAsReadAsArm(UInt64Case), expectedFacets: 2);
+        registry.Add(new PocoAsReadAsArm(UInt64Case, typeof(ulong), typeof(ulong?)), expectedFacets: 2);
         registry.DeclareChange(UInt64Case, Tier.ReadAs, typeof(ulong?), Expectation.SameAs(Tier.Poco, typeof(ulong?)), "a test");
         registry.DeclareChanges("ReadAs<ulong?> of UInt64", f => f.Case.Id == UInt64Case && f.Tier == Tier.ReadAs && f.Target == typeof(ulong?), _ => Expectation.SameAs(Tier.Poco, typeof(ulong?)), "a test", expectedFacets: 1);
 
@@ -345,15 +389,15 @@ public class DifferentialSelfTests
         }
     }
 
-    /// <summary>The client's read, always from row 0. Covers ReadAs&lt;byte&gt; of the UInt8 case.</summary>
+    /// <summary>The client's read, always from row 0. Covers the ReadAs facets of one case.</summary>
     private sealed class StartIgnoringReadArm : ReadArm
     {
-        public StartIgnoringReadArm()
-            : base("Start ignoring", Tier.ReadAs)
-        {
-        }
+        private readonly string caseId;
 
-        public override bool Covers(Facet facet) => facet.Case.Id == UInt8Case;
+        public StartIgnoringReadArm(string caseId = UInt8Case)
+            : base("Start ignoring", Tier.ReadAs) => this.caseId = caseId;
+
+        public override bool Covers(Facet facet) => facet.Case.Id == caseId;
 
         public override RowReader<T> Bind<T>(Block block)
         {
@@ -424,6 +468,23 @@ public class DifferentialSelfTests
                 inner(writer, start, length);
                 writer.WriteByte(0xEE);
             };
+        }
+    }
+
+    /// <summary>The client's write, always from row 0. Covers the Write facets of one case.</summary>
+    private sealed class StartIgnoringWriteArm : WriteArm
+    {
+        private readonly string caseId;
+
+        public StartIgnoringWriteArm(string caseId)
+            : base("Start ignoring") => this.caseId = caseId;
+
+        public override bool Covers(Facet facet) => facet.Case.Id == caseId;
+
+        public override SliceWriter Bind<T>(IColumn<T> column, string columnType, ResolveContext context)
+        {
+            SliceWriter inner = ClientArms.Write.Bind(column, columnType, context);
+            return (writer, _, length) => inner(writer, 0, length);
         }
     }
 

@@ -321,6 +321,8 @@ internal static class ValueComparer
         decimal number => number.ToString(CultureInfo.InvariantCulture),
         DateTime time => $"{time.ToString("O", CultureInfo.InvariantCulture)} ({time.Kind})",
         DateTimeOffset time => time.ToString("O", CultureInfo.InvariantCulture),
+        TimeOnly time => time.ToString("O", CultureInfo.InvariantCulture),
+        DateOnly date => date.ToString("O", CultureInfo.InvariantCulture),
         Array array => "[" + string.Join(", ", array.Cast<object>().Select(Describe)) + "]",
         ITuple tuple => "(" + string.Join(", ", Enumerable.Range(0, tuple.Length).Select(i => Describe(tuple[i]))) + ")",
         _ when value.GetType().IsGenericType && value.GetType().GetGenericTypeDefinition() == typeof(KeyValuePair<,>)
