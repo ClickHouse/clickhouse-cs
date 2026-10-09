@@ -114,9 +114,9 @@ internal interface IColumnCodec
     }
 
     /// <summary>
-    /// Whether <paramref name="value"/> belongs to this type rather than to a sibling that surfaces the same CLR
-    /// element type. Asked only to break a tie between <c>Variant</c> alternatives that collide on
-    /// <see cref="ElementType"/>, and only for a value whose type already reached this codec, so it is never on
+    /// Whether <paramref name="value"/> belongs to this type rather than to a sibling that takes the same CLR type.
+    /// Asked only to break a tie between <c>Variant</c> alternatives that collide on <see cref="ElementType"/>, or that
+    /// are all written from the CLR type of a value whose type is the element type of no alternative, so it is never on
     /// the path of an unambiguous write.
     ///
     /// <para>
@@ -133,7 +133,8 @@ internal interface IColumnCodec
     /// alternative that is the better home for it.
     /// </para>
     /// </summary>
-    /// <param name="value">The non-null value being placed, of this codec's element type.</param>
+    /// <param name="value">The non-null value being placed: of this codec's element type, or of a CLR type that the
+    /// alternative is written from.</param>
     /// <returns>Whether this codec claims the value.</returns>
     bool ClaimsValue(object value) => true;
 
