@@ -143,19 +143,28 @@ internal readonly struct UuidBytes : IWriteConversion<Guid, UInt128>
     /// <inheritdoc/>
     public UInt128 Convert(Guid value, int position)
     {
+        if (!Vector128.IsHardwareAccelerated)
+        {
+            return ConvertScalar(value);
+        }
+
+        ReadOnlySpan<byte> guidBytes = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref value, 1));
+        UInt128 wire = default;
+        Vector128.Shuffle(Vector128.Create(guidBytes), GuidToWire).CopyTo(MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref wire, 1)));
+        return wire;
+    }
+
+    /// <summary>The conversion with no SIMD instructions, for a runtime without hardware acceleration.</summary>
+    /// <param name="value">The value.</param>
+    /// <returns>The wire bytes.</returns>
+    internal static UInt128 ConvertScalar(Guid value)
+    {
         ReadOnlySpan<byte> guidBytes = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref value, 1));
         UInt128 wire = default;
         Span<byte> wireBytes = MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref wire, 1));
-        if (Vector128.IsHardwareAccelerated)
+        for (int i = 0; i < wireBytes.Length; i++)
         {
-            Vector128.Shuffle(Vector128.Create(guidBytes), GuidToWire).CopyTo(wireBytes);
-        }
-        else
-        {
-            for (int i = 0; i < wireBytes.Length; i++)
-            {
-                wireBytes[i] = guidBytes[GuidToWire[i]];
-            }
+            wireBytes[i] = guidBytes[GuidToWire[i]];
         }
 
         return wire;
