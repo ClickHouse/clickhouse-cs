@@ -17,6 +17,7 @@ internal sealed class DerivedColumn<T> : IColumn<T>, IDerivedColumn
 {
     private readonly IColumn source;
     private readonly BoundReader<T> reader;
+    private readonly ArrayPool<T> pool;
     private readonly object gate = new();
     private T[] values;
     private bool released;
@@ -25,9 +26,19 @@ internal sealed class DerivedColumn<T> : IColumn<T>, IDerivedColumn
     /// <param name="source">The decoded column, which stays owned by its block.</param>
     /// <param name="reader">The derived reader, bound to <paramref name="source"/>.</param>
     public DerivedColumn(IColumn source, BoundReader<T> reader)
+        : this(source, reader, ArrayPool<T>.Shared)
+    {
+    }
+
+    /// <summary>Initializes a view over <paramref name="source"/> that rents its array from <paramref name="pool"/>.</summary>
+    /// <param name="source">The decoded column, which stays owned by its block.</param>
+    /// <param name="reader">The derived reader, bound to <paramref name="source"/>.</param>
+    /// <param name="pool">The pool of the converted values.</param>
+    internal DerivedColumn(IColumn source, BoundReader<T> reader, ArrayPool<T> pool)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
         this.reader = reader ?? throw new ArgumentNullException(nameof(reader));
+        this.pool = pool ?? throw new ArgumentNullException(nameof(pool));
     }
 
     /// <inheritdoc/>
@@ -61,7 +72,7 @@ internal sealed class DerivedColumn<T> : IColumn<T>, IDerivedColumn
         {
             if (values is { Length: > 0 })
             {
-                ArrayPool<T>.Shared.Return(values, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
+                pool.Return(values, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
             }
 
             values = null;
@@ -93,7 +104,7 @@ internal sealed class DerivedColumn<T> : IColumn<T>, IDerivedColumn
             }
 
             int rows = source.RowCount;
-            T[] converted = rows == 0 ? Array.Empty<T>() : ArrayPool<T>.Shared.Rent(rows);
+            T[] converted = rows == 0 ? Array.Empty<T>() : pool.Rent(rows);
             try
             {
                 reader.Fill(0, converted.AsSpan(0, rows));
@@ -102,7 +113,7 @@ internal sealed class DerivedColumn<T> : IColumn<T>, IDerivedColumn
             {
                 if (rows > 0)
                 {
-                    ArrayPool<T>.Shared.Return(converted, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
+                    pool.Return(converted, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
                 }
 
                 if (e is NullValueException nullValue)
