@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Types;
 
@@ -43,12 +44,31 @@ internal sealed class PocoReadPlan<T>
     /// </summary>
     /// <param name="descriptor">The POCO type's mapping.</param>
     /// <param name="block">A block of the shape to plan for; only its header and its columns' runtime shapes are read.</param>
-    /// <param name="forcedTier">A scatter tier to compile regardless of the runtime, or null to choose one.</param>
+    /// <param name="forcedTier">A scatter tier to use regardless of the runtime, or null to choose one.</param>
     /// <returns>The plan.</returns>
     /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot be materialized, no column maps
     /// to a property, two columns map to one property, a mapped property cannot be set, or a column cannot be read
     /// as its property's type.</exception>
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     public static PocoReadPlan<T> Build(PocoTypeDescriptor<T> descriptor, Block block, PocoScatterTier? forcedTier)
+        => Build(
+            descriptor,
+            block,
+            (column, codec, member) => PocoColumnScatterFactory.Create<T>(column, codec, member, block.Codecs.Converters, block.Context, forcedTier));
+
+    /// <summary>
+    /// Compiles the plan for <paramref name="block"/>'s shape with the scatters of
+    /// <see cref="LegacyPocoColumnScatterFactory"/>: the POCO tier before it moved onto the converter derivation. It is
+    /// the reference path of the differential tests, and only the tests call it.
+    /// </summary>
+    /// <param name="descriptor">The POCO type's mapping.</param>
+    /// <param name="block">A block of the shape to plan for; only its header and its columns' runtime shapes are read.</param>
+    /// <returns>The plan.</returns>
+    /// <exception cref="InvalidOperationException">As <see cref="Build(PocoTypeDescriptor{T}, Block, PocoScatterTier?)"/>.</exception>
+    internal static PocoReadPlan<T> BuildLegacy(PocoTypeDescriptor<T> descriptor, Block block)
+        => Build(descriptor, block, static (column, codec, member) => LegacyPocoColumnScatterFactory.Create<T>(column, codec, member, forcedTier: null));
+
+    private static PocoReadPlan<T> Build(PocoTypeDescriptor<T> descriptor, Block block, Func<IColumn, IColumnCodec, PocoMember, PocoColumnScatter<T>> scatterFor)
     {
         // Read first: an insert-only POCO (no accessible parameterless constructor) fails here, naming the reason.
         Func<T> activator = descriptor.Activator;
@@ -88,7 +108,7 @@ internal sealed class PocoReadPlan<T>
 
             claimedBy[member.MemberName] = column.Name;
             IColumnCodec codec = block.Codecs.Resolve(column.TypeName, block.Context);
-            scatters[i] = PocoColumnScatterFactory.Create<T>(column, codec, member, forcedTier);
+            scatters[i] = scatterFor(column, codec, member);
         }
 
         if (claimedBy.Count == 0)
