@@ -440,6 +440,18 @@ public class PocoReadPlanTests
     }
 
     [Test]
+    public void Materialize_ColumnWithoutTheDecodedShapeOfItsType_ThrowsNamingTheColumnAndTheShape()
+    {
+        // The converter tree of a Nullable type reads the null map and the inner column that its codec decodes. A
+        // column that a test builds can have the type name without that shape; a block from the server cannot.
+        Block block = BlockOf(2, new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, null }));
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => Materialize<Row<int?>>(block));
+
+        Assert.That(error.Message, Does.Contain("Column 'value' (Nullable(Int32))").And.Contain("INullableColumn"));
+    }
+
+    [Test]
     public void ReadPlanFor_SameHeader_ReturnsTheCachedPlan()
     {
         var registry = new PocoTypeRegistry();
