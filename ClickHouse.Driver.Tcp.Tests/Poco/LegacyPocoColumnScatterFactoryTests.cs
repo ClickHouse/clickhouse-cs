@@ -18,7 +18,7 @@ public class LegacyPocoColumnScatterFactoryTests
     {
         // Why the indexer tier exists at all: a runtime without dynamic code interprets the tree instead of
         // compiling it, and an interpreted tree cannot hold a ReadOnlySpan<T>. A test host that has dynamic code
-        // never takes that path, so the interpreter is asked for explicitly here — otherwise the fallback ships
+        // never takes that path, so the interpreter is asked for explicitly here. Otherwise the fallback ships
         // untested and only fails on NativeAOT.
         IColumn column = Ints("value", 1, -2);
         IColumnCodec codec = ColumnCodecRegistry.Default.Resolve("Int32", new ResolveContext());

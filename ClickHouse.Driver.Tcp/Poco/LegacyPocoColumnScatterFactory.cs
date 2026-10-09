@@ -146,7 +146,7 @@ internal static class LegacyPocoColumnScatterFactory
                 // The span is read once: IColumn<T>.Values recomputes it per access, and it cannot be cached in a
                 // field, so hoisting it into a local is the whole point of the tier. For a jagged column
                 // (Array/Map/Nested) Values materializes the block's rows into a cache, which the indexer would do
-                // per row instead — the same work either way, plus one array of references here.
+                // per row instead: the same work either way, plus one array of references here.
                 ParameterExpression values = Expression.Variable(typeof(ReadOnlySpan<>).MakeGenericType(elementType), "values");
                 locals.Add(values);
                 prologue.Add(Expression.Assign(values, Expression.Property(Expression.Convert(column, typedColumn), "Values")));
