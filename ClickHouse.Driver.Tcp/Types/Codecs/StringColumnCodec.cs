@@ -81,7 +81,13 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     // Caller-built columns may carry the String type name without exposing decoded byte storage.
     public static byte[] RowBytes(IColumn column, int row) => column is IStringColumn text
         ? text.GetBytes(row).ToArray()
-        : throw new InvalidOperationException(
+        : throw NoWireBytes(column);
+
+    /// <summary>The failure of a <see cref="T:byte[]"/> reading of a column that does not expose its wire bytes.</summary>
+    /// <param name="column">The column, which is not an <see cref="IStringColumn"/>.</param>
+    /// <returns>The exception to throw.</returns>
+    internal static InvalidOperationException NoWireBytes(IColumn column)
+        => new(
             $"Column '{column.Name}' ({column.TypeName}) was read as {column.GetType()}, which does not expose the wire bytes through IStringColumn, " +
             $"so its values cannot be read as a byte[]. Only a String column decoded from a server response does.");
 
