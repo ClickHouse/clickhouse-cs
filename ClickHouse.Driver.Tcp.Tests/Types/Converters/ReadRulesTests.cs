@@ -19,7 +19,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 [TestFixture]
 public class ReadRulesTests
 {
-    private static readonly string[] ColumnTypes =
+    internal static readonly string[] ColumnTypes =
     {
         "Int8", "Int32", "UInt32", "Int64", "Enum8('a' = 1, 'b' = 2)", "String", "FixedString(4)", "Date", "DateTime('UTC')", "UUID",
         "Nullable(Int8)", "Nullable(Int32)", "Nullable(UInt32)", "Nullable(String)", "Nullable(Enum8('a' = 1, 'b' = 2))",
@@ -31,7 +31,7 @@ public class ReadRulesTests
         "Variant(String, UInt64)", "Dynamic", "Point", "SimpleAggregateFunction(anyLast, Nullable(Int32))",
     };
 
-    private static readonly Type[] Targets =
+    internal static readonly Type[] Targets =
     {
         typeof(object), typeof(ValueType), typeof(IComparable), typeof(IFormattable), typeof(IEnumerable), typeof(IEnumerable<int>),
         typeof(IReadOnlyList<int>), typeof(IEnumerable<string>), typeof(IReadOnlyList<SByteEnum>), typeof(string), typeof(byte[]),
@@ -198,14 +198,15 @@ public class ReadRulesTests
         return values;
     }
 
-    // The difference between the derivation and POCO mapping for one target, or null.
+    // The difference between the derivation and POCO mapping before it moved onto the derivation (the reference of the
+    // differential tests), for one target, or null.
     private static string Compare<T>(Block block)
     {
         Derivation derivation = ConverterDerivation.Default.Derive(block[0].TypeName, block.Context, typeof(T), ConversionDirection.Read);
         RowReader<T> poco;
         try
         {
-            poco = ClientArms.Poco.Bind<T>(block);
+            poco = ReferenceArms.Poco.Bind<T>(block);
         }
         catch (InvalidOperationException) when (!derivation.Succeeded)
         {

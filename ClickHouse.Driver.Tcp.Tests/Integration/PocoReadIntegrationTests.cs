@@ -13,7 +13,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
 /// Real-server coverage for <c>QueryAsync&lt;T&gt;</c>, including every round-trip corpus type and POCO-specific
-/// projections, mapping and lifetime behavior.
+/// projections, mapping and lifetime behavior. The client uses the scatter tier that the runtime chooses;
+/// <see cref="PocoReadFillIntegrationTests"/> runs the same tests through the tier of a runtime without dynamic code.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -33,7 +34,7 @@ public class PocoReadIntegrationTests
     {
         TcpServerFixture.SkipIfCloudLocksASetting(testCase.Settings);
 
-        await using var client = TcpServerFixture.CreateClient();
+        await using var client = CreateClient();
         var options = new ClickHouseTcpQueryOptions { Settings = testCase.Settings };
         string table = UniqueTableName();
         try
@@ -245,7 +246,7 @@ public class PocoReadIntegrationTests
             $"NestedRecords {nestedRecordsType}",
         });
 
-        await using var client = TcpServerFixture.CreateClient();
+        await using var client = CreateClient();
         try
         {
             await client.ExecuteAsync($"CREATE TABLE {table} ({schema}) ENGINE = Memory", queryOptions, None);
@@ -291,7 +292,7 @@ public class PocoReadIntegrationTests
         // The corpus reads each of these columns as its raw wire value (epoch seconds, a scaled count, an ordinal),
         // which is a different assertion from the one a POCO makes: here every property asks for the reading a
         // caller would actually declare.
-        await using var client = TcpServerFixture.CreateClient();
+        await using var client = CreateClient();
         var options = new ClickHouseTcpQueryOptions { Settings = TimeSettings };
         string table = UniqueTableName();
         try
@@ -349,7 +350,7 @@ public class PocoReadIntegrationTests
         // D7: a bare DateTime column is presented in the session timezone, so a DateTime property carries that wall
         // clock (as Unspecified, there being no offset to attach) while a DateTimeOffset property carries the offset.
         // This is a deliberate difference from the HTTP client, which has no session timezone to resolve.
-        await using var client = TcpServerFixture.CreateClient();
+        await using var client = CreateClient();
         var options = new ClickHouseTcpQueryOptions
         {
             Settings = new Dictionary<string, string> { ["session_timezone"] = "Asia/Kolkata" },
@@ -375,7 +376,7 @@ public class PocoReadIntegrationTests
         // value a column surfaces is a copy, so a row outlives the borrowed block it came from. The row count is
         // well past one block, so the plan is also reused across blocks rather than rebuilt.
         const int rowCount = 200_000;
-        await using var client = TcpServerFixture.CreateClient();
+        await using var client = CreateClient();
 
         List<Numbered> rows = await client
             .QueryAsync<Numbered>($"SELECT number AS Id, toString(number) AS Name FROM numbers({rowCount})", cancellationToken: None)
@@ -411,7 +412,7 @@ public class PocoReadIntegrationTests
         };
 
         string sql = $"SELECT number AS Id, toString(number) AS Name FROM numbers({rowCount})";
-        await using var client = TcpServerFixture.CreateClient();
+        await using var client = CreateClient();
 
         // The premise, asserted rather than assumed: if the server ever splits this differently, the row assertions
         // below would still pass while no longer testing a window boundary inside a block.
@@ -441,7 +442,7 @@ public class PocoReadIntegrationTests
         // The row a failure names is counted across the whole result. Reported from inside a window, so the offset
         // of the window within its block has to be carried into the message.
         const int nullAtRow = 1_500;
-        await using var client = TcpServerFixture.CreateClient();
+        await using var client = CreateClient();
 
         InvalidOperationException error = Assert.ThrowsAsync<InvalidOperationException>(async () => await client
             .QueryAsync<Numbered>(
@@ -455,7 +456,7 @@ public class PocoReadIntegrationTests
     [Test]
     public async Task QueryAsync_ColumnWithNoPropertyAndPropertyWithNoColumn_SkipsOneAndDefaultsTheOther()
     {
-        await using var client = TcpServerFixture.CreateClient();
+        await using var client = CreateClient();
 
         List<Numbered> rows = await client
             .QueryAsync<Numbered>("SELECT toUInt64(7) AS Id, 'ignored' AS Untouched", cancellationToken: None)
@@ -471,7 +472,7 @@ public class PocoReadIntegrationTests
     [Test]
     public async Task QueryAsync_RenamedAndNotMappedProperties_HonorTheAttributes()
     {
-        await using var client = TcpServerFixture.CreateClient();
+        await using var client = CreateClient();
 
         List<AttributedRow> rows = await client
             .QueryAsync<AttributedRow>("SELECT toDateTime(1700000000, 'UTC') AS event_time, 'x' AS Ignored", cancellationToken: None)
@@ -489,7 +490,7 @@ public class PocoReadIntegrationTests
     {
         // A result with no rows carries no block at all (the connection drops zero-row blocks), so there is no header
         // to compile a plan from: the sequence is simply empty, and nothing about T is validated.
-        await using var client = TcpServerFixture.CreateClient();
+        await using var client = CreateClient();
 
         List<Numbered> rows = await client
             .QueryAsync<Numbered>("SELECT toUInt64(1) AS Id FROM numbers(1) WHERE 0", cancellationToken: None)
@@ -503,7 +504,7 @@ public class PocoReadIntegrationTests
     {
         // Stopping mid-result has to release both the pooled row array and the connection; the second query is what
         // proves the release happened, since a leaked connection would leave the client unable to run another query.
-        await using var client = TcpServerFixture.CreateClient();
+        await using var client = CreateClient();
 
         var seen = new List<ulong>();
         await foreach (Numbered row in client.QueryAsync<Numbered>("SELECT number AS Id FROM numbers(200000)", cancellationToken: None))
@@ -529,7 +530,7 @@ public class PocoReadIntegrationTests
     {
         // The premise of the plan cache's key: a column name is arbitrary text, tabs and newlines included, so a
         // quoted alias really can spell what a naively joined key uses as its separators.
-        await using var client = TcpServerFixture.CreateClient();
+        await using var client = CreateClient();
 
         List<SeparatorRow> rows = await client
             .QueryAsync<SeparatorRow>("SELECT toInt32(42) AS `a\tb\nc`", cancellationToken: None)
@@ -543,7 +544,7 @@ public class PocoReadIntegrationTests
     {
         // The plan is compiled from the result's first block, so the failure arrives on the first MoveNext rather
         // than part-way through the rows.
-        await using var client = TcpServerFixture.CreateClient();
+        await using var client = CreateClient();
 
         InvalidOperationException error = Assert.ThrowsAsync<InvalidOperationException>(
             async () => await client.QueryAsync<Row<Guid>>("SELECT toInt32(1) AS value", cancellationToken: None).ToListAsync());
@@ -555,10 +556,10 @@ public class PocoReadIntegrationTests
     public async Task Materialize_EveryScatterTier_ReadsTheSameRows()
     {
         // The tiers are compared here as well as in the unit tests because these values come off a real server: the
-        // span tier's zero-copy read and the per-row tier have to agree on decoded storage, not just on columns a
-        // test built. QueryAsync<T> leaves the tier to the runtime, so the plan is built directly to name one; each
-        // tier reads its own block, since materializing one block twice would let the first tier fill the caches
-        // the second reads.
+        // compiled loop and the bulk read with a setter for each row have to agree on decoded storage, not just on
+        // columns a test built. QueryAsync<T> leaves the tier to the runtime, so the plan is built directly to name
+        // one; each tier reads its own block, since materializing one block twice would let the first tier fill the
+        // caches the second reads.
         const string sql = "SELECT toUInt64(number) AS Id, toString(number) AS Name FROM numbers(3)";
         await using var client = new ClickHouseTcpClient(TcpServerFixture.Options());
         var byTier = new Dictionary<PocoScatterTier, List<Numbered>>();
@@ -586,6 +587,10 @@ public class PocoReadIntegrationTests
             }
         });
     }
+
+    /// <summary>Creates a client against the test server, for the tests that query through <c>QueryAsync&lt;T&gt;</c>.</summary>
+    /// <returns>The client.</returns>
+    private protected virtual ClickHouseTcpClient CreateClient() => TcpServerFixture.CreateClient();
 
     /// <summary>
     /// Reads a one-column result into <c>Row&lt;TValue&gt;</c> for a CLR type only known at runtime, which is what

@@ -1,7 +1,7 @@
 using System;
-using System.Runtime.CompilerServices;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Poco;
+using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
 
@@ -9,10 +9,15 @@ namespace ClickHouse.Driver.Tcp.Tests.Poco;
 
 /// <summary>
 /// Unit coverage for POCO read-plan validation, tier selection and parity, cache keys, and synthetic column shapes.
+/// The plans use the scatter tier that the runtime chooses; <see cref="PocoReadPlanFillTests"/> runs the same tests
+/// through the tier of a runtime without dynamic code.
 /// </summary>
 [TestFixture]
 public class PocoReadPlanTests
 {
+    /// <summary>The scatter tier of the plans that a test does not build with a tier of its own, or null to choose one.</summary>
+    private protected virtual PocoScatterTier? Tier => null;
+
     [Test]
     public void Materialize_PropertyMatchingTheColumn_FillsEveryRow()
     {
@@ -61,9 +66,9 @@ public class PocoReadPlanTests
 
     [TestCase(true)]
     [TestCase(false)]
-    public void Materialize_WindowStartingPastTheFirstRow_ReadsThatWindowIntoTheFirstRows(bool spanTier)
+    public void Materialize_WindowStartingPastTheFirstRow_ReadsThatWindowIntoTheFirstRows(bool fillTier)
     {
-        PocoScatterTier tier = spanTier ? PocoScatterTier.Span : PocoScatterTier.Indexer;
+        PocoScatterTier tier = fillTier ? PocoScatterTier.Fill : PocoScatterTier.Emit;
         // The window's start has to rebase the column read while leaving the destination at 0, and a start of 0
         // would not show that: a scatter ignoring the parameter passes. Both tiers source a value differently, so
         // proving one says nothing about the other.
@@ -82,7 +87,7 @@ public class PocoReadPlanTests
         // What the client's windowed loop does, against the single pass it replaced. A window that does not divide
         // the block evenly is the interesting case: the last one is short.
         Block block = BlockOf(7, Ints("value", 0, 1, 2, 3, 4, 5, 6));
-        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, null);
+        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, Tier);
         var windowed = new Row<int>[7];
         var window = new Row<int>[3];
 
@@ -102,8 +107,8 @@ public class PocoReadPlanTests
         // The row a caller counts is rowOffset plus the offset within the window, so a window that starts part-way
         // into a block of a later block must still name the absolute row. Off-by-one here is invisible in the
         // first window of the first block, where every candidate expression agrees.
-        Block block = BlockOf(5, new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, 2, 3, null, 5 }));
-        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, null);
+        Block block = BlockOf(5, Decoded(new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, 2, 3, null, 5 })));
+        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, Tier);
         var rows = new Row<int>[2];
 
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(
@@ -230,8 +235,8 @@ public class PocoReadPlanTests
     {
         // The scatter's counter restarts per block, so without the offset a NULL in the second block of a result
         // reports as row 1 — pointing the caller at a row that is not the one that failed.
-        Block block = BlockOf(2, new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, null }));
-        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, forcedTier: null);
+        Block block = BlockOf(2, Decoded(new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, null })));
+        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, Tier);
 
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(
             () => plan.Materialize(block, new Row<int>[2], rowOffset: 65_536));
@@ -250,7 +255,7 @@ public class PocoReadPlanTests
     [Test]
     public void Build_CompositePropertyLiftingItsChildsReading_FillsTheLiftedElements()
     {
-        Block block = BlockOf(1, new ArrayColumn<uint[]>("value", "Array(DateTime('UTC'))", new[] { new uint[] { 0, 60 } }));
+        Block block = BlockOf(1, Decoded(new ArrayColumn<uint[]>("value", "Array(DateTime('UTC'))", new[] { new uint[] { 0, 60 } })));
 
         Row<DateTime[]>[] rows = Materialize<Row<DateTime[]>>(block);
 
@@ -274,7 +279,7 @@ public class PocoReadPlanTests
     [Test]
     public void Materialize_NullableColumnIntoANullableProperty_KeepsTheNulls()
     {
-        Block block = BlockOf(3, new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, null, -3 }));
+        Block block = BlockOf(3, Decoded(new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, null, -3 })));
 
         Row<int?>[] rows = Materialize<Row<int?>>(block);
 
@@ -284,7 +289,7 @@ public class PocoReadPlanTests
     [Test]
     public void Materialize_NullableColumnWithNoNullsIntoANonNullableProperty_FillsEveryRow()
     {
-        Block block = BlockOf(2, new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, -3 }));
+        Block block = BlockOf(2, Decoded(new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, -3 })));
 
         Row<int>[] rows = Materialize<Row<int>>(block);
 
@@ -295,7 +300,7 @@ public class PocoReadPlanTests
     public void Materialize_NullReachingANonNullableProperty_ThrowsNamingTheRow()
     {
         // D6a: assigning default would make a NULL indistinguishable from a stored zero.
-        Block block = BlockOf(3, new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, null, 3 }));
+        Block block = BlockOf(3, Decoded(new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, null, 3 })));
 
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => Materialize<Row<int>>(block));
 
@@ -359,7 +364,7 @@ public class PocoReadPlanTests
     [Test]
     public void Materialize_NullableEnumProperty_KeepsTheNullsAndCastsTheRest()
     {
-        Block block = BlockOf(3, new ArrayColumn<sbyte?>("value", "Nullable(Enum8('low' = -1, 'high' = 127))", new sbyte?[] { -1, null, 127 }));
+        Block block = BlockOf(3, Decoded(new ArrayColumn<sbyte?>("value", "Nullable(Enum8('low' = -1, 'high' = 127))", new sbyte?[] { -1, null, 127 })));
 
         Row<Level?>[] rows = Materialize<Row<Level?>>(block);
 
@@ -369,7 +374,7 @@ public class PocoReadPlanTests
     [Test]
     public void Materialize_EnumPropertyOverANullableColumnWithANull_ThrowsNamingTheRow()
     {
-        Block block = BlockOf(2, new ArrayColumn<sbyte?>("value", "Nullable(Enum8('low' = -1))", new sbyte?[] { -1, null }));
+        Block block = BlockOf(2, Decoded(new ArrayColumn<sbyte?>("value", "Nullable(Enum8('low' = -1))", new sbyte?[] { -1, null })));
 
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => Materialize<Row<Level>>(block));
 
@@ -403,9 +408,9 @@ public class PocoReadPlanTests
     [Test]
     public void Materialize_EveryTier_ProducesTheSameRows()
     {
-        // The tiers differ only in how one value is sourced, so they must agree — including on the
-        // conversions, which is why the block mixes a raw type, a projected one, a nullable and a composite. This
-        // doubles as the proof that the span-free tier a runtime without dynamic code falls back to is equivalent.
+        // The tiers differ only in how they run the converter tree, so they must agree, also on the conversions, which
+        // is why the block mixes a raw type, a projected one, a nullable and a composite. This doubles as the proof
+        // that the tier with no compiled code, which a runtime without dynamic code falls back to, is equivalent.
         Assert.Multiple(() =>
         {
             foreach (PocoScatterTier tier in Enum.GetValues<PocoScatterTier>())
@@ -418,60 +423,6 @@ public class PocoReadPlanTests
                 Assert.That(Array.ConvertAll(rows, row => row.Score), Is.EqualTo(new double?[] { 1.5, null }), $"{tier}: Score");
                 Assert.That(Array.ConvertAll(rows, row => row.Tags), Is.EqualTo(new[] { new[] { "x", "y" }, Array.Empty<string>() }), $"{tier}: Tags");
                 Assert.That(Array.ConvertAll(rows, row => row.Level), Is.EqualTo(new[] { Level.Low, Level.High }), $"{tier}: Level");
-            }
-        });
-    }
-
-    [Test]
-    public void Create_IndexerTier_AlsoRunsUnderTheExpressionInterpreter()
-    {
-        // Why the indexer tier exists at all: a runtime without dynamic code interprets the tree instead of
-        // compiling it, and an interpreted tree cannot hold a ReadOnlySpan<T>. A test host that has dynamic code
-        // never takes that path, so the interpreter is asked for explicitly here — otherwise the fallback ships
-        // untested and only fails on NativeAOT.
-        IColumn column = Ints("value", 1, -2);
-        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve("Int32", new ResolveContext());
-        PocoMember member = PocoTypeDescriptor<Row<int>>.Build().Members[0];
-        PocoColumnScatter<Row<int>> scatter = PocoColumnScatterFactory.Create<Row<int>>(column, codec, member, PocoScatterTier.Indexer, preferInterpretation: true);
-        var rows = new[] { new Row<int>(), new Row<int>() };
-
-        scatter(column, rows, start: 0, rows.Length, rowOffset: 0);
-
-        Assert.That(Values(rows), Is.EqualTo(new[] { 1, -2 }));
-    }
-
-    [Test]
-    public void SelectTier_StoredValuesColumnAndNoForcedTier_PrefersTheSpanTierWhereverTreesCompile()
-    {
-        // The interpreter cannot hold a ReadOnlySpan<T>, so the span tier is only offered where a tree becomes IL.
-        PocoScatterTier expected = RuntimeFeature.IsDynamicCodeCompiled ? PocoScatterTier.Span : PocoScatterTier.Indexer;
-
-        Assert.That(PocoColumnScatterFactory.SelectTier(null, Ints("value", 1)), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public void SelectTier_ColumnThatBuildsItsValuesAndNoForcedTier_PrefersTheIndexerTier()
-    {
-        // Hoisting Values is the point of the span tier, but for a column that builds its values on access that one
-        // read materializes every row of the block and pins it, which is what the windowed materialization avoids.
-        var built = new StringColumn("value", "String", new byte[] { 0x61 }, new[] { 0, 1 }, 1, pooled: false);
-
-        Assert.That(PocoColumnScatterFactory.SelectTier(null, built), Is.EqualTo(PocoScatterTier.Indexer));
-    }
-
-    [Test]
-    public void SelectTier_ForcedTier_IsHonored()
-    {
-        // Forced over both column shapes: a forced tier outranks the column's own preference, which is what lets the
-        // parity harness compile the span tier for a column that would otherwise choose the indexer.
-        var built = new StringColumn("value", "String", new byte[] { 0x61 }, new[] { 0, 1 }, 1, pooled: false);
-
-        Assert.Multiple(() =>
-        {
-            foreach (PocoScatterTier tier in Enum.GetValues<PocoScatterTier>())
-            {
-                Assert.That(PocoColumnScatterFactory.SelectTier(tier, Ints("value", 1)), Is.EqualTo(tier), $"{tier} over stored values");
-                Assert.That(PocoColumnScatterFactory.SelectTier(tier, built), Is.EqualTo(tier), $"{tier} over built values");
             }
         });
     }
@@ -493,8 +444,8 @@ public class PocoReadPlanTests
     {
         var registry = new PocoTypeRegistry();
 
-        PocoReadPlan<Row<int>> first = registry.ReadPlanFor<Row<int>>(BlockOf(1, Ints("value", 1)), forcedTier: null);
-        PocoReadPlan<Row<int>> second = registry.ReadPlanFor<Row<int>>(BlockOf(1, Ints("value", 2)), forcedTier: null);
+        PocoReadPlan<Row<int>> first = registry.ReadPlanFor<Row<int>>(BlockOf(1, Ints("value", 1)), Tier);
+        PocoReadPlan<Row<int>> second = registry.ReadPlanFor<Row<int>>(BlockOf(1, Ints("value", 2)), Tier);
 
         Assert.That(second, Is.SameAs(first));
     }
@@ -506,10 +457,10 @@ public class PocoReadPlanTests
         // type string lets one shape's plan be handed to another, which then casts the wrong column type.
         var registry = new PocoTypeRegistry();
         Block ints = BlockOf(1, Ints("value", 42));
-        Block strings = BlockOf(1, new ArrayColumn<string>("value", "String", new[] { "x" }));
+        Block strings = BlockOf(1, Decoded(new ArrayColumn<string>("value", "String", new[] { "x" })));
 
-        PocoReadPlan<Row<object>> intPlan = registry.ReadPlanFor<Row<object>>(ints, forcedTier: null);
-        PocoReadPlan<Row<object>> stringPlan = registry.ReadPlanFor<Row<object>>(strings, forcedTier: null);
+        PocoReadPlan<Row<object>> intPlan = registry.ReadPlanFor<Row<object>>(ints, Tier);
+        PocoReadPlan<Row<object>> stringPlan = registry.ReadPlanFor<Row<object>>(strings, Tier);
 
         var intRows = new Row<object>[1];
         var stringRows = new Row<object>[1];
@@ -536,8 +487,8 @@ public class PocoReadPlanTests
 
         var spelledRows = new ThreeColumns[1];
         var threeRows = new ThreeColumns[1];
-        registry.ReadPlanFor<ThreeColumns>(spelled, forcedTier: null).Materialize(spelled, spelledRows, rowOffset: 0);
-        registry.ReadPlanFor<ThreeColumns>(three, forcedTier: null).Materialize(three, threeRows, rowOffset: 0);
+        registry.ReadPlanFor<ThreeColumns>(spelled, Tier).Materialize(spelled, spelledRows, rowOffset: 0);
+        registry.ReadPlanFor<ThreeColumns>(three, Tier).Materialize(three, threeRows, rowOffset: 0);
 
         Assert.Multiple(() =>
         {
@@ -559,8 +510,8 @@ public class PocoReadPlanTests
 
         var utcRows = new Row<DateTime>[1];
         var kolkataRows = new Row<DateTime>[1];
-        registry.ReadPlanFor<Row<DateTime>>(utc, forcedTier: null).Materialize(utc, utcRows, rowOffset: 0);
-        registry.ReadPlanFor<Row<DateTime>>(kolkata, forcedTier: null).Materialize(kolkata, kolkataRows, rowOffset: 0);
+        registry.ReadPlanFor<Row<DateTime>>(utc, Tier).Materialize(utc, utcRows, rowOffset: 0);
+        registry.ReadPlanFor<Row<DateTime>>(kolkata, Tier).Materialize(kolkata, kolkataRows, rowOffset: 0);
 
         Assert.That(kolkataRows[0].Value - utcRows[0].Value, Is.EqualTo(new TimeSpan(5, 30, 0)));
     }
@@ -571,10 +522,10 @@ public class PocoReadPlanTests
         var registry = new PocoTypeRegistry();
         Block block = BlockOf(1, Ints("value", 1));
 
-        PocoReadPlan<Row<int>> span = registry.ReadPlanFor<Row<int>>(block, PocoScatterTier.Span);
-        PocoReadPlan<Row<int>> indexer = registry.ReadPlanFor<Row<int>>(block, PocoScatterTier.Indexer);
+        PocoReadPlan<Row<int>> emit = registry.ReadPlanFor<Row<int>>(block, PocoScatterTier.Emit);
+        PocoReadPlan<Row<int>> fill = registry.ReadPlanFor<Row<int>>(block, PocoScatterTier.Fill);
 
-        Assert.That(indexer, Is.Not.SameAs(span));
+        Assert.That(fill, Is.Not.SameAs(emit));
     }
 
     [Test]
@@ -583,15 +534,15 @@ public class PocoReadPlanTests
         var registry = new PocoTypeRegistry();
         Block block = BlockOf(1, Ints("value", 1));
 
-        Assert.Throws<InvalidOperationException>(() => registry.ReadPlanFor<Row<long>>(block, forcedTier: null));
-        Assert.Throws<InvalidOperationException>(() => registry.ReadPlanFor<Row<long>>(block, forcedTier: null), "the failure must be reported to every caller, not only the first");
+        Assert.Throws<InvalidOperationException>(() => registry.ReadPlanFor<Row<long>>(block, Tier));
+        Assert.Throws<InvalidOperationException>(() => registry.ReadPlanFor<Row<long>>(block, Tier), "the failure must be reported to every caller, not only the first");
     }
 
     [Test]
     public void MatchesHeader_ADifferentHeader_IsRejectedSoTheCacheIsConsulted()
     {
         Block block = BlockOf(1, Ints("value", 1));
-        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, forcedTier: null);
+        PocoReadPlan<Row<int>> plan = PocoReadPlan<Row<int>>.Build(PocoTypeDescriptor<Row<int>>.Build(), block, Tier);
 
         Assert.Multiple(() =>
         {
@@ -610,11 +561,27 @@ public class PocoReadPlanTests
     private static Block MixedBlock() => BlockOf(
         2,
         Ints("Id", 1, 2),
-        new ArrayColumn<string>("Name", "String", new[] { "a", "b" }),
+        Decoded(new ArrayColumn<string>("Name", "String", new[] { "a", "b" })),
         PrimitiveColumn<uint>.FromValues("Stamp", "DateTime('UTC')", new uint[] { 1_700_000_000, 0 }),
-        new ArrayColumn<double?>("Score", "Nullable(Float64)", new double?[] { 1.5, null }),
-        new ArrayColumn<string[]>("Tags", "Array(String)", new[] { new[] { "x", "y" }, Array.Empty<string>() }),
+        Decoded(new ArrayColumn<double?>("Score", "Nullable(Float64)", new double?[] { 1.5, null })),
+        Decoded(new ArrayColumn<string[]>("Tags", "Array(String)", new[] { new[] { "x", "y" }, Array.Empty<string>() })),
         PrimitiveColumn<sbyte>.FromValues("Level", "Enum8('low' = -1, 'high' = 127)", new sbyte[] { -1, 127 }));
+
+    // The column that the codec of its type decodes from the bytes that it writes for source: the column that a block
+    // from the server holds. A converter reads the decoded shape of the column type (for example the null map of a
+    // Nullable column, or the bytes of a String column), which a column that a test builds does not have.
+    private static IColumn Decoded(IColumn source)
+    {
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(source.TypeName, new ResolveContext { ServerTimezone = "UTC" });
+        byte[] bytes = CodecTestHarness.WriteAsync(w => codec.WriteFull(w, source)).GetAwaiter().GetResult();
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        if (source.RowCount > 0)
+        {
+            codec.ReadStatePrefixAsync(reader, CodecTestHarness.None).AsTask().GetAwaiter().GetResult();
+        }
+
+        return codec.ReadColumnAsync(reader, source.Name, source.TypeName, source.RowCount, CodecTestHarness.None).AsTask().GetAwaiter().GetResult();
+    }
 
     private static Block BlockOf(int rowCount, params IColumn[] columns)
         => BlockOf(new ResolveContext { ServerTimezone = "UTC" }, rowCount, columns);
@@ -624,7 +591,11 @@ public class PocoReadPlanTests
 
     private static IColumn Ints(string name, params int[] values) => PrimitiveColumn<int>.FromValues(name, "Int32", values);
 
-    private static T[] Materialize<T>(Block block, PocoScatterTier? tier = null)
+    private T[] Materialize<T>(Block block)
+        where T : class
+        => Materialize<T>(block, Tier);
+
+    private static T[] Materialize<T>(Block block, PocoScatterTier? tier)
         where T : class
     {
         PocoReadPlan<T> plan = PocoReadPlan<T>.Build(PocoTypeDescriptor<T>.Build(), block, tier);

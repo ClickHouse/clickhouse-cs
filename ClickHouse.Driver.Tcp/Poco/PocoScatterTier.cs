@@ -1,15 +1,21 @@
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// How a compiled scatter reads a column value. Both tiers use the same conversion and assignment logic.
+/// How a scatter of <see cref="PocoColumnScatterFactory"/> runs the converter tree of a column. Both tiers give the
+/// same values and the same failures.
 /// </summary>
 internal enum PocoScatterTier
 {
-    /// <summary>Hoists <see cref="IColumn{T}.Values"/> and indexes its span.</summary>
-    Span,
+    /// <summary>
+    /// One compiled loop for each column: the tree's <see cref="Types.Converters.ColumnReader.Emit"/> sets the property
+    /// of each row. It needs a runtime that compiles expression trees, because the loop holds span locals, which the
+    /// expression interpreter cannot run.
+    /// </summary>
+    Emit,
 
     /// <summary>
-    /// Reads <c>IColumn&lt;T&gt;[row]</c>; used when spans would materialize values or expression trees are interpreted.
+    /// The tree's bulk read (<see cref="Types.Converters.BoundReader{T}.Fill"/>) into a pooled buffer, then a setter
+    /// delegate for each row. It compiles no code, so a runtime without dynamic code uses it.
     /// </summary>
-    Indexer,
+    Fill,
 }
