@@ -1,0 +1,137 @@
+using System;
+using ClickHouse.Driver.Tcp.Poco;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
+using ClickHouse.Driver.Tcp.Types;
+
+namespace ClickHouse.Driver.Tcp.Tests.Differential;
+
+/// <summary>
+/// The old path: the arm of each tier that the candidates are compared with. Every arm here is the client's own
+/// entry point (<see cref="ClientArms"/>).
+/// </summary>
+/// <remarks>
+/// When a tier of the client moves onto a new implementation, the old code of that tier must stay reachable
+/// until the old path is removed. Point the tier's arm here at that old code, and register the client's entry
+/// point as a candidate. The reference outcome counts in <c>DifferentialTests</c> must stay the same.
+/// </remarks>
+internal static class ReferenceArms
+{
+    public static ReadArm ReadAs => ClientArms.ReadAs;
+
+    public static ReadArm Poco => ClientArms.Poco;
+
+    public static AnswerArm CanRead => ClientArms.CanRead;
+
+    public static WriteArm Write => ClientArms.Write;
+
+    public static AnswerArm CanWrite => ClientArms.CanWrite;
+}
+
+/// <summary>The client's entry points, one arm for each tier.</summary>
+internal static class ClientArms
+{
+    /// <summary><c>Block.ReadAs&lt;T&gt;</c>, read through <c>Values</c>. The indexer must give the same values.</summary>
+    public static readonly ReadArm ReadAs = new ReadAsArm("Client.ReadAs");
+
+    /// <summary>The POCO read plan, as <c>QueryAsync&lt;T&gt;</c> uses it, into <c>Row&lt;T&gt;.Value</c>.</summary>
+    public static readonly ReadArm Poco = new PocoArm("Client.Poco");
+
+    /// <summary><c>ClickHouseTcpTypes.CanRead</c>.</summary>
+    public static readonly AnswerArm CanRead = new FunctionAnswerArm("Client.CanRead", Tier.CanRead, ClickHouseTcpTypes.CanRead);
+
+    /// <summary>The column's codec: <c>CanWrite</c>, then <c>BeginWrite</c>, the state prefix and the body.</summary>
+    public static readonly WriteArm Write = new CodecWriteArm("Client.Write");
+
+    /// <summary><c>ClickHouseTcpTypes.CanWrite</c>.</summary>
+    public static readonly AnswerArm CanWrite = new FunctionAnswerArm("Client.CanWrite", Tier.CanWrite, ClickHouseTcpTypes.CanWrite);
+
+    private sealed class ReadAsArm : ReadArm
+    {
+        public ReadAsArm(string name)
+            : base(name, Tier.ReadAs)
+        {
+        }
+
+        public override RowReader<T> Bind<T>(Block block)
+        {
+            IColumn<T> view = block.ReadAs<T>(0);
+            return (start, count) =>
+            {
+                T[] values = view.Values.Slice(start, count).ToArray();
+                for (int i = 0; i < count; i++)
+                {
+                    string difference = ValueComparer.Difference(values[i], view[start + i]);
+                    if (difference is not null)
+                    {
+                        throw new ArmInvariantException($"Row {start + i}: the indexer gives {difference} from Values.");
+                    }
+                }
+
+                return values;
+            };
+        }
+    }
+
+    private sealed class PocoArm : ReadArm
+    {
+        // Plans are cached by POCO type and block shape, as the client caches them.
+        private static readonly PocoTypeRegistry Plans = new();
+
+        public PocoArm(string name)
+            : base(name, Tier.Poco)
+        {
+        }
+
+        public override RowReader<T> Bind<T>(Block block)
+        {
+            PocoReadPlan<Row<T>> plan = Plans.ReadPlanFor<Row<T>>(block, forcedTier: null);
+            return (start, count) =>
+            {
+                var rows = new Row<T>[count];
+                plan.Materialize(block, rows, start, count, rowOffset: start);
+                return Array.ConvertAll(rows, row => row.Value);
+            };
+        }
+    }
+
+    private sealed class CodecWriteArm : WriteArm
+    {
+        public CodecWriteArm(string name)
+            : base(name)
+        {
+        }
+
+        public override SliceWriter Bind<T>(IColumn<T> column, string columnType, ResolveContext context)
+        {
+            IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(columnType, context);
+            if (!codec.CanWrite(column))
+            {
+                throw new ArmRefusal($"The codec of '{columnType}' refuses a column of {TypeNames.Of(typeof(T))} ({column.GetType().Name}).");
+            }
+
+            return (writer, start, length) =>
+            {
+                IColumnWriteState state = codec.BeginWrite(column, start, length);
+                try
+                {
+                    codec.WriteStatePrefix(writer, column, start, length, state);
+                    codec.WriteColumn(writer, column, start, length, state);
+                }
+                finally
+                {
+                    state?.Dispose();
+                }
+            };
+        }
+    }
+
+    private sealed class FunctionAnswerArm : AnswerArm
+    {
+        private readonly Func<string, Type, bool> answer;
+
+        public FunctionAnswerArm(string name, Tier tier, Func<string, Type, bool> answer)
+            : base(name, tier) => this.answer = answer;
+
+        public override bool Answer(string columnType, Type elementType) => answer(columnType, elementType);
+    }
+}
