@@ -157,7 +157,9 @@ its streams across all rows, so `Each` passes the rows' arrays to its child as o
 ```mermaid
 flowchart LR
     subgraph lc["LowCardinality(String) from string or byte[]"]
-        V["value"] --> CA["leaf: value → canonical bytes<br/>(or a refusal)"]
+        V["value"] --> FP{"string: seen this<br/>CLR value? (fast path)"}
+        FP -->|yes| KS
+        FP -->|"no, or byte[]"| CA["leaf: value → canonical bytes<br/>(or a refusal)"]
         CA --> BI["ByteInterner<br/>canonical bytes → key"]
         BI --> KS["keys"]
         BI --> DE["dictionary entries"]
@@ -205,18 +207,21 @@ gives pass 1 / pass 2.
 | POCO read, fused, `LowCardinality(Nullable(String))` as `string` | 0.77 / 0.75 | 0.76 / 0.73 |
 | POCO read, fused, wide mixed row | 0.82 / 0.82 | 0.82 / 0.83 |
 | POCO read, bulk (fill, then assign), wide mixed row | 1.11 / 1.08 | 1.11 / 1.08 |
-| Write `LowCardinality(String)` from `string`, 100 distinct | 1.61 / 1.60 | 1.91 / 1.90 |
-| Write `LowCardinality(String)` from `string`, all distinct | 0.89 / 0.91 | 0.89 / 0.94 |
-| Write `LowCardinality(FixedString(16))` from `byte[]`, 100 distinct | 0.85 / 0.82 | 0.83 / 0.77 |
-| Write `LowCardinality(FixedString(16))` from `byte[]`, all distinct | 0.64 / 0.63 | 0.66 / 0.64 |
+| Write `LowCardinality(String)` from `string`, 100 distinct | 1.00 / 0.96 | 0.95 / 0.91 |
+| Write `LowCardinality(String)` from `string`, all distinct | 0.89 / 1.00 | 0.84 / 0.82 |
+| Write `LowCardinality(FixedString(16))` from `byte[]`, 100 distinct | 1.02 / 1.02 | 1.00 / 0.97 |
+| Write `LowCardinality(FixedString(16))` from `byte[]`, all distinct | 0.71 / 0.71 | 0.79 / 0.77 |
 | Write `Nullable(DateTime)` from `DateTimeOffset?` | 0.99 / 0.94 | see below |
 | Write `Array(String)` from `string[]` | 1.37 / 1.03 | 1.30 / 1.03 |
 
 BenchmarkDotNet (`bench --filter '*'`, one invocation per iteration on a fresh block) gives the same
 directions. Means, current against fused POCO: wide row 13.3 ms against 10.2 ms, `Array(String)` 5.4 ms
 against 4.4 ms, `DateTime` 3.0 ms against 3.0 ms. The bulk POCO plan is between the two.
-Writes, with errors of 2% to 4%: `LowCardinality(String)` 100 distinct 1.50, all distinct 0.85;
-`LowCardinality(FixedString(16))` 0.82 and 0.68; `Nullable(DateTime)` 0.93; `Array(String)` 0.98.
+Writes, with errors of 2% to 4%: `LowCardinality(String)` 100 distinct 1.09, all distinct 0.93;
+`LowCardinality(FixedString(16))` 100 distinct 0.77, all distinct 0.74; `Nullable(DateTime)` 0.94;
+`Array(String)` 1.00. The `LowCardinality` rows include the string fast path and the interner fix (see
+"LowCardinality writes"). BenchmarkDotNet counts GC time, which the interleaved timer removes with a
+`GC.Collect` before each run. That is why the two methods differ most on the dictionary writes.
 BenchmarkDotNet puts `LowCardinality(Nullable(String))` as `string` at 0.24 for the fused POCO plan. The
 interleaved timings give 0.75. The spike did not find the cause of that difference.
 
@@ -256,13 +261,32 @@ expressions, and faster for composites.
 
 **Write performance.** Parity or better for Nullable, Array, and the FixedString dictionary.
 
-**LowCardinality writes.** "Convert, then intern canonical values" is faster for `FixedString` from
-`byte[]` (0.65x to 0.85x) and for `String` when values are mostly distinct (0.9x). It is **1.5x to 1.6x
-slower for `String` from `string` with many repeats**. The canonical value of a `string` is its UTF-8 bytes,
-so each row is encoded before it is hashed, while the current writer hashes the `string` directly. To fix
-this, the leaf can offer an optional "CLR key" fast path when equal CLR values always have equal canonical
-values (`string` into `String`). That brings back one comparer for each write type, but only as an
-optimization, not as a requirement for correctness. The spike does not implement it.
+**LowCardinality writes.** "Convert, then intern canonical values" alone is faster for `FixedString` from
+`byte[]` and for `String` when values are mostly distinct. It was **1.5x slower for `String` from `string`
+with many repeats** (BenchmarkDotNet): the canonical value of a `string` is its UTF-8 bytes, so each row was
+encoded before it was hashed, while the current writer hashes the `string` directly. Two changes fix that:
+
+- **A CLR-key fast path.** A leaf can state that equal CLR values always have equal canonical bytes
+  (`BytesLeafWriter.ClrEqualityImpliesCanonicalEquality`; true for `string` into `String` and
+  `FixedString`). Then `DictionaryWriter` looks the `string` up first, and converts and interns the bytes only
+  on a miss. The byte interner stays the source of truth, so this is an optimization, not a second
+  equality that must be correct.
+- **The lookup turns itself off when values do not repeat.** With the lookup on every row, the all-distinct
+  write went from 0.8x to 1.6x, because each row then paid a `string` insert as well. After a probe of
+  1,024 rows, the writer drops the lookup if more than half of the rows were misses. This is a heuristic: a
+  column whose first rows are distinct and whose later rows repeat keeps the slower path.
+- **The interner starts small.** It sized its hash buckets from the row count, which put a 512 KB array on
+  the large-object heap for every write. It now grows with the distinct count. This took the high-repeat
+  write from 1.22x to 1.09x in BenchmarkDotNet, and the FixedString dictionary writes to 0.74x to 0.77x.
+
+Result: 0.91x to 1.0x (interleaved) or 1.09x (BenchmarkDotNet) with many repeats, 0.82x to 0.93x when all
+values are distinct. `SPIKE_LCKEY=canonical` turns the fast path off; `SPIKE_LCKEY=always` keeps the lookup on
+every row.
+
+**A behavior difference.** Two different `string` values can have the same UTF-8 bytes: each lone surrogate
+encodes as `EF BF BD`. The current writer keys on the `string`, so `"\uD800"` and `"\uDBFF"` take two dictionary
+entries. The candidate keys on the bytes, so they share one. Both are valid on the wire, and the values read
+back the same. `verify` checks this case.
 
 **Public API.** No change is necessary. `StringColumn` already stores bytes plus offsets and decodes text
 when asked. Text stays the default read type.
@@ -348,12 +372,10 @@ shapes, so the write combinators need their own entry point next to `IColumnCode
 ## Decision proposed by the spike
 
 **Adopt.** The fused loop removes the POCO regression. Reads in both tiers are as fast or faster, the
-writes are as fast or faster except one case, each leaf conversion is one table entry, and the design adds a
-missing write (`LowCardinality(FixedString)` from `string`). Two items to do before or during the change:
-
-- The CLR-key fast path for `LowCardinality(String)` from `string`, so the high-repeat write is not 1.5x
-  slower.
-- The identity shortcut, and a decision on whether the columnar tier returns a borrowed or an owned array.
+writes are as fast or faster (the high-repeat `LowCardinality(String)` write is at 0.91x to 1.09x with the
+fast path), each leaf conversion is one table entry, and the design adds missing writes
+(`LowCardinality(FixedString)` from `string`, ClickHouse/integrations#792). Open items: the identity
+shortcut, and whether the columnar tier returns a borrowed view or an owned array.
 
 ## How to run
 
@@ -368,3 +390,5 @@ dotnet run -c Release -- bench --filter '*'           # BenchmarkDotNet; needs a
 
 Experiment switches: `SPIKE_LEAF=direct` makes the `String` and `DateTime` leaves emit the same expressions
 as the current scatter. `SPIKE_NEW=generic` makes the POCO plans construct rows with `new TRow()`.
+`SPIKE_LCKEY=canonical` turns the LowCardinality string fast path off, and `SPIKE_LCKEY=always` turns its
+probe off.

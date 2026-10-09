@@ -274,6 +274,20 @@ internal static class Verify
             failures += same ? 0 : 1;
         }
 
+        // Lone surrogates: different strings, same UTF-8 (EF BF BD). The current writer keys on the string and
+        // keeps two entries; the candidate interns the canonical bytes and keeps one. Both are valid on the wire.
+        string[] surrogates = { "\uD800", "\uDBFF", "a", "\uD800" };
+        IColumnCodec lcString = ColumnCodecRegistry.Default.Resolve("LowCardinality(String)", default);
+        byte[] currentSurrogates = Data.Capture(w => lcString.WriteFull(w, new ArrayColumn<string>("c", "LowCardinality(String)", surrogates)));
+        byte[] candidateSurrogates = Data.Capture(w =>
+        {
+            ColumnWriter<string> writer = WriteDerivation.Derive<string>("LowCardinality(String)");
+            writer.WritePrefix(w);
+            writer.Write(w, surrogates);
+        });
+        Console.WriteLine($"LowCardinality(String) from lone surrogates: dictionary size current {DictionarySize(currentSurrogates)}, candidate {DictionarySize(candidateSurrogates)} (expected 4 and 3)");
+        failures += DictionarySize(currentSurrogates) == 4 && DictionarySize(candidateSurrogates) == 3 ? 0 : 1;
+
         // A write the current client refuses: LowCardinality(FixedString(N)) from text has no key writer.
         string[] text = Enumerable.Range(0, 100).Select(i => $"k{i % 7}").ToArray();
         IColumnCodec lcFixed = ColumnCodecRegistry.Default.Resolve("LowCardinality(FixedString(4))", default);
@@ -293,6 +307,9 @@ internal static class Verify
         Console.WriteLine(failures == 0 ? "VERIFY OK" : $"VERIFY FAILED: {failures}");
         return failures == 0 ? 0 : 1;
     }
+
+    // State prefix (8 bytes), flags (8 bytes), then the dictionary size.
+    private static long DictionarySize(byte[] wire) => BitConverter.ToInt64(wire, 16);
 
     private static int CompareColumn<T>(Block block, int c)
     {

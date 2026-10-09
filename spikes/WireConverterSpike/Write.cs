@@ -58,6 +58,14 @@ internal abstract class BytesLeafWriter<T> : LeafWriter<T>
 
     public abstract void Encode(ClickHouseBinaryWriter writer, ReadOnlySpan<byte> canonical);
 
+    /// <summary>
+    /// Whether equal CLR values (by <see cref="EqualityComparer{T}.Default"/>) always have equal canonical bytes.
+    /// When true, LowCardinality can look the CLR value up first and convert only on a miss. The converse is
+    /// not needed: two unequal CLR values with the same canonical bytes still share one entry, because the
+    /// miss path interns the bytes.
+    /// </summary>
+    public virtual bool ClrEqualityImpliesCanonicalEquality => false;
+
     public override void WritePlaceholders(ClickHouseBinaryWriter writer, int count)
     {
         for (int i = 0; i < count; i++)
@@ -134,6 +142,10 @@ internal sealed class StringFromText : BytesLeafWriter<string>
     public static readonly StringFromText Instance = new();
 
     public override ReadOnlySpan<byte> Placeholder => ReadOnlySpan<byte>.Empty;
+
+    // Equal strings have equal UTF-8. Different invalid UTF-16 strings can share UTF-8 (both lone surrogates
+    // become EF BF BD); the miss path interns those to one entry.
+    public override bool ClrEqualityImpliesCanonicalEquality => true;
 
     public override ReadOnlySpan<byte> Canonical(string value, ref byte[] scratch)
     {
@@ -245,6 +257,8 @@ internal sealed class FixedStringFromText : BytesLeafWriter<string>
     }
 
     public override ReadOnlySpan<byte> Placeholder => placeholder;
+
+    public override bool ClrEqualityImpliesCanonicalEquality => true;
 
     public override ReadOnlySpan<byte> Canonical(string value, ref byte[] scratch)
     {
@@ -366,6 +380,14 @@ internal sealed class EachWriter<T> : ColumnWriter<T[]>
 /// </summary>
 internal sealed class DictionaryWriter<T> : ColumnWriter<T>
 {
+    // Experiment switch: SPIKE_LCKEY=canonical turns the CLR-key fast path off.
+    private static readonly bool CanonicalOnly = Environment.GetEnvironmentVariable("SPIKE_LCKEY") == "canonical";
+
+    // Experiment switch: SPIKE_LCKEY=always keeps the CLR map for every row (no probe).
+    private static readonly bool AlwaysClr = Environment.GetEnvironmentVariable("SPIKE_LCKEY") == "always";
+
+    private const int ProbeRows = 1024;
+
     private readonly BytesLeafWriter<T> inner;
     private readonly bool nullable;
 
@@ -380,7 +402,7 @@ internal sealed class DictionaryWriter<T> : ColumnWriter<T>
     public override void Write(ClickHouseBinaryWriter writer, ReadOnlySpan<ReadOnlyMemory<T>> segments)
     {
         int rows = Count(segments);
-        var table = new ByteInterner(Math.Min(rows, 1 << 16));
+        var table = new ByteInterner();
         // Slot 0 of a nullable dictionary is NULL and is never looked up; the last reserved slot holds the
         // placeholder, and a real value equal to it reuses that slot.
         if (nullable)
@@ -394,12 +416,40 @@ internal sealed class DictionaryWriter<T> : ColumnWriter<T>
         byte[] scratch = new byte[64];
         try
         {
+            // Fast path: look the CLR value up first, and convert and intern the canonical bytes only on a miss.
+            // The canonical table stays the source of truth, so the CLR map can be dropped at any row. It is
+            // dropped after a probe when most rows miss, because then it only adds a hash and an insert per row.
+            Dictionary<T, int> seen = inner.ClrEqualityImpliesCanonicalEquality && !CanonicalOnly ? new Dictionary<T, int>() : null;
+            int misses = 0;
             int r = 0;
             foreach (ReadOnlyMemory<T> segment in segments)
             {
                 foreach (T value in segment.Span)
                 {
-                    keys[r++] = value is null && nullable ? 0 : table.Intern(inner.Canonical(value, ref scratch));
+                    if (value is null && nullable)
+                    {
+                        keys[r++] = 0;
+                        continue;
+                    }
+
+                    if (seen is null)
+                    {
+                        keys[r++] = table.Intern(inner.Canonical(value, ref scratch));
+                        continue;
+                    }
+
+                    ref int key = ref CollectionsMarshal.GetValueRefOrAddDefault(seen, value, out bool exists);
+                    if (!exists)
+                    {
+                        key = table.Intern(inner.Canonical(value, ref scratch));
+                        misses++;
+                    }
+
+                    keys[r++] = key;
+                    if (r == ProbeRows && misses * 2 > ProbeRows && !AlwaysClr)
+                    {
+                        seen = null;
+                    }
                 }
             }
 
@@ -435,9 +485,11 @@ internal sealed class ByteInterner
     private int[] buckets; // entry index + 1, 0 = empty
     private int count;
 
-    public ByteInterner(int capacityHint)
+    // Starts small and grows with the distinct count. Sizing it from the row count put a 512 KB bucket array on
+    // the large-object heap for every write, even for 100 distinct values.
+    public ByteInterner()
     {
-        buckets = new int[Math.Max(16, (int)BitOperations_RoundUp(capacityHint * 2))];
+        buckets = new int[64];
     }
 
     public int Count => count;
@@ -527,8 +579,6 @@ internal sealed class ByteInterner
         hash.AddBytes(value);
         return hash.ToHashCode();
     }
-
-    private static uint BitOperations_RoundUp(int value) => System.Numerics.BitOperations.RoundUpToPowerOf2((uint)Math.Max(value, 1));
 }
 
 // ---------------------------------------------------------------- derivation
