@@ -9,12 +9,15 @@ namespace ClickHouse.Driver.Tcp.Poco;
 /// <summary>
 /// Builds the expression that converts a decoded column value into a POCO property value. It supports codec-owned
 /// projections, nullable lifting/unwrapping, enum ordinal casts and assignability; numeric widening is not allowed.
-/// An <see cref="object"/> target receives the column's raw element value.
+/// An <see cref="object"/> target receives the column's raw element value. Only the reference path of the
+/// differential tests (<see cref="LegacyPocoColumnScatterFactory"/>) uses it; the converter derivation has the same
+/// rules (<see cref="Types.Converters.ReadRules"/>).
 /// </summary>
 internal static class PocoValueProjection
 {
-    private static readonly MethodInfo NullNotAssignableMethod =
-        typeof(PocoValueProjection).GetMethod(nameof(NullNotAssignable), BindingFlags.Public | BindingFlags.Static);
+    private static readonly MethodInfo NullNotAssignableMethod = typeof(PocoReadErrors).GetMethod(
+        nameof(PocoReadErrors.NullNotAssignable),
+        new[] { typeof(string), typeof(string), typeof(string), typeof(string), typeof(string), typeof(long) });
 
     /// <summary>Builds the projection from one decoded value to one property value.</summary>
     /// <param name="codec">The column's codec, consulted for codec-owned conversions.</param>
@@ -96,21 +99,6 @@ internal static class PocoValueProjection
         projected = Cast(value, target);
         return true;
     }
-
-    /// <summary>
-    /// Creates the exception thrown when a NULL reaches a property that cannot hold it.
-    /// </summary>
-    /// <param name="columnName">The column name.</param>
-    /// <param name="columnType">The column's ClickHouse type.</param>
-    /// <param name="pocoType">The POCO type's name.</param>
-    /// <param name="memberName">The property name.</param>
-    /// <param name="memberType">The property type.</param>
-    /// <param name="row">The zero-based row of the result the NULL was found at.</param>
-    /// <returns>The exception to throw.</returns>
-    public static Exception NullNotAssignable(string columnName, string columnType, string pocoType, string memberName, string memberType, long row)
-        => new InvalidOperationException(
-            $"Column '{columnName}' ({columnType}) is NULL at row {row} of the result, but it maps to property '{pocoType}.{memberName}' of type {memberType}, which cannot hold null. " +
-            $"Make that property nullable, or exclude the NULLs in the query.");
 
     /// <summary>
     /// Whether a CLR enum ordinal cast or reference/value assignability can perform the conversion.
