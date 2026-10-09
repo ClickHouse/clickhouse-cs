@@ -98,6 +98,12 @@ internal abstract class TupleReaderBase<T> : ColumnReader<T>
         }
     }
 
+    /// <summary>Reads one field of one row. After a bulk read fails, the readers read each row again, field by field, so the read throws the failure of the first value that fails in row order.</summary>
+    /// <typeparam name="TField">The CLR type of the field.</typeparam>
+    /// <param name="field">The bound field reader.</param>
+    /// <param name="row">The row.</param>
+    protected static void ReadOne<TField>(BoundReader<TField> field, int row) => field.Fill(row, new TField[1]);
+
     private static IColumn Child(ITupleColumn tuple, int index) => tuple.Children[index];
 }
 
@@ -135,6 +141,15 @@ internal sealed class TupleReader<T1> : TupleReaderBase<ValueTuple<T1>>
                 {
                     destination[i] = new ValueTuple<T1>(v1[i]);
                 }
+            }
+            catch
+            {
+                for (int i = 0; i < destination.Length; i++)
+                {
+                    ReadOne(b1, start + i);
+                }
+
+                throw;
             }
             finally
             {
@@ -192,6 +207,16 @@ internal sealed class TupleReader<T1, T2> : TupleReaderBase<(T1, T2)>
                 {
                     destination[i] = (v1[i], v2[i]);
                 }
+            }
+            catch
+            {
+                for (int i = 0; i < destination.Length; i++)
+                {
+                    ReadOne(b1, start + i);
+                    ReadOne(b2, start + i);
+                }
+
+                throw;
             }
             finally
             {
@@ -258,6 +283,17 @@ internal sealed class TupleReader<T1, T2, T3> : TupleReaderBase<(T1, T2, T3)>
                 {
                     destination[i] = (v1[i], v2[i], v3[i]);
                 }
+            }
+            catch
+            {
+                for (int i = 0; i < destination.Length; i++)
+                {
+                    ReadOne(b1, start + i);
+                    ReadOne(b2, start + i);
+                    ReadOne(b3, start + i);
+                }
+
+                throw;
             }
             finally
             {
@@ -333,6 +369,18 @@ internal sealed class TupleReader<T1, T2, T3, T4> : TupleReaderBase<(T1, T2, T3,
                 {
                     destination[i] = (v1[i], v2[i], v3[i], v4[i]);
                 }
+            }
+            catch
+            {
+                for (int i = 0; i < destination.Length; i++)
+                {
+                    ReadOne(b1, start + i);
+                    ReadOne(b2, start + i);
+                    ReadOne(b3, start + i);
+                    ReadOne(b4, start + i);
+                }
+
+                throw;
             }
             finally
             {
@@ -422,6 +470,19 @@ internal sealed class TupleReader<T1, T2, T3, T4, T5> : TupleReaderBase<(T1, T2,
                 {
                     destination[i] = (v1[i], v2[i], v3[i], v4[i], v5[i]);
                 }
+            }
+            catch
+            {
+                for (int i = 0; i < destination.Length; i++)
+                {
+                    ReadOne(b1, start + i);
+                    ReadOne(b2, start + i);
+                    ReadOne(b3, start + i);
+                    ReadOne(b4, start + i);
+                    ReadOne(b5, start + i);
+                }
+
+                throw;
             }
             finally
             {
@@ -521,6 +582,20 @@ internal sealed class TupleReader<T1, T2, T3, T4, T5, T6> : TupleReaderBase<(T1,
                 {
                     destination[i] = (v1[i], v2[i], v3[i], v4[i], v5[i], v6[i]);
                 }
+            }
+            catch
+            {
+                for (int i = 0; i < destination.Length; i++)
+                {
+                    ReadOne(b1, start + i);
+                    ReadOne(b2, start + i);
+                    ReadOne(b3, start + i);
+                    ReadOne(b4, start + i);
+                    ReadOne(b5, start + i);
+                    ReadOne(b6, start + i);
+                }
+
+                throw;
             }
             finally
             {
@@ -630,6 +705,21 @@ internal sealed class TupleReader<T1, T2, T3, T4, T5, T6, T7> : TupleReaderBase<
                 {
                     destination[i] = (v1[i], v2[i], v3[i], v4[i], v5[i], v6[i], v7[i]);
                 }
+            }
+            catch
+            {
+                for (int i = 0; i < destination.Length; i++)
+                {
+                    ReadOne(b1, start + i);
+                    ReadOne(b2, start + i);
+                    ReadOne(b3, start + i);
+                    ReadOne(b4, start + i);
+                    ReadOne(b5, start + i);
+                    ReadOne(b6, start + i);
+                    ReadOne(b7, start + i);
+                }
+
+                throw;
             }
             finally
             {

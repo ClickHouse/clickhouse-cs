@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Protocol;
+using ClickHouse.Driver.Tcp.Tests.Differential;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
@@ -37,9 +39,12 @@ public class ReadCombinatorTests
     }
 
     // Rows of LowCardinality(Nullable(X)) with a dictionary that the test gives: slot 0 is the NULL slot.
-    private static async Task<IColumn> NullableDictionaryAsync(string inner, int entries, Action<ClickHouseBinaryWriter> dictionary, byte[] keys)
+    private static Task<IColumn> NullableDictionaryAsync(string inner, int entries, Action<ClickHouseBinaryWriter> dictionary, byte[] keys)
+        => DictionaryAsync($"LowCardinality(Nullable({inner}))", entries, dictionary, keys);
+
+    // Rows of a LowCardinality type with a dictionary that the test gives, in the order that the test gives.
+    private static async Task<IColumn> DictionaryAsync(string type, int entries, Action<ClickHouseBinaryWriter> dictionary, byte[] keys)
     {
-        string type = $"LowCardinality(Nullable({inner}))";
         IColumnCodec codec = ConverterHarness.Codec(type);
         byte[] bytes = await CodecTestHarness.WriteAsync(w =>
         {
@@ -52,7 +57,7 @@ public class ReadCombinatorTests
         });
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
         await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
-        return await codec.ReadColumnAsync(reader, "c", type, keys.Length, CodecTestHarness.None);
+        return await codec.ReadColumnAsync(reader, "value", type, keys.Length, CodecTestHarness.None);
     }
 
     private static ColumnReader<T> Reader<T>(string type) => ConverterDerivation.Default.Reader<T>(type, Context);
@@ -155,10 +160,9 @@ public class ReadCombinatorTests
         });
     }
 
-    // The dictionary converts every entry on the first read, so an entry that a conversion refuses fails the read,
-    // also when the first NULL of the range comes before the row that refers to the entry.
+    // The NULL of row 1 comes before the entry of row 2 that is no time of day: POCO mapping fails at the NULL.
     [Test]
-    public async Task Read_NullableDictionaryAsValueTypeWithAFailingEntry_FailsOnTheEntryBeforeTheNull()
+    public async Task Read_NullableDictionaryAsValueTypeWithANullBeforeAFailingEntry_FailsAtTheNullAsPocoMappingDoes()
     {
         using IColumn column = await NullableDictionaryAsync("Time", 3, w =>
         {
@@ -167,9 +171,66 @@ public class ReadCombinatorTests
             w.WriteInt32(90_000);
         }, keys: new byte[] { 1, 0, 2 });
 
-        Exception thrown = ConverterHarness.Catch(() => ConverterHarness.ReadFill(Reader<TimeOnly>("LowCardinality(Nullable(Time))"), column, 0, 3));
+        AssertFailsAsPocoMapping<TimeOnly>(column);
+    }
 
-        Assert.That(thrown, Is.TypeOf<InvalidOperationException>().With.Message.Contains("is not a time of day"));
+    // Row 0 refers to slot 2 and row 1 to slot 1, and both entries are no time of day. A reading that converts each
+    // value alone (POCO mapping, read rule D6) fails at row 0.
+    [Test]
+    public async Task Read_DictionaryAsNullableWithTwoFailingEntries_FailsAtTheFirstRowAsPocoMappingDoes()
+    {
+        using IColumn column = await DictionaryAsync("LowCardinality(Time)", 3, w =>
+        {
+            w.WriteInt32(0);
+            w.WriteInt32(90_000);
+            w.WriteInt32(-1);
+        }, keys: new byte[] { 2, 1 });
+
+        AssertFailsAsPocoMapping<TimeOnly?>(column);
+    }
+
+    // The old projection of the whole column converts every entry before the first value, so it fails on the first
+    // entry in slot order: slot 1 (90000), also when no row refers to it.
+    [TestCase(new byte[] { 2, 1 })]
+    [TestCase(new byte[] { 3, 3 })]
+    public async Task Read_DictionaryWithFailingEntries_FailsOnTheFirstFailingEntryAsTheOldReadDoes(byte[] keys)
+    {
+        using IColumn column = await DictionaryAsync("LowCardinality(Time)", 4, w =>
+        {
+            w.WriteInt32(0);
+            w.WriteInt32(90_000);
+            w.WriteInt32(-1);
+            w.WriteInt32(1);
+        }, keys);
+
+        AssertFailsAsTheOldRead<TimeOnly>("LowCardinality(Time)", column, "1.01:00:00");
+    }
+
+    // Two values of the read are no time of day. The old read and Emit read row by row, key then value, field 1 then
+    // field 2, so the read fails on the first in that order: 90000 (1.01:00:00), not -1.
+    [TestCase("Map(Time, Time)", typeof(KeyValuePair<TimeOnly, TimeOnly>[]))]
+    [TestCase("Tuple(Time, Time)", typeof((TimeOnly, TimeOnly)))]
+    [TestCase("Array(Tuple(Time, Time))", typeof((TimeOnly, TimeOnly)[]))]
+    [TestCase("Array(Map(Time, Time))", typeof(KeyValuePair<TimeOnly, TimeOnly>[][]))]
+    [TestCase("Nullable(Tuple(Time, Time))", typeof((TimeOnly, TimeOnly)?))]
+    [TestCase("Array(Time)", typeof(TimeOnly[]))]
+    [TestCase("Nullable(Time)", typeof(TimeOnly?))]
+    public async Task Read_CompositeWithTwoFailingValues_FailsOnTheFirstInRowOrderAsTheOldReadDoes(string type, Type target)
+    {
+        using IColumn column = await ConverterHarness.DecodeAsync(type, TwoFailingValues(type));
+
+        ConverterHarness.InvokeGeneric(typeof(ReadCombinatorTests), nameof(AssertFailsAsTheOldRead), new[] { target }, type, column, "1.01:00:00");
+    }
+
+    // The dictionary field fails first: the old read converts its entries at the first value of the field, before the
+    // second field of row 0 (90000).
+    [Test]
+    public async Task Read_TupleWithAFailingDictionaryField_FailsOnTheDictionaryAsTheOldReadDoes()
+    {
+        const string type = "Tuple(LowCardinality(Time), Time)";
+        using IColumn column = await ConverterHarness.DecodeAsync(type, new ArrayColumn<(int, int)>("c", type, new[] { (1, 90_000), (100_000, 1) }));
+
+        AssertFailsAsTheOldRead<(TimeOnly, TimeOnly)>(type, column, "1.03:46:40");
     }
 
     [TestCase("Nullable(Int32)", typeof(int?))]
@@ -311,6 +372,64 @@ public class ReadCombinatorTests
         })));
 
         Assert.That(results.Select(values => values.Select(System.Text.Encoding.UTF8.GetString)), Has.All.EqualTo(text));
+    }
+
+    // Two values that are no time of day: 90000 first in row order, -1 later in row order and first in column order.
+    private static IColumn TwoFailingValues(string type) => type switch
+    {
+        "Map(Time, Time)" => new ArrayColumn<KeyValuePair<int, int>[]>("c", type, new[]
+        {
+            new[] { new KeyValuePair<int, int>(1, 90_000), new KeyValuePair<int, int>(-1, 1) },
+            new[] { new KeyValuePair<int, int>(-1, 1) },
+        }),
+        "Tuple(Time, Time)" => new ArrayColumn<(int, int)>("c", type, new[] { (1, 90_000), (-1, 1) }),
+        "Array(Tuple(Time, Time))" => new ArrayColumn<(int, int)[]>("c", type, new[] { new[] { (1, 90_000), (-1, 1) } }),
+        "Array(Map(Time, Time))" => new ArrayColumn<KeyValuePair<int, int>[][]>("c", type, new[]
+        {
+            new[] { new[] { new KeyValuePair<int, int>(1, 90_000) }, new[] { new KeyValuePair<int, int>(-1, 1) } },
+        }),
+        "Nullable(Tuple(Time, Time))" => new ArrayColumn<(int, int)?>("c", type, new (int, int)?[] { (1, 90_000), (-1, 1) }),
+        "Array(Time)" => new ArrayColumn<int[]>("c", type, new[] { new[] { 1, 90_000 }, new[] { -1 } }),
+        "Nullable(Time)" => new ArrayColumn<int?>("c", type, new int?[] { 90_000, null, -1 }),
+        _ => throw new ArgumentOutOfRangeException(nameof(type), type, "No column of two failing values."),
+    };
+
+    // The old read (ReadAs, or the old columnar dispatch), Fill and Emit fail alike, with the expected text in the message.
+    private static void AssertFailsAsTheOldRead<T>(string type, IColumn column, string value)
+    {
+        ColumnReader<T> reader = Reader<T>(type);
+        Exception old = ConverterHarness.Catch(() => ConverterHarness.ReadOld<T>(column, 0, column.RowCount));
+        Exception fill = ConverterHarness.Catch(() => ConverterHarness.ReadFill(reader, column, 0, column.RowCount));
+        Exception emit = ConverterHarness.Catch(() => ConverterHarness.ReadEmit(reader, column, 0, column.RowCount));
+
+        Assert.That(old?.Message, Does.Contain($"value of {value} is not a time of day"), "the old read");
+        ConverterHarness.AssertSameFailure(old, fill, "Fill");
+        ConverterHarness.AssertSameFailure(old, emit, "Emit");
+    }
+
+    // POCO mapping, Fill and Emit fail alike: the same type and text, or a NULL at the same row.
+    private static void AssertFailsAsPocoMapping<T>(IColumn column)
+    {
+        ColumnReader<T> reader = Reader<T>(column.TypeName);
+        using var block = new Block(string.Empty, BlockInfo.Default, column.RowCount, new[] { column }, ColumnCodecRegistry.Default, Context);
+        RowReader<T> poco = ClientArms.Poco.Bind<T>(block);
+        Exception expected = ConverterHarness.Catch(() => poco(0, column.RowCount));
+        Assert.That(expected, Is.Not.Null, "POCO mapping must fail for this case.");
+        foreach ((string path, Exception actual) in new[]
+        {
+            ("Fill", ConverterHarness.Catch(() => ConverterHarness.ReadFill(reader, column, 0, column.RowCount))),
+            ("Emit", ConverterHarness.Catch(() => ConverterHarness.ReadEmit(reader, column, 0, column.RowCount))),
+        })
+        {
+            if (actual is NullValueException nullValue)
+            {
+                Assert.That(expected.Message, Does.Contain($"is NULL at row {nullValue.Row} of the result"), path);
+            }
+            else
+            {
+                ConverterHarness.AssertSameFailure(expected, actual, path);
+            }
+        }
     }
 
     private static T[] ReadBothPaths<T>(string type, IColumn column)

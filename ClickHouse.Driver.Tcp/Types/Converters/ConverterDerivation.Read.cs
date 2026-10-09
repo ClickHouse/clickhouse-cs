@@ -42,24 +42,24 @@ internal sealed partial class ConverterDerivation
 
     // A composite node, or a node that reads only as its canonical type.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    private Derivation DeriveCompositeRead(string name, TypeNode node, TypeNode root, in ResolveContext context, Type clrType)
+    private Derivation DeriveCompositeRead(string name, TypeNode node, TypeNode root, in ResolveContext context, Type clrType, DictionaryOrder order)
     {
         switch (name)
         {
             case "Nullable":
-                return DeriveNullable(node, root, in context, clrType);
+                return DeriveNullable(node, root, in context, clrType, order);
 
             case "LowCardinality":
-                return DeriveLowCardinality(node, root, in context, clrType);
+                return DeriveLowCardinality(node, root, in context, clrType, order);
 
             case "Array":
-                return DeriveArray(node, root, in context, clrType);
+                return DeriveArray(node, root, in context, clrType, order);
 
             case "Map":
-                return DeriveMap(node, root, in context, clrType);
+                return DeriveMap(node, root, in context, clrType, order);
 
             case "Tuple" when node.Arguments.Count > 0:
-                return DeriveTuple(node, root, in context, clrType);
+                return DeriveTuple(node, root, in context, clrType, order);
 
             default:
                 return DeriveCanonicalOnly(node, root, in context, clrType);
@@ -69,13 +69,13 @@ internal sealed partial class ConverterDerivation
     // Nullable(X): T? lifts a value type, a reference type holds the NULL itself, and a bare value type cannot hold it.
     // A value-type lift accepts only a child that does not need the column.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    private Derivation DeriveNullable(TypeNode node, TypeNode root, in ResolveContext context, Type clrType)
+    private Derivation DeriveNullable(TypeNode node, TypeNode root, in ResolveContext context, Type clrType, DictionaryOrder order)
     {
         TypeNode innerNode = node.Arguments[0];
         Type value = Nullable.GetUnderlyingType(clrType);
         if (value is not null)
         {
-            Derivation inner = DeriveNode(innerNode, root, in context, value, ConversionDirection.Read);
+            Derivation inner = DeriveNode(innerNode, root, in context, value, ConversionDirection.Read, order);
             if (!inner.Succeeded)
             {
                 return inner;
@@ -91,29 +91,29 @@ internal sealed partial class ConverterDerivation
             return Refuse(node, root, $"'{node}' cannot be read as {clrType}, which cannot hold NULL.");
         }
 
-        Derivation reference = DeriveNode(innerNode, root, in context, clrType, ConversionDirection.Read);
+        Derivation reference = DeriveNode(innerNode, root, in context, clrType, ConversionDirection.Read, order);
         return reference.Succeeded ? Wrap(typeof(NullableReferenceReader<>), clrType, reference.NeedsColumn, reference.Converter) : reference;
     }
 
     // LowCardinality(X) reads as X reads. The dictionary of LowCardinality(Nullable(X)) is a column of the bare X, so
     // the derivation reads X and the dictionary reader gives the NULL slot.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    private Derivation DeriveLowCardinality(TypeNode node, TypeNode root, in ResolveContext context, Type clrType)
+    private Derivation DeriveLowCardinality(TypeNode node, TypeNode root, in ResolveContext context, Type clrType, DictionaryOrder order)
     {
         TypeNode innerNode = node.Arguments[0];
         bool nullable = innerNode.Name == "Nullable";
         if (!nullable)
         {
-            Derivation plain = DeriveNode(innerNode, root, in context, clrType, ConversionDirection.Read);
-            return plain.Succeeded ? Wrap(typeof(DictionaryReader<>), clrType, plain.NeedsColumn, plain.Converter) : plain;
+            Derivation plain = DeriveNode(innerNode, root, in context, clrType, ConversionDirection.Read, order);
+            return plain.Succeeded ? Wrap(typeof(DictionaryReader<>), clrType, plain.NeedsColumn, plain.Converter, order) : plain;
         }
 
         innerNode = innerNode.Arguments[0];
         Type value = Nullable.GetUnderlyingType(clrType);
         if (value is not null)
         {
-            Derivation lifted = DeriveNode(innerNode, root, in context, value, ConversionDirection.Read);
-            return lifted.Succeeded ? Wrap(typeof(LiftingDictionaryReader<>), value, lifted.NeedsColumn, lifted.Converter) : lifted;
+            Derivation lifted = DeriveNode(innerNode, root, in context, value, ConversionDirection.Read, order);
+            return lifted.Succeeded ? Wrap(typeof(LiftingDictionaryReader<>), value, lifted.NeedsColumn, lifted.Converter, order) : lifted;
         }
 
         if (clrType.IsValueType)
@@ -121,12 +121,12 @@ internal sealed partial class ConverterDerivation
             return Refuse(node, root, $"'{node}' cannot be read as {clrType}, which cannot hold NULL.");
         }
 
-        Derivation reference = DeriveNode(innerNode, root, in context, clrType, ConversionDirection.Read);
-        return reference.Succeeded ? Wrap(typeof(DictionaryReader<>), clrType, reference.NeedsColumn, reference.Converter) : reference;
+        Derivation reference = DeriveNode(innerNode, root, in context, clrType, ConversionDirection.Read, order);
+        return reference.Succeeded ? Wrap(typeof(DictionaryReader<>), clrType, reference.NeedsColumn, reference.Converter, order) : reference;
     }
 
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    private Derivation DeriveArray(TypeNode node, TypeNode root, in ResolveContext context, Type clrType)
+    private Derivation DeriveArray(TypeNode node, TypeNode root, in ResolveContext context, Type clrType, DictionaryOrder order)
     {
         if (!clrType.IsSZArray)
         {
@@ -134,12 +134,12 @@ internal sealed partial class ConverterDerivation
         }
 
         Type element = clrType.GetElementType();
-        Derivation inner = DeriveNode(node.Arguments[0], root, in context, element, ConversionDirection.Read);
+        Derivation inner = DeriveNode(node.Arguments[0], root, in context, element, ConversionDirection.Read, order);
         return inner.Succeeded ? Wrap(typeof(ArrayReader<>), element, inner.NeedsColumn, inner.Converter) : inner;
     }
 
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    private Derivation DeriveMap(TypeNode node, TypeNode root, in ResolveContext context, Type clrType)
+    private Derivation DeriveMap(TypeNode node, TypeNode root, in ResolveContext context, Type clrType, DictionaryOrder order)
     {
         Type pair = clrType.IsSZArray ? clrType.GetElementType() : null;
         if (pair is null || !pair.IsGenericType || pair.GetGenericTypeDefinition() != typeof(KeyValuePair<,>))
@@ -148,13 +148,13 @@ internal sealed partial class ConverterDerivation
         }
 
         Type[] arguments = pair.GetGenericArguments();
-        Derivation key = DeriveNode(node.Arguments[0], root, in context, arguments[0], ConversionDirection.Read);
+        Derivation key = DeriveNode(node.Arguments[0], root, in context, arguments[0], ConversionDirection.Read, order);
         if (!key.Succeeded)
         {
             return key;
         }
 
-        Derivation value = DeriveNode(node.Arguments[1], root, in context, arguments[1], ConversionDirection.Read);
+        Derivation value = DeriveNode(node.Arguments[1], root, in context, arguments[1], ConversionDirection.Read, order);
         if (!value.Succeeded)
         {
             return value;
@@ -166,7 +166,7 @@ internal sealed partial class ConverterDerivation
     }
 
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    private Derivation DeriveTuple(TypeNode node, TypeNode root, in ResolveContext context, Type clrType)
+    private Derivation DeriveTuple(TypeNode node, TypeNode root, in ResolveContext context, Type clrType, DictionaryOrder order)
     {
         (string Name, TypeNode Type)[] elements = NamedElementParser.Split(node);
         int arity = elements.Length;
@@ -180,7 +180,7 @@ internal sealed partial class ConverterDerivation
         bool needsColumn = false;
         for (int i = 0; i < arity; i++)
         {
-            Derivation field = DeriveNode(elements[i].Type, root, in context, arguments[i], ConversionDirection.Read);
+            Derivation field = DeriveNode(elements[i].Type, root, in context, arguments[i], ConversionDirection.Read, order);
             if (!field.Succeeded)
             {
                 return field;
@@ -232,7 +232,7 @@ internal sealed partial class ConverterDerivation
         // Either throws at the first NULL.
         if (sourceValue is not null && targetValue is null && clrType.IsValueType)
         {
-            Derivation lifted = DeriveNode(root, root, in context, typeof(Nullable<>).MakeGenericType(clrType), ConversionDirection.Read);
+            Derivation lifted = DeriveNode(root, root, in context, typeof(Nullable<>).MakeGenericType(clrType), ConversionDirection.Read, DictionaryOrder.Row);
             if (lifted.Succeeded && !lifted.NeedsColumn)
             {
                 return Wrap(typeof(NonNullReader<>), clrType, needsColumn: false, lifted.Converter);
@@ -253,7 +253,7 @@ internal sealed partial class ConverterDerivation
             // A column of a type that is not T? read as clrType: the reading of the value type, then lifted.
             if (sourceValue is null)
             {
-                Derivation present = DeriveNode(root, root, in context, targetValue, ConversionDirection.Read);
+                Derivation present = DeriveNode(root, root, in context, targetValue, ConversionDirection.Read, DictionaryOrder.Row);
                 if (present.Succeeded && !present.NeedsColumn)
                 {
                     return Wrap(typeof(AsNullableReader<>), targetValue, needsColumn: false, present.Converter);
@@ -300,6 +300,6 @@ internal sealed partial class ConverterDerivation
             ? Activator.CreateInstance(typeof(EnumReader<,>).MakeGenericType(from, to), reader)
             : Activator.CreateInstance(typeof(AssignReader<,>).MakeGenericType(from, to), reader);
 
-    private static Derivation Wrap(Type combinator, Type argument, bool needsColumn, object inner)
-        => Derivation.Of(Activator.CreateInstance(combinator.MakeGenericType(argument), inner), needsColumn);
+    private static Derivation Wrap(Type combinator, Type argument, bool needsColumn, params object[] arguments)
+        => Derivation.Of(Activator.CreateInstance(combinator.MakeGenericType(argument), arguments), needsColumn);
 }
