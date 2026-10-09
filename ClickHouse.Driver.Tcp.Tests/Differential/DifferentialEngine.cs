@@ -54,14 +54,18 @@ internal sealed class FacetResult
 /// <summary>The result of a case: the outcomes of each facet, and each difference that the case found.</summary>
 internal sealed class CaseReport
 {
-    public CaseReport(DifferentialCase testCase, IReadOnlyList<FacetResult> facets, IReadOnlyList<string> mismatches)
+    public CaseReport(DifferentialCase testCase, IReadOnlyList<FacetResult> facets, IReadOnlyList<string> mismatches, int tailStart)
     {
         Case = testCase;
         Facets = facets;
         Mismatches = mismatches;
+        TailStart = tailStart;
     }
 
     public DifferentialCase Case { get; }
+
+    /// <summary>The first row of the tail in the column that the tail reads or writes. Zero when the case has no rows.</summary>
+    public int TailStart { get; }
 
     public IReadOnlyList<FacetResult> Facets { get; }
 
@@ -79,9 +83,16 @@ internal sealed class CaseReport
 /// <c>ReadColumnAsync</c>. A cache that a column fills on its first read is therefore empty for each arm.
 /// </para>
 /// <para>
-/// Each facet runs for all rows and for the tail, <c>[RowCount / 2, RowCount)</c>. A candidate must give the
-/// same outcome as the reference for both, or the outcome that a deliberate change declares. Each arm, the
-/// reference too, must also read the same values for the tail alone as for the same rows of the full read.
+/// Each facet runs for all rows and for the tail. The tail of a case of two rows or more is
+/// <c>[RowCount / 2, RowCount)</c>. The tail of a case of one row is row 1 of a column that has a row before the
+/// case's row: for an <c>Array</c> type, the row's elements twice; for other types, a copy. So every read and every
+/// write also runs with a start above zero, after a preceding row. A candidate must give the same outcome as the
+/// reference for both ranges, or the outcome that a deliberate change declares. Each arm, the reference too, must
+/// also read the same values for the tail alone as for the same rows of the case in the full read.
+/// </para>
+/// <para>
+/// An outcome that the source test of the case states (<see cref="DifferentialCase.Stated"/>) must be the outcome of
+/// the reference, or of the first candidate when the tier has no reference.
 /// </para>
 /// </remarks>
 internal sealed class DifferentialEngine : IReferenceOutcomes
@@ -96,16 +107,23 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
     private readonly DifferentialRegistry registry;
     private readonly Dictionary<Facet, FacetResult> results = new();
     private readonly List<string> mismatches = new();
-    private readonly int tailStart;
     private readonly bool hasTail;
+    private readonly bool tailHasPrecedingRow;
+    private readonly int tailStart;
+    private readonly int tailCount;
+    private readonly int tailCaseRow;
     private byte[] sourceBytes;
+    private byte[] precededSourceBytes;
 
     private DifferentialEngine(DifferentialCase testCase, DifferentialRegistry registry)
     {
         this.testCase = testCase;
         this.registry = registry;
-        tailStart = testCase.RowCount / 2;
-        hasTail = testCase.RowCount >= 2;
+        hasTail = testCase.RowCount >= 1;
+        tailHasPrecedingRow = testCase.RowCount == 1;
+        tailStart = tailHasPrecedingRow ? 1 : testCase.RowCount / 2;
+        tailCount = tailHasPrecedingRow ? 1 : testCase.RowCount - tailStart;
+        tailCaseRow = tailHasPrecedingRow ? 0 : tailStart;
     }
 
     /// <summary>The context that every case resolves its codecs with.</summary>
@@ -125,7 +143,7 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
     {
         var engine = new DifferentialEngine(testCase, registry);
         engine.Execute();
-        return new CaseReport(testCase, engine.results.Values.ToList(), engine.mismatches);
+        return new CaseReport(testCase, engine.results.Values.ToList(), engine.mismatches, engine.hasTail ? engine.tailStart : 0);
     }
 
     /// <inheritdoc/>
@@ -164,6 +182,14 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
     private static IColumn ReadBackColumn<T>(string columnType, Outcome values)
         => new ArrayColumn<T>("value", columnType, values.ValuesAs<T>());
 
+    private static Array Twice(Array elements)
+    {
+        Array twice = Array.CreateInstance(elements.GetType().GetElementType(), elements.Length * 2);
+        Array.Copy(elements, 0, twice, 0, elements.Length);
+        Array.Copy(elements, 0, twice, elements.Length, elements.Length);
+        return twice;
+    }
+
     private void Execute()
     {
         List<Facet> facets = testCase.Facets().ToList();
@@ -183,6 +209,8 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
         {
             Compare(results[facet]);
         }
+
+        CheckStated();
     }
 
     private bool EncodeSource(List<Facet> facets)
@@ -203,9 +231,22 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
         }
 
         sourceBytes = outcome.Bytes;
+        if (tailHasPrecedingRow)
+        {
+            Outcome preceded = (Outcome)Invoke(WriteMethod, source.Input.ElementType, this, arm, source, 0, 2, true);
+            if (preceded.Kind != OutcomeKind.Bytes)
+            {
+                mismatches.Add($"{source}: {arm.Name} cannot write the source column with a preceding row: {preceded}.");
+                return false;
+            }
+
+            precededSourceBytes = preceded.Bytes;
+        }
+
         try
         {
-            using Block block = Decode(checkConsumed: true);
+            using Block block = Decode(preceded: false, checkConsumed: true);
+            using Block precededBlock = tailHasPrecedingRow ? Decode(preceded: true, checkConsumed: true) : null;
         }
         catch (Exception e)
         {
@@ -216,20 +257,42 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
         return true;
     }
 
-    private Block Decode(bool checkConsumed = false)
+    // A block of the source rows, or of the source rows with a preceding row.
+    private Block Decode(bool preceded, bool checkConsumed = false)
     {
+        byte[] bytes = preceded ? precededSourceBytes : sourceBytes;
+        int rows = preceded ? testCase.RowCount + 1 : testCase.RowCount;
         IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(testCase.ColumnType, Context);
-        using var stream = new MemoryStream(sourceBytes);
+        using var stream = new MemoryStream(bytes);
         using var reader = new ClickHouseBinaryReader(stream);
         codec.ReadStatePrefixAsync(reader, CancellationToken.None).AsTask().GetAwaiter().GetResult();
-        IColumn column = codec.ReadColumnAsync(reader, "value", testCase.ColumnType, testCase.RowCount, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        IColumn column = codec.ReadColumnAsync(reader, "value", testCase.ColumnType, rows, CancellationToken.None).AsTask().GetAwaiter().GetResult();
         if (checkConsumed && (reader.BufferedBytes != 0 || stream.Position != stream.Length))
         {
             column.Dispose();
-            throw new InvalidDataException($"The decode left {reader.BufferedBytes + stream.Length - stream.Position} of {sourceBytes.Length} bytes.");
+            throw new InvalidDataException($"The decode left {reader.BufferedBytes + stream.Length - stream.Position} of {bytes.Length} bytes.");
         }
 
-        return new Block(string.Empty, BlockInfo.Default, testCase.RowCount, new[] { column }, ColumnCodecRegistry.Default, Context);
+        return new Block(string.Empty, BlockInfo.Default, rows, new[] { column }, ColumnCodecRegistry.Default, Context);
+    }
+
+    // The column with a row before its only row. For an Array type the preceding row has the row's elements twice, so
+    // the tail's child offset is not 0 and the preceding row differs from the row. For other types it is a copy.
+    private IColumn WithPrecedingRow<T>(IColumn column)
+    {
+        if (column is not ArrayColumn<T> array || array.RowCount != 1)
+        {
+            throw new InvalidOperationException(
+                $"{testCase.Id}: no row can be put before the only row of a {column.GetType().Name}. Give the case two rows or more.");
+        }
+
+        T row = array[0];
+        T preceding = row is Array { Length: > 0 } elements && TypeParser.Parse(testCase.ColumnType).Name == "Array"
+            ? (T)(object)Twice(elements)
+            : row;
+        var preceded = new ArrayColumn<T>(column.Name, column.TypeName, new[] { preceding, row });
+        column.Dispose();
+        return preceded;
     }
 
     private FacetResult Evaluate(Facet facet)
@@ -246,13 +309,13 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
         {
             case ReadArm read:
                 return new RangeOutcomes(
-                    (Outcome)Invoke(ReadMethod, facet.Target, this, read, 0, testCase.RowCount),
-                    hasTail ? (Outcome)Invoke(ReadMethod, facet.Target, this, read, tailStart, testCase.RowCount - tailStart) : null);
+                    (Outcome)Invoke(ReadMethod, facet.Target, this, read, 0, testCase.RowCount, false),
+                    hasTail ? (Outcome)Invoke(ReadMethod, facet.Target, this, read, tailStart, tailCount, tailHasPrecedingRow) : null);
 
             case WriteArm write:
                 return new RangeOutcomes(
-                    (Outcome)Invoke(WriteMethod, facet.Input.ElementType, this, write, facet, 0, testCase.RowCount),
-                    hasTail ? (Outcome)Invoke(WriteMethod, facet.Input.ElementType, this, write, facet, tailStart, testCase.RowCount - tailStart) : null);
+                    (Outcome)Invoke(WriteMethod, facet.Input.ElementType, this, write, facet, 0, testCase.RowCount, false),
+                    hasTail ? (Outcome)Invoke(WriteMethod, facet.Input.ElementType, this, write, facet, tailStart, tailCount, tailHasPrecedingRow) : null);
 
             case AnswerArm answer:
                 try
@@ -269,9 +332,9 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
         }
     }
 
-    private Outcome Read<T>(ReadArm arm, int start, int count)
+    private Outcome Read<T>(ReadArm arm, int start, int count, bool preceded)
     {
-        using Block block = Decode();
+        using Block block = Decode(preceded);
         RowReader<T> reader;
         try
         {
@@ -295,7 +358,7 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
         }
     }
 
-    private Outcome Write<T>(WriteArm arm, Facet facet, int start, int length)
+    private Outcome Write<T>(WriteArm arm, Facet facet, int start, int length, bool preceded)
     {
         Block block = null;
         IColumn column = null;
@@ -305,10 +368,11 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
             {
                 case WriteInputKind.Built:
                     column = facet.Input.Build("value");
+                    column = preceded ? WithPrecedingRow<T>(column) : column;
                     break;
 
                 case WriteInputKind.Decoded:
-                    block = Decode();
+                    block = Decode(preceded);
                     column = block[0];
                     break;
 
@@ -320,6 +384,7 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
                     }
 
                     column = (IColumn)Invoke(ReadBackColumnMethod, facet.Input.ElementType, null, testCase.ColumnType, values);
+                    column = preceded ? WithPrecedingRow<T>(column) : column;
                     break;
             }
 
@@ -431,7 +496,7 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
 
         string difference = outcomes.All.Kind switch
         {
-            OutcomeKind.Values => Outcome.Difference(outcomes.All.Tail(tailStart), outcomes.Tail),
+            OutcomeKind.Values => Outcome.Difference(outcomes.All.Tail(tailCaseRow), outcomes.Tail),
             OutcomeKind.Refused => Outcome.Difference(outcomes.All, outcomes.Tail),
             _ => null,
         };
@@ -439,8 +504,8 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
         if (difference is not null)
         {
             mismatches.Add(
-                $"{facet}: {arm.Name} reads rows [{tailStart}, {testCase.RowCount}) alone as {outcomes.Tail}, " +
-                $"and the same rows of the read of all rows as {(outcomes.All.Kind == OutcomeKind.Values ? outcomes.All.Tail(tailStart) : outcomes.All)}: {difference}.");
+                $"{facet}: {arm.Name} reads{Describe(facet, Rows.Tail)} alone as {outcomes.Tail}, " +
+                $"and the same rows of the case in the read of all rows as {(outcomes.All.Kind == OutcomeKind.Values ? outcomes.All.Tail(tailCaseRow) : outcomes.All)}: {difference}.");
         }
     }
 
@@ -475,7 +540,7 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
     private void CompareWithChange(Facet facet, DeliberateChange change, FacetResult result)
     {
         Expectation expected = change.ExpectationFor(facet);
-        if (result.Reference is not null && expected.Verify(result.Reference.All, Rows.All, tailStart, this) is null)
+        if (result.Reference is not null && expected.Verify(result.Reference.All, Rows.All, tailCaseRow, this) is null)
         {
             mismatches.Add(
                 $"{facet}: the deliberate change '{change.Name}' expects {expected}, and {result.ReferenceArm.Name} already gives that ({result.Reference.All}). " +
@@ -493,7 +558,7 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
             foreach (Rows rows in new[] { Rows.All, Rows.Tail })
             {
                 Outcome actual = outcomes.For(rows);
-                string difference = actual is null ? null : expected.Verify(actual, rows, tailStart, this);
+                string difference = actual is null ? null : expected.Verify(actual, rows, tailCaseRow, this);
                 if (difference is not null)
                 {
                     mismatches.Add($"{facet}{Describe(facet, rows)}: {arm.Name} gives {actual}; the deliberate change '{change.Name}' expects {expected}: {difference}.");
@@ -502,7 +567,37 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
         }
     }
 
+    // Each outcome that the source test states must be the outcome of the reference, or of the first candidate when
+    // the tier has no reference.
+    private void CheckStated()
+    {
+        foreach (StatedOutcome stated in testCase.Stated)
+        {
+            FacetResult result = results.Values.FirstOrDefault(r => r.Facet.Tier == stated.Tier && r.Facet.Target == stated.Target);
+            (Arm arm, RangeOutcomes outcomes) = result?.Reference is not null
+                ? (result.ReferenceArm, result.Reference)
+                : result?.Candidates.FirstOrDefault() ?? default;
+            if (arm is null)
+            {
+                mismatches.Add($"{testCase.Id}: the case states an outcome for {stated.Tier}<{TypeNames.Of(stated.Target)}>, and no arm runs that facet.");
+                continue;
+            }
+
+            foreach (Rows rows in new[] { Rows.All, Rows.Tail })
+            {
+                Outcome actual = outcomes.For(rows);
+                string difference = actual is null ? null : stated.Expected.Verify(actual, rows, tailCaseRow, this);
+                if (difference is not null)
+                {
+                    mismatches.Add($"{result.Facet}{Describe(result.Facet, rows)}: {arm.Name} gives {actual}; the source test states {stated.Expected}: {difference}.");
+                }
+            }
+        }
+    }
+
     // The row range, for a facet that has one.
     private string Describe(Facet facet, Rows rows)
-        => facet.IsAnswer ? string.Empty : rows == Rows.All ? $" rows [0, {testCase.RowCount})" : $" rows [{tailStart}, {testCase.RowCount})";
+        => facet.IsAnswer ? string.Empty
+            : rows == Rows.All ? $" rows [0, {testCase.RowCount})"
+            : $" rows [{tailStart}, {tailStart + tailCount}){(tailHasPrecedingRow ? " after a preceding row" : string.Empty)}";
 }

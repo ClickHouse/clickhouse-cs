@@ -19,18 +19,19 @@ public class DifferentialTests
     /// </summary>
     private static readonly Dictionary<(Tier Tier, string Kind), int> ExpectedReferenceOutcomes = new()
     {
-        [(Tier.ReadAs, "Refused")] = 30,
-        [(Tier.ReadAs, "Values")] = 455,
-        [(Tier.Poco, "Failed")] = 5,
-        [(Tier.Poco, "Refused")] = 17,
-        [(Tier.Poco, "Values")] = 463,
-        [(Tier.CanRead, "Answer False")] = 30,
-        [(Tier.CanRead, "Answer True")] = 455,
-        [(Tier.Write, "Bytes")] = 715,
+        [(Tier.ReadAs, "Failed")] = 18,
+        [(Tier.ReadAs, "Refused")] = 32,
+        [(Tier.ReadAs, "Values")] = 517,
+        [(Tier.Poco, "Failed")] = 23,
+        [(Tier.Poco, "Refused")] = 19,
+        [(Tier.Poco, "Values")] = 525,
+        [(Tier.CanRead, "Answer False")] = 32,
+        [(Tier.CanRead, "Answer True")] = 535,
+        [(Tier.Write, "Bytes")] = 777,
         [(Tier.Write, "Refused")] = 12,
-        [(Tier.Write, "Unavailable")] = 22,
-        [(Tier.CanWrite, "Answer False")] = 58,
-        [(Tier.CanWrite, "Answer True")] = 691,
+        [(Tier.Write, "Unavailable")] = 42,
+        [(Tier.CanWrite, "Answer False")] = 60,
+        [(Tier.CanWrite, "Answer True")] = 771,
     };
 
     [TestCaseSource(typeof(DifferentialCases), nameof(DifferentialCases.All))]
@@ -51,7 +52,22 @@ public class DifferentialTests
             Assert.That(bySource[CaseSource.InsertRoundTrip].Count(), Is.EqualTo(DifferentialCases.InsertRoundTripCount), "InsertRoundTripCase.CasesFor(TcpFeature.All)");
             Assert.That(bySource[CaseSource.CompositeLiftMatrix].Count(), Is.EqualTo(DifferentialCases.CompositeLiftMatrixCount), "CompositeLiftMatrixTests.Cases()");
             Assert.That(bySource[CaseSource.ColumnReadProjection].Count(), Is.EqualTo(DifferentialCases.ColumnReadProjectionCount), "the column types of ColumnReadProjectionTests");
+            Assert.That(bySource[CaseSource.ColumnReadScenario].Count(), Is.EqualTo(DifferentialCases.ColumnReadScenarioCount), "the scenarios of ColumnReadProjectionTests");
+            Assert.That(bySource.Sum(g => g.Count()), Is.EqualTo(DifferentialCases.All().Count()), "every case has one of these sources");
         });
+    }
+
+    [Test]
+    public void Run_EveryCase_RunsEachReadAndWriteFacetOnATailThatStartsAboveZero()
+    {
+        string[] withoutTail = DifferentialCases.All()
+            .Select(DifferentialEngine.ForCurrentRegistry)
+            .SelectMany(report => report.Facets
+                .Where(f => !f.Facet.IsAnswer && (report.TailStart <= 0 || f.Reference?.Tail is null))
+                .Select(f => f.Facet.ToString()))
+            .ToArray();
+
+        Assert.That(withoutTail, Is.Empty);
     }
 
     [Test]

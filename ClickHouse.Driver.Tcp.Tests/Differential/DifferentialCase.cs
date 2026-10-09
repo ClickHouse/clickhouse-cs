@@ -14,6 +14,9 @@ public enum CaseSource
 
     /// <summary>A column type that <c>ColumnReadProjectionTests</c> reads, with each CLR type it reads that type as.</summary>
     ColumnReadProjection,
+
+    /// <summary>A value or error scenario of <c>ColumnReadProjectionTests</c>: its own values, read as its target.</summary>
+    ColumnReadScenario,
 }
 
 /// <summary>What a <see cref="WriteInput"/> writes.</summary>
@@ -41,7 +44,8 @@ public sealed class DifferentialCase
         string columnType,
         int rowCount,
         IReadOnlyList<Type> readTargets,
-        IReadOnlyList<WriteInput> writeInputs)
+        IReadOnlyList<WriteInput> writeInputs,
+        IReadOnlyList<StatedOutcome> stated = null)
     {
         if (writeInputs.Count == 0 || writeInputs[0].Kind != WriteInputKind.Built)
         {
@@ -54,6 +58,7 @@ public sealed class DifferentialCase
         RowCount = rowCount;
         ReadTargets = readTargets;
         WriteInputs = writeInputs;
+        Stated = stated ?? Array.Empty<StatedOutcome>();
     }
 
     /// <summary>The unique name of the case. A deliberate change names the case by this value.</summary>
@@ -76,6 +81,9 @@ public sealed class DifferentialCase
     /// facets decode those bytes.
     /// </summary>
     public IReadOnlyList<WriteInput> WriteInputs { get; }
+
+    /// <summary>The outcomes that the source test of the case states. The reference must give each of them.</summary>
+    internal IReadOnlyList<StatedOutcome> Stated { get; }
 
     /// <summary>The facets of the case: each read target in each read tier, then each write input in each write tier.</summary>
     /// <returns>The facets, in a fixed order.</returns>
@@ -142,6 +150,29 @@ public sealed class WriteInput
 
     /// <inheritdoc/>
     public override string ToString() => Label;
+}
+
+/// <summary>
+/// An outcome that the source test of a case states for one read facet, for example the values or the exception of a
+/// <c>ColumnReadScenario</c>. The reference must give it, for all rows and for the tail.
+/// </summary>
+internal sealed class StatedOutcome
+{
+    public StatedOutcome(Tier tier, Type target, Expectation expected)
+    {
+        Tier = tier;
+        Target = target;
+        Expected = expected;
+    }
+
+    /// <summary>The tier of the facet: <see cref="Tier.ReadAs"/>, <see cref="Tier.Poco"/> or <see cref="Tier.CanRead"/>.</summary>
+    public Tier Tier { get; }
+
+    /// <summary>The read target of the facet.</summary>
+    public Type Target { get; }
+
+    /// <summary>The outcome that the reference must give.</summary>
+    public Expectation Expected { get; }
 }
 
 /// <summary>An entry point of the client that the differential tests compare.</summary>

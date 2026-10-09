@@ -9,7 +9,10 @@ internal enum Rows
     /// <summary>All rows, <c>[0, RowCount)</c>.</summary>
     All,
 
-    /// <summary>The tail, <c>[RowCount / 2, RowCount)</c>: a read window or a write slice with a start above zero.</summary>
+    /// <summary>
+    /// The tail: a read window or a write slice with a start above zero. For a case of two rows or more it is
+    /// <c>[RowCount / 2, RowCount)</c>. For a case of one row it is row 1 of a column that has a row before the case's row.
+    /// </summary>
     Tail,
 }
 
@@ -45,7 +48,7 @@ internal sealed class Expectation
     /// <summary>A description of the expected outcome, for failure messages.</summary>
     public string Description { get; }
 
-    /// <summary>These values, for all rows. The tail must be the same values from row <c>RowCount / 2</c>.</summary>
+    /// <summary>These values, for all rows. The tail must be the same values from the first row of the case that the tail reads.</summary>
     /// <param name="values">The values, boxed, one for each row.</param>
     /// <returns>The expectation.</returns>
     public static Expectation Values(params object[] values)
@@ -111,31 +114,48 @@ internal sealed class Expectation
 
     /// <summary>A refusal with an exception of this type whose message contains this text, for every row range.</summary>
     /// <typeparam name="TException">The exception type.</typeparam>
-    /// <param name="messagePart">Text that the message must contain.</param>
+    /// <param name="messageParts">Text that the message must contain.</param>
     /// <returns>The expectation.</returns>
-    public static Expectation Refused<TException>(string messagePart)
+    public static Expectation Refused<TException>(params string[] messageParts)
         where TException : Exception
+        => Refused(typeof(TException), messageParts);
+
+    /// <summary>A refusal with an exception of this type whose message contains this text, for every row range.</summary>
+    /// <param name="exceptionType">The exception type.</param>
+    /// <param name="messageParts">Text that the message must contain.</param>
+    /// <returns>The expectation.</returns>
+    public static Expectation Refused(Type exceptionType, params string[] messageParts)
         => new(
-            $"a refusal with {typeof(TException).Name} that contains \"{messagePart}\"",
-            (actual, _, _, _) => ExceptionDifference(actual, OutcomeKind.Refused, typeof(TException), messagePart));
+            $"a refusal with {exceptionType.Name} that contains {Quote(messageParts)}",
+            (actual, _, _, _) => ExceptionDifference(actual, OutcomeKind.Refused, exceptionType, messageParts));
 
     /// <summary>
     /// A failure with an exception of this type whose message contains this text, for all rows. The tail is not
     /// checked, because it may not contain the row that fails.
     /// </summary>
     /// <typeparam name="TException">The exception type.</typeparam>
-    /// <param name="messagePart">Text that the message must contain.</param>
+    /// <param name="messageParts">Text that the message must contain.</param>
     /// <returns>The expectation.</returns>
-    public static Expectation Fails<TException>(string messagePart)
+    public static Expectation Fails<TException>(params string[] messageParts)
         where TException : Exception
+        => Fails(typeof(TException), messageParts);
+
+    /// <summary>
+    /// A failure with an exception of this type whose message contains this text, for all rows. The tail is not
+    /// checked, because it may not contain the row that fails.
+    /// </summary>
+    /// <param name="exceptionType">The exception type.</param>
+    /// <param name="messageParts">Text that the message must contain.</param>
+    /// <returns>The expectation.</returns>
+    public static Expectation Fails(Type exceptionType, params string[] messageParts)
         => new(
-            $"a failure with {typeof(TException).Name} that contains \"{messagePart}\"",
-            (actual, rows, _, _) => rows == Rows.All ? ExceptionDifference(actual, OutcomeKind.Failed, typeof(TException), messagePart) : null);
+            $"a failure with {exceptionType.Name} that contains {Quote(messageParts)}",
+            (actual, rows, _, _) => rows == Rows.All ? ExceptionDifference(actual, OutcomeKind.Failed, exceptionType, messageParts) : null);
 
     /// <summary>Checks an outcome against the expectation.</summary>
     /// <param name="actual">The outcome.</param>
     /// <param name="rows">The row range of the outcome.</param>
-    /// <param name="tailStart">The first row of the tail.</param>
+    /// <param name="tailStart">The first row of the case that the tail covers.</param>
     /// <param name="references">The reference outcomes of the case.</param>
     /// <returns>Null when the outcome meets the expectation, otherwise why not.</returns>
     public string Verify(Outcome actual, Rows rows, int tailStart, IReferenceOutcomes references)
@@ -144,7 +164,9 @@ internal sealed class Expectation
     /// <inheritdoc/>
     public override string ToString() => Description;
 
-    private static string ExceptionDifference(Outcome actual, OutcomeKind kind, Type exceptionType, string messagePart)
+    private static string Quote(string[] parts) => string.Join(" and ", parts.Select(part => $"\"{part}\""));
+
+    private static string ExceptionDifference(Outcome actual, OutcomeKind kind, Type exceptionType, string[] messageParts)
     {
         if (actual.Kind != kind)
         {
@@ -156,8 +178,7 @@ internal sealed class Expectation
             return $"the exception is {actual.ExceptionType.Name}, not {exceptionType.Name}";
         }
 
-        return actual.Message.Contains(messagePart, StringComparison.Ordinal)
-            ? null
-            : $"the message \"{actual.Message}\" does not contain \"{messagePart}\"";
+        string missing = messageParts.FirstOrDefault(part => !actual.Message.Contains(part, StringComparison.Ordinal));
+        return missing is null ? null : $"the message \"{actual.Message}\" does not contain \"{missing}\"";
     }
 }
