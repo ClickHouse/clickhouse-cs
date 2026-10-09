@@ -7,8 +7,8 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Poco;
 
 /// <summary>
-/// The tier selection of <see cref="LegacyPocoColumnScatterFactory"/>, the POCO scatter before the POCO tier moved onto
-/// the converter derivation. It stays as the reference path of the differential tests until the old path is removed.
+/// The tier selection of <see cref="LegacyPocoColumnScatterFactory"/>, the scatter of the reference path of the
+/// differential tests, which stays until the old path is removed.
 /// </summary>
 [TestFixture]
 public class LegacyPocoColumnScatterFactoryTests

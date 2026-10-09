@@ -58,8 +58,8 @@ internal sealed class PocoReadPlan<T>
 
     /// <summary>
     /// Compiles the plan for <paramref name="block"/>'s shape with the scatters of
-    /// <see cref="LegacyPocoColumnScatterFactory"/>: the POCO tier before it moved onto the converter derivation. It is
-    /// the reference path of the differential tests, and only the tests call it.
+    /// <see cref="LegacyPocoColumnScatterFactory"/>, which use <see cref="PocoValueProjection"/> and the projections of
+    /// the codecs. It is the reference path of the differential tests, and only the tests call it.
     /// </summary>
     /// <param name="descriptor">The POCO type's mapping.</param>
     /// <param name="block">A block of the shape to plan for; only its header and its columns' runtime shapes are read.</param>

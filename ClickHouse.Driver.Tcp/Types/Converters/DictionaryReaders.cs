@@ -10,8 +10,8 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 
 /// <summary>
 /// <c>LowCardinality(X)</c> read as <typeparamref name="T"/>, and <c>LowCardinality(Nullable(X))</c> read as a
-/// reference type. The child converts the dictionary entries one time for a bound column, and each row gives the entry
-/// of its key, so the rows that share a key share one value.
+/// reference type. The child converts the dictionary entries one time for each column, and each row gives the entry of
+/// its key, so the rows that share a key share one value.
 /// </summary>
 /// <remarks>
 /// <para>
