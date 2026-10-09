@@ -282,6 +282,32 @@ public class LeafWriterTests
         Assert.That(placeholder, Is.EqualTo(new byte[size]));
     }
 
+    [Test]
+    public void ConvertScalar_Uuids_GivesTheBytesOfTheCurrentWrite()
+    {
+        Guid[] values =
+        {
+            Guid.Empty,
+            new("00112233-4455-6677-8899-aabbccddeeff"),
+            new("ffeeddcc-bbaa-9988-7766-554433221100"),
+            new("0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"),
+            new("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+        };
+
+        foreach (Guid value in values)
+        {
+            byte[] expected = ConverterHarness.WriteOldAsync("UUID", new[] { value }, 0, 1).GetAwaiter().GetResult();
+            UInt128 scalar = UuidBytes.ConvertScalar(value);
+            UInt128 converted = default(UuidBytes).Convert(value, 0);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(System.Runtime.InteropServices.MemoryMarshal.AsBytes(new[] { scalar }.AsSpan()).ToArray(), Is.EqualTo(expected), $"{value}: scalar");
+                Assert.That(converted, Is.EqualTo(scalar), $"{value}: the conversion of this runtime");
+            });
+        }
+    }
+
     /// <summary>
     /// The canonical value of a fixed-width leaf is its wire value, so its bytes in memory are the bytes that a write
     /// gives. The dictionary of a LowCardinality write relies on this.
