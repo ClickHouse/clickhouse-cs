@@ -266,7 +266,7 @@ internal sealed class Leaf
     /// <returns>A <see cref="ColumnWriter{T}"/> of <paramref name="clrType"/>, or null.</returns>
     public ColumnWriter CreateWriter(IColumnCodec codec, Type clrType) => (ColumnWriter)Find(writes, codec, clrType)?.Create(codec);
 
-    /// <summary>Why the leaf does not read as <paramref name="clrType"/>, in the style of the current messages.</summary>
+    /// <summary>Why the leaf does not read as <paramref name="clrType"/>, in the style of the codec messages.</summary>
     /// <param name="node">The leaf type as written.</param>
     /// <param name="codec">The codec of the instance.</param>
     /// <param name="clrType">The CLR type that was asked for.</param>
@@ -274,7 +274,7 @@ internal sealed class Leaf
     public string ReadRefusal(TypeNode node, IColumnCodec codec, Type clrType)
         => $"'{node}' cannot be read as {clrType}. It reads as: {string.Join(", ", ReadTypes(codec))}.";
 
-    /// <summary>Why the leaf does not write from <paramref name="clrType"/>, in the style of the current messages.</summary>
+    /// <summary>Why the leaf does not write from <paramref name="clrType"/>, in the style of the codec messages.</summary>
     /// <param name="node">The leaf type as written.</param>
     /// <param name="codec">The codec of the instance.</param>
     /// <param name="clrType">The CLR type that was asked for.</param>

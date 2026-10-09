@@ -29,7 +29,7 @@ internal sealed class Derivation
     /// </summary>
     public object Converter { get; }
 
-    /// <summary>Why there is no converter, in the style of the current messages. Null when the derivation succeeded.</summary>
+    /// <summary>Why there is no converter, in the style of the codec messages. Null when the derivation succeeded.</summary>
     public string Refusal { get; }
 
     /// <summary>Whether the derivation gave a converter.</summary>
@@ -49,7 +49,7 @@ internal sealed class Derivation
 /// <summary>
 /// <c>Derive(type, context, T, direction)</c>: builds the converter tree that reads a ClickHouse type as a CLR type,
 /// or writes it from one, or the reason that there is none. The result is cached by (type, timezone, CLR type,
-/// direction), so a tree is built one time and then shared by every query and every thread.
+/// direction), so later calls with the same key get the same tree, on every thread.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -137,8 +137,8 @@ internal sealed class ConverterDerivation
     }
 
     /// <summary>
-    /// Derives the tree for one node of a parsed type. A combinator calls this for each of its children, with the
-    /// root of the column type, so that a refusal inside a composite names the column type.
+    /// Derives the tree for one node of a parsed type. A combinator can call this for each of its children, with
+    /// the root of the column type, so that a refusal inside a composite names the column type.
     /// </summary>
     /// <param name="node">The node to derive.</param>
     /// <param name="root">The root of the column type.</param>
@@ -167,7 +167,7 @@ internal sealed class ConverterDerivation
     }
 
     // Validates the whole type first, so a malformed or an unsupported type throws the same exception as a codec
-    // resolution does today, with the same message.
+    // resolution, with the same message.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     private Derivation DeriveUncached(string type, in ResolveContext context, Type clrType, ConversionDirection direction)
     {

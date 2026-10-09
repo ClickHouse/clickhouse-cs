@@ -56,7 +56,7 @@ internal sealed class ValueLeafReader<TStored, T, TConv> : ColumnReader<T>
             ReadOnlySpan<TStored> source = column.Values.Slice(start, destination.Length);
 
             // The identity conversion has TStored equal to T, so the stored span is already the result. The type
-            // test is a constant for each TConv, so the JIT keeps one branch.
+            // test depends only on the type arguments.
             if (typeof(TConv) == typeof(Identity<TStored>))
             {
                 MemoryMarshal.CreateReadOnlySpan(ref Unsafe.As<TStored, T>(ref MemoryMarshal.GetReference(source)), source.Length)

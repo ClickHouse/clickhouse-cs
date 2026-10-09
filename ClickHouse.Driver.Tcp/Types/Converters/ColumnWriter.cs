@@ -20,7 +20,7 @@ internal abstract class ColumnWriter
     public abstract Type ValueType { get; }
 
     /// <summary>
-    /// Whether <see cref="ColumnWriter{T}.WritePrefix"/> writes bytes. A composite asks its children, so it can skip
+    /// Whether <see cref="ColumnWriter{T}.WritePrefix"/> writes bytes. A composite can ask its children, and skip
     /// the prefix phase when no child has a prefix.
     /// </summary>
     public virtual bool HasPrefix => false;

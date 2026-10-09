@@ -7,9 +7,9 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 
 /// <summary>
 /// A write leaf whose canonical value is a fixed-width wire value (see <see cref="IWriteConversion{T, TWire}"/>):
-/// every leaf except <c>String</c>, <c>FixedString</c> and <c>JSON</c>. The LowCardinality writer uses
-/// <see cref="ToCanonical(ReadOnlySpan{T}, Span{TWire}, int)"/> and <see cref="Encode"/> to intern and write its
-/// dictionary.
+/// every leaf that has a writer, except <c>String</c>, <c>FixedString</c> and <c>JSON</c>. A LowCardinality writer
+/// can intern and write its dictionary with <see cref="ToCanonical(ReadOnlySpan{T}, Span{TWire}, int)"/> and
+/// <see cref="Encode"/>.
 /// </summary>
 /// <typeparam name="T">The CLR type that the leaf writes.</typeparam>
 /// <typeparam name="TWire">The canonical value: its bytes in memory are the wire bytes.</typeparam>

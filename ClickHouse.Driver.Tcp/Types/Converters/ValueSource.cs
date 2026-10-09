@@ -10,8 +10,8 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// <remarks>
 /// <para>
 /// A source can also mark positions that have no value (<see cref="Absent"/>). A writer writes its canonical
-/// placeholder at such a position and does not read the value there. The <c>Nullable</c> writer uses this to put
-/// the placeholder under each NULL, and a composite gives the same marks to each of its streams.
+/// placeholder at such a position and does not read the value there. So a <c>Nullable</c> writer can put the
+/// placeholder under each NULL, and a composite can give the same marks to each of its streams.
 /// </para>
 /// <para>
 /// The source borrows its spans, so it is valid only while the caller keeps them alive.

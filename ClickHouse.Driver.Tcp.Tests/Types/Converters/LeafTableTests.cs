@@ -134,7 +134,7 @@ public class LeafTableTests
         Assert.That(disagreements, Is.Empty);
     }
 
-    /// <summary>The table that the handoff of this change lists: each leaf, with its read and write types.</summary>
+    /// <summary>Lists each leaf with its read and write types, as a Markdown table.</summary>
     internal static string Describe()
     {
         static string Name(LeafPair pair) => (pair.IsConversion ? "*" : string.Empty) + pair.ClrType.Name;
