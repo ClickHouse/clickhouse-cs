@@ -171,11 +171,11 @@ internal static class BlockWriter
             {
                 // Compute any per-operation scratch once, share it across the prefix and body phases (a
                 // data-dependent prefix and the element-flattening composites need this), and free it after.
-                IColumnWriteState state = column.Codec.BeginWrite(column.Values, start, rowCount);
+                IColumnWriteState state = column.Write.Begin(column.Values, start, rowCount);
                 try
                 {
-                    column.Codec.WriteStatePrefix(writer, column.Values, start, rowCount, state);
-                    column.Codec.WriteColumn(writer, column.Values, start, rowCount, state);
+                    column.Write.WritePrefix(writer, column.Values, start, rowCount, state);
+                    column.Write.Write(writer, column.Values, start, rowCount, state);
                 }
                 finally
                 {
