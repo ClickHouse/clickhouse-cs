@@ -115,15 +115,57 @@ public class DifferentialSelfTests
     [Test]
     public void Run_DeclaredFailureThatTheCandidateMakes_ReportsNothing()
     {
-        // The reference refuses ReadAs<DateTime> over a Nullable column; the POCO plan reads it and fails at the first NULL.
+        // The reference refuses ReadAs<DateTime> over a Nullable column; the POCO plan reads it and fails at the first
+        // NULL: row 1 for all rows, row 4 for the tail [2, 5).
         CaseReport report = RunWith(NullableDateTimeCase, r =>
         {
             r.Add(new PocoAsReadAsArm(NullableDateTimeCase, typeof(DateTime), typeof(uint)), expectedFacets: 2);
-            r.DeclareChange(NullableDateTimeCase, Tier.ReadAs, typeof(DateTime), Expectation.Fails<InvalidOperationException>("is NULL at row 1"), "a test");
-            r.DeclareChange(NullableDateTimeCase, Tier.ReadAs, typeof(uint), Expectation.Fails<InvalidOperationException>("is NULL at row 1"), "a test");
+            r.DeclareChange(NullableDateTimeCase, Tier.ReadAs, typeof(DateTime), FailsAtTheFirstNull, "a test");
+            r.DeclareChange(NullableDateTimeCase, Tier.ReadAs, typeof(uint), FailsAtTheFirstNull, "a test");
         });
 
         Assert.That(report.Mismatches, Is.Empty);
+    }
+
+    [Test]
+    public void Run_DeclaredFailureWithOneTextForBothRanges_ReportsTheTail()
+    {
+        CaseReport report = RunWith(NullableDateTimeCase, r =>
+        {
+            r.Add(new PocoAsReadAsArm(NullableDateTimeCase, typeof(DateTime)), expectedFacets: 1);
+            r.DeclareChange(NullableDateTimeCase, Tier.ReadAs, typeof(DateTime), Expectation.Fails<InvalidOperationException>("is NULL at row 1"), "a test");
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<DateTime> rows [2, 5): Poco as ReadAs gives failed").And.Contains("does not contain \"is NULL at row 1\""));
+            Assert.That(report.Mismatches, Has.None.Contains("rows [0, 5)"), "the read of all rows fails at row 1");
+        });
+    }
+
+    [TestCase(TailFault.GivesValues, "the kind is Values, not Failed")]
+    [TestCase(TailFault.FailsAtAnotherRow, "does not contain \"is NULL at row 4\"")]
+    public void Run_DeclaredFailureThatTheCandidateMakesForAllRowsOnly_ReportsTheTail(TailFault fault, string difference)
+    {
+        CaseReport report = RunWith(NullableDateTimeCase, r =>
+        {
+            r.Add(new WrongTailReadArm(NullableDateTimeCase, typeof(DateTime), fault), expectedFacets: 1);
+            r.DeclareChange(NullableDateTimeCase, Tier.ReadAs, typeof(DateTime), FailsAtTheFirstNull, "a test");
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<DateTime> rows [2, 5): Wrong tail gives").And.Contains(difference));
+            Assert.That(report.Mismatches, Has.None.Contains("rows [0, 5)"), "the read of all rows fails at row 1");
+        });
+    }
+
+    [Test]
+    public void Run_CandidateThatFailsForAllRowsAndRefusesTheTail_ReportsTheTail()
+    {
+        CaseReport report = RunWith(OneRowArrayCase, r => r.Add(new RefusingTailReadArm(OneRowArrayCase), expectedFacets: 1));
+
+        Assert.That(report.Mismatches, Has.Some.Contains("Refusing tail reads rows [1, 2) after a preceding row alone as refused").And.Contains("the read of all rows fails, and the tail is Refused"));
     }
 
     [Test]
@@ -360,6 +402,21 @@ public class DifferentialSelfTests
         });
     }
 
+    /// <summary>What <see cref="WrongTailReadArm"/> does for the tail.</summary>
+    public enum TailFault
+    {
+        /// <summary>The tail gives values.</summary>
+        GivesValues,
+
+        /// <summary>The tail fails at row 2, which is not NULL.</summary>
+        FailsAtAnotherRow,
+    }
+
+    // The first NULL of the Nullable(DateTime('UTC')) sample is row 1; the first NULL of the tail [2, 5) is row 4.
+    private static Expectation FailsAtTheFirstNull => Expectation.ForRows(
+        Expectation.Fails<InvalidOperationException>("is NULL at row 1"),
+        Expectation.Fails<InvalidOperationException>("is NULL at row 4"));
+
     private static CaseReport RunWith(string caseId, Action<DifferentialRegistry> register)
     {
         DifferentialRegistry registry = DifferentialRegistry.WithReference();
@@ -448,6 +505,49 @@ public class DifferentialSelfTests
         public override bool Covers(Facet facet) => facet.Case.Id == caseId && (targets.Length == 0 || targets.Contains(facet.Target));
 
         public override RowReader<T> Bind<T>(Block block) => ClientArms.Poco.Bind<T>(block);
+    }
+
+    /// <summary>The POCO read plan as a ReadAs candidate, with a wrong tail.</summary>
+    private sealed class WrongTailReadArm : ReadArm
+    {
+        private readonly string caseId;
+        private readonly Type target;
+        private readonly TailFault fault;
+
+        public WrongTailReadArm(string caseId, Type target, TailFault fault)
+            : base("Wrong tail", Tier.ReadAs)
+        {
+            this.caseId = caseId;
+            this.target = target;
+            this.fault = fault;
+        }
+
+        public override bool Covers(Facet facet) => facet.Case.Id == caseId && facet.Target == target;
+
+        public override RowReader<T> Bind<T>(Block block)
+        {
+            RowReader<T> inner = ClientArms.Poco.Bind<T>(block);
+            return (start, count) => start == 0 ? inner(start, count)
+                : fault == TailFault.GivesValues ? new T[count]
+                : throw new InvalidOperationException("Column 'value' is NULL at row 2 of the result.");
+        }
+    }
+
+    /// <summary>Fails for all rows, and refuses the block of the tail. Covers ReadAs of one one-row case.</summary>
+    private sealed class RefusingTailReadArm : ReadArm
+    {
+        private readonly string caseId;
+
+        public RefusingTailReadArm(string caseId)
+            : base("Refusing tail", Tier.ReadAs) => this.caseId = caseId;
+
+        public override bool Covers(Facet facet) => facet.Case.Id == caseId;
+
+        // The tail of a one-row case reads a block of two rows.
+        public override RowReader<T> Bind<T>(Block block)
+            => block.RowCount == 2
+                ? throw new ArmRefusal("a test refuses the tail")
+                : (_, _) => throw new InvalidOperationException("a test fails every read");
     }
 
     /// <summary>The client's write, then one more byte. Covers the Write facets of the UInt8 case.</summary>

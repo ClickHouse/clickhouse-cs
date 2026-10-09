@@ -494,10 +494,14 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
             return;
         }
 
+        // A read of all rows that fails can have a tail that fails too or that gives values, because the tail may not
+        // contain the row that fails. It cannot have a tail that is refused.
         string difference = outcomes.All.Kind switch
         {
             OutcomeKind.Values => Outcome.Difference(outcomes.All.Tail(tailCaseRow), outcomes.Tail),
             OutcomeKind.Refused => Outcome.Difference(outcomes.All, outcomes.Tail),
+            OutcomeKind.Failed when outcomes.Tail.Kind is not (OutcomeKind.Failed or OutcomeKind.Values)
+                => $"the read of all rows fails, and the tail is {outcomes.Tail.Kind}",
             _ => null,
         };
 

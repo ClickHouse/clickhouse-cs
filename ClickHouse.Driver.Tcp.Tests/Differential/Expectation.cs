@@ -130,8 +130,9 @@ internal sealed class Expectation
             (actual, _, _, _) => ExceptionDifference(actual, OutcomeKind.Refused, exceptionType, messageParts));
 
     /// <summary>
-    /// A failure with an exception of this type whose message contains this text, for all rows. The tail is not
-    /// checked, because it may not contain the row that fails.
+    /// A failure with an exception of this type whose message contains this text, for all rows and for the tail.
+    /// When the tail fails with other text (for example at another row) or gives values, use
+    /// <see cref="ForRows"/> to give the tail an expectation of its own.
     /// </summary>
     /// <typeparam name="TException">The exception type.</typeparam>
     /// <param name="messageParts">Text that the message must contain.</param>
@@ -141,8 +142,9 @@ internal sealed class Expectation
         => Fails(typeof(TException), messageParts);
 
     /// <summary>
-    /// A failure with an exception of this type whose message contains this text, for all rows. The tail is not
-    /// checked, because it may not contain the row that fails.
+    /// A failure with an exception of this type whose message contains this text, for all rows and for the tail.
+    /// When the tail fails with other text (for example at another row) or gives values, use
+    /// <see cref="ForRows"/> to give the tail an expectation of its own.
     /// </summary>
     /// <param name="exceptionType">The exception type.</param>
     /// <param name="messageParts">Text that the message must contain.</param>
@@ -150,7 +152,19 @@ internal sealed class Expectation
     public static Expectation Fails(Type exceptionType, params string[] messageParts)
         => new(
             $"a failure with {exceptionType.Name} that contains {Quote(messageParts)}",
-            (actual, rows, _, _) => rows == Rows.All ? ExceptionDifference(actual, OutcomeKind.Failed, exceptionType, messageParts) : null);
+            (actual, _, _, _) => ExceptionDifference(actual, OutcomeKind.Failed, exceptionType, messageParts));
+
+    /// <summary>
+    /// One expectation for all rows and another for the tail. Each part checks its own range only. A
+    /// <see cref="Values"/> part lists the values of all rows, as it does alone.
+    /// </summary>
+    /// <param name="all">The expectation for all rows.</param>
+    /// <param name="tail">The expectation for the tail.</param>
+    /// <returns>The expectation.</returns>
+    public static Expectation ForRows(Expectation all, Expectation tail)
+        => new(
+            $"{all.Description} for all rows, and {tail.Description} for the tail",
+            (actual, rows, tailStart, references) => (rows == Rows.All ? all : tail).Verify(actual, rows, tailStart, references));
 
     /// <summary>Checks an outcome against the expectation.</summary>
     /// <param name="actual">The outcome.</param>
