@@ -43,7 +43,9 @@ internal sealed class ClrKeyedByteInterner<T> : IDisposable
     public ClrKeyedByteInterner(BytesLeafWriter<T> leaf, bool nullable)
     {
         this.leaf = leaf ?? throw new ArgumentNullException(nameof(leaf));
-        canonical = new ByteInterner(leaf.Placeholder, nullable);
+
+        // The interner copies the placeholder, so the scratch that holds it can serve the values next.
+        canonical = new ByteInterner(leaf.GetPlaceholder(ref scratch), nullable);
         clrKeys = leaf.ClrEqualityImpliesCanonicalEquality ? new Dictionary<T, int>() : null;
     }
 

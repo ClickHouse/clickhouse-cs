@@ -236,8 +236,8 @@ public class LeafWriterTests
             FixedLeafWriter<uint, uint> w => w.Placeholder,
             FixedLeafWriter<DateTimeOffset, uint> w => w.Placeholder,
             FixedLeafWriter<DateTime, uint> w => w.Placeholder,
-            BytesLeafWriter<string> w => Convert.ToHexString(w.Placeholder),
-            BytesLeafWriter<byte[]> w => Convert.ToHexString(w.Placeholder),
+            BytesLeafWriter<string> w => Convert.ToHexString(Placeholder(w)),
+            BytesLeafWriter<byte[]> w => Convert.ToHexString(Placeholder(w)),
             _ => throw new ArgumentException($"No placeholder accessor for {writer.GetType()}."),
         };
 
@@ -255,6 +255,31 @@ public class LeafWriterTests
             Assert.That(Canonical(Derivation.Writer<string>("FixedString(3)", ConverterHarness.Context)), Is.EqualTo("000000"));
             Assert.That(Canonical(Derivation.Writer<string>("JSON", ConverterHarness.Context)), Is.EqualTo("7B7D"));
         });
+    }
+
+    /// <summary>
+    /// A wide <c>FixedString</c> writes its placeholder in chunks: under marks, from bytes and from text, the leaf gives
+    /// the bytes of the current <c>Nullable</c> write, and its <c>WritePlaceholder</c> gives N zero bytes.
+    /// </summary>
+    [Test]
+    public async Task Write_WideFixedStringUnderMarks_GivesTheCurrentNullableBytes()
+    {
+        const int size = 10_000;
+        const string type = "FixedString(10000)";
+        string[] texts = { "a", "b", new string('x', size), "c", "é" };
+        byte[][] padded = texts.Select(text => Padded(text, size)).ToArray();
+        byte[] marks = Marks(texts.Length);
+        byte[] expected = await ConverterHarness.WriteOldAsync(
+            $"Nullable({type})",
+            padded.Select((value, i) => marks[i] != 0 ? null : value).ToArray(),
+            0,
+            padded.Length);
+        var bytesLeaf = (BytesLeafWriter<byte[]>)Derivation.Writer<byte[]>(type, ConverterHarness.Context);
+        byte[] placeholder = await CodecTestHarness.WriteAsync(bytesLeaf.WritePlaceholder);
+
+        await AssertMarkedWriteAsync(type, padded.Select((value, i) => marks[i] != 0 ? null : value).ToArray(), marks, expected);
+        await AssertMarkedWriteAsync(type, texts.Select((value, i) => marks[i] != 0 ? null : value).ToArray(), marks, expected);
+        Assert.That(placeholder, Is.EqualTo(new byte[size]));
     }
 
     /// <summary>
@@ -459,6 +484,12 @@ public class LeafWriterTests
                 }
             }
         }
+    }
+
+    private static byte[] Placeholder<T>(BytesLeafWriter<T> leaf)
+    {
+        byte[] scratch = Array.Empty<byte>();
+        return leaf.GetPlaceholder(ref scratch).ToArray();
     }
 
     private static byte[] Padded(string text, int size)

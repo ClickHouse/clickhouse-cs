@@ -15,9 +15,16 @@ internal abstract class BytesLeafWriter<T> : ColumnWriter<T>
 {
     /// <summary>
     /// The canonical bytes that the leaf writes at a position that has no value (for example under a NULL). They are
-    /// the same for every CLR type that the leaf writes.
+    /// the same for every CLR type that the leaf writes. A leaf of a parametric width keeps no buffer of that width:
+    /// it gives the bytes in <paramref name="scratch"/>, so a cached tree stays small.
     /// </summary>
-    public abstract ReadOnlySpan<byte> Placeholder { get; }
+    /// <param name="scratch">A pooled or empty array, which the leaf can replace with a larger one (see <see cref="ToCanonical"/>).</param>
+    /// <returns>The placeholder bytes, valid until the next use of <paramref name="scratch"/>.</returns>
+    public abstract ReadOnlySpan<byte> GetPlaceholder(ref byte[] scratch);
+
+    /// <summary>Writes the canonical placeholder as one value.</summary>
+    /// <param name="writer">The writer to encode into.</param>
+    public abstract void WritePlaceholder(ClickHouseBinaryWriter writer);
 
     /// <summary>
     /// Whether two values that are equal by <see cref="EqualityComparer{T}.Default"/> always have equal canonical
@@ -47,20 +54,7 @@ internal abstract class BytesLeafWriter<T> : ColumnWriter<T>
     /// <summary>Makes <paramref name="scratch"/> at least <paramref name="length"/> bytes long.</summary>
     /// <param name="scratch">A pooled or empty array, which is replaced when it is too short.</param>
     /// <param name="length">The length that is necessary.</param>
-    protected static void EnsureScratch(ref byte[] scratch, int length)
-    {
-        if (scratch.Length >= length)
-        {
-            return;
-        }
-
-        byte[] old = scratch;
-        scratch = ArrayPool<byte>.Shared.Rent(length);
-        if (old.Length != 0)
-        {
-            ArrayPool<byte>.Shared.Return(old);
-        }
-    }
+    protected static void EnsureScratch(ref byte[] scratch, int length) => LeafBytes.EnsureScratch(ref scratch, length);
 }
 
 /// <summary><c>String</c> or <c>JSON</c> from text. The canonical bytes are the UTF-8 encoding of the text.</summary>
@@ -91,7 +85,10 @@ internal sealed class TextStringWriter : BytesLeafWriter<string>
     public override bool HasPrefix => jsonPrefix;
 
     /// <inheritdoc/>
-    public override ReadOnlySpan<byte> Placeholder => placeholder;
+    public override ReadOnlySpan<byte> GetPlaceholder(ref byte[] scratch) => placeholder;
+
+    /// <inheritdoc/>
+    public override void WritePlaceholder(ClickHouseBinaryWriter writer) => writer.WriteString(placeholder);
 
     /// <inheritdoc/>
     // Equal strings have equal UTF-8. Two strings that are not equal can have the same UTF-8: each lone surrogate
@@ -155,7 +152,10 @@ internal sealed class BytesStringWriter : BytesLeafWriter<byte[]>
     }
 
     /// <inheritdoc/>
-    public override ReadOnlySpan<byte> Placeholder => ReadOnlySpan<byte>.Empty;
+    public override ReadOnlySpan<byte> GetPlaceholder(ref byte[] scratch) => ReadOnlySpan<byte>.Empty;
+
+    /// <inheritdoc/>
+    public override void WritePlaceholder(ClickHouseBinaryWriter writer) => writer.WriteString(ReadOnlySpan<byte>.Empty);
 
     /// <inheritdoc/>
     public override ReadOnlySpan<byte> ToCanonical(byte[] value, int position, ref byte[] scratch)
@@ -203,7 +203,6 @@ internal sealed class FixedStringBytesWriter : BytesLeafWriter<byte[]>
 {
     private readonly int size;
     private readonly string typeName;
-    private readonly byte[] placeholder;
 
     /// <summary>Initializes the leaf for one width.</summary>
     /// <param name="size">The <c>N</c> of <c>FixedString(N)</c>.</param>
@@ -212,11 +211,13 @@ internal sealed class FixedStringBytesWriter : BytesLeafWriter<byte[]>
     {
         this.size = size;
         this.typeName = typeName;
-        placeholder = new byte[size];
     }
 
     /// <inheritdoc/>
-    public override ReadOnlySpan<byte> Placeholder => placeholder;
+    public override ReadOnlySpan<byte> GetPlaceholder(ref byte[] scratch) => LeafBytes.Zeros(size, ref scratch);
+
+    /// <inheritdoc/>
+    public override void WritePlaceholder(ClickHouseBinaryWriter writer) => LeafBytes.WriteZeros(writer, size);
 
     /// <inheritdoc/>
     public override ReadOnlySpan<byte> ToCanonical(byte[] value, int position, ref byte[] scratch)
@@ -238,7 +239,7 @@ internal sealed class FixedStringBytesWriter : BytesLeafWriter<byte[]>
             {
                 if (marked && absent[position] != 0)
                 {
-                    writer.WriteBytes(placeholder);
+                    LeafBytes.WriteZeros(writer, size);
                 }
                 else if (values.IsSegmented && !marked)
                 {
@@ -289,7 +290,6 @@ internal sealed class FixedStringTextWriter : BytesLeafWriter<string>
 {
     private readonly int size;
     private readonly string typeName;
-    private readonly byte[] placeholder;
 
     /// <summary>Initializes the leaf for one width.</summary>
     /// <param name="size">The <c>N</c> of <c>FixedString(N)</c>.</param>
@@ -298,11 +298,13 @@ internal sealed class FixedStringTextWriter : BytesLeafWriter<string>
     {
         this.size = size;
         this.typeName = typeName;
-        placeholder = new byte[size];
     }
 
     /// <inheritdoc/>
-    public override ReadOnlySpan<byte> Placeholder => placeholder;
+    public override ReadOnlySpan<byte> GetPlaceholder(ref byte[] scratch) => LeafBytes.Zeros(size, ref scratch);
+
+    /// <inheritdoc/>
+    public override void WritePlaceholder(ClickHouseBinaryWriter writer) => LeafBytes.WriteZeros(writer, size);
 
     /// <inheritdoc/>
     // Equal strings have equal UTF-8, so they have equal padded bytes too.
@@ -337,7 +339,7 @@ internal sealed class FixedStringTextWriter : BytesLeafWriter<string>
                 {
                     if (marked && absent[position] != 0)
                     {
-                        writer.WriteBytes(placeholder);
+                        LeafBytes.WriteZeros(writer, size);
                     }
                     else
                     {
@@ -382,5 +384,56 @@ internal sealed class FixedStringTextWriter : BytesLeafWriter<string>
         }
 
         destination.Slice(written).Clear();
+    }
+}
+
+/// <summary>
+/// Buffers for the byte-run leaves: the placeholder of <c>FixedString(N)</c> (N zero bytes) and the pooled scratch. A
+/// cached tree keeps only N, so a wide type costs no memory until a write needs the bytes.
+/// </summary>
+internal static class LeafBytes
+{
+    // Zero bytes to write from, in chunks of this size. Nothing writes to this array.
+    private static readonly byte[] Chunk = new byte[4096];
+
+    /// <summary>Writes <paramref name="count"/> zero bytes, in chunks of a fixed size.</summary>
+    /// <param name="writer">The writer to encode into.</param>
+    /// <param name="count">The number of zero bytes.</param>
+    public static void WriteZeros(ClickHouseBinaryWriter writer, int count)
+    {
+        for (int left = count; left > 0; left -= Chunk.Length)
+        {
+            writer.WriteBytes(Chunk.AsSpan(0, Math.Min(left, Chunk.Length)));
+        }
+    }
+
+    /// <summary>Gives <paramref name="count"/> zero bytes in <paramref name="scratch"/>.</summary>
+    /// <param name="count">The number of zero bytes.</param>
+    /// <param name="scratch">A pooled or empty array, which is replaced when it is too short.</param>
+    /// <returns>The zero bytes, valid until the next use of <paramref name="scratch"/>.</returns>
+    public static ReadOnlySpan<byte> Zeros(int count, ref byte[] scratch)
+    {
+        EnsureScratch(ref scratch, count);
+        Span<byte> zeros = scratch.AsSpan(0, count);
+        zeros.Clear();
+        return zeros;
+    }
+
+    /// <summary>Makes <paramref name="scratch"/> at least <paramref name="length"/> bytes long.</summary>
+    /// <param name="scratch">A pooled or empty array, which is replaced when it is too short. The old one goes back to the pool.</param>
+    /// <param name="length">The length that is necessary.</param>
+    public static void EnsureScratch(ref byte[] scratch, int length)
+    {
+        if (scratch.Length >= length)
+        {
+            return;
+        }
+
+        byte[] old = scratch;
+        scratch = ArrayPool<byte>.Shared.Rent(length);
+        if (old.Length != 0)
+        {
+            ArrayPool<byte>.Shared.Return(old);
+        }
     }
 }
