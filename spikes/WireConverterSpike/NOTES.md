@@ -85,8 +85,8 @@ Not measured: `InsertRowsAsync<T>` (the POCO write tier), anything against a ser
 
 - **Column caches.** `StringColumn` and the LowCardinality columns cache their decoded values on the first
   access. A benchmark that reuses one block measures cache hits for the current client after the first
-  round. This made the wide row look 1.2x slower for the candidate, when it is 0.8x. Decode a fresh block
-  for each timed run.
+  round. Together with the next item, this made the wide POCO row look 1.2x slower for the candidate, when
+  it is 0.8x. Decode a fresh block for each timed run.
 - **`new TRow()`.** A generic `new()` compiles to `Activator.CreateInstance<TRow>()`. The current plan uses a
   compiled constructor. Before the spike used one too (`PocoActivator`), every single-column POCO read looked
   10% to 30% slower. Emitting the exact expressions of the current scatter did not change that, which is how
@@ -104,8 +104,8 @@ expressions, and faster for composites.
   pooled array that the block owns. The spike fills a new `string[]` that the caller owns, which is a
   large-object-heap allocation at 100,000 rows.
 - POCO, fused: 0.67x to 1.0x. The leaf-only cases (`String`, `DateTime`) are at parity, as they must be:
-  each row does the same work. The composites are faster. LowCardinality converts its dictionary once per
-  block, and Nullable converts only the non-null rows.
+  each row does the same work. The composites are faster. For LowCardinality, the dictionary converts once
+  per block. For Nullable and Array, the spike did not isolate the cause.
 - POCO, bulk: 0.85x to 1.1x. It makes two passes (fill a pooled buffer, then assign). It needs no compiled
   code to read values, so it is the fallback when dynamic code is not available.
 
