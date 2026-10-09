@@ -35,6 +35,12 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public Type ElementType => typeof(long);
 
+    /// <summary>The number of decimal digits after the second (0 to 9).</summary>
+    internal int Scale => scale;
+
+    /// <summary>The timezone of the column: from the type string, else from the session, else UTC.</summary>
+    internal ResolvedTimeZone TimeZone => timeZone;
+
     /// <inheritdoc/>
     public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(long), typeof(DateTimeOffset), typeof(DateTime) };
 
