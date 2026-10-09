@@ -81,6 +81,9 @@ internal sealed class JsonStringColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<string>;
 
     /// <inheritdoc/>
+    public bool WritesFromStorage(IColumn column) => column is StringColumn;
+
+    /// <inheritdoc/>
     // The prefix is a fixed version marker, independent of the data; the column/slice is unused.
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
         => writer.WriteUInt64(StringVersion);
