@@ -539,6 +539,11 @@ public static class Program
             return Verify.Run();
         }
 
+        if (args.Length > 0 && args[0] == "issue792")
+        {
+            return Issue792.Run();
+        }
+
         if (args.Length > 0 && args[0] == "quick")
         {
             Quick.Run(args.Length > 1 ? int.Parse(args[1]) : 41);
@@ -623,5 +628,81 @@ internal static class Quick
         Array.Sort(b);
         double am = a[rounds / 2], bm = b[rounds / 2];
         Console.WriteLine($"{name,-62} {a[0],9:F2} {b[0],9:F2} {b[0] / a[0],9:F2} {am,9:F2} {bm,9:F2} {bm / am,9:F2}");
+    }
+}
+
+/// <summary>
+/// ClickHouse/integrations#792: writing byte[] into LowCardinality(String) and the composites around it.
+/// </summary>
+internal static class Issue792
+{
+    private static readonly byte[][] Valid = { Encoding.UTF8.GetBytes("a"), Encoding.UTF8.GetBytes("bc"), Encoding.UTF8.GetBytes("a"), Array.Empty<byte>() };
+
+    // 0xFF is not valid UTF-8, so no string can carry these bytes.
+    private static readonly byte[][] Invalid = { new byte[] { 0x41, 0xFF }, new byte[] { 0xFE }, new byte[] { 0x41, 0xFF } };
+
+    public static int Run()
+    {
+        int failures = 0;
+        foreach (string type in new[] { "LowCardinality(String)", "LowCardinality(Nullable(String))", "Array(LowCardinality(String))" })
+        {
+            Type element = type.StartsWith("Array") ? typeof(byte[][]) : typeof(byte[]);
+            Console.WriteLine($"current CanWrite {type,-36} from {element.Name,-9}: {ClickHouseTcpTypes.CanWrite(type, element)}");
+        }
+
+        // Valid UTF-8: the candidate's bytes must equal the current client's write of the same text.
+        failures += SameAsText("LowCardinality(String)", Valid, Valid.Select(Text).ToArray());
+        byte[][] withNull = Valid.Append(null).ToArray();
+        failures += SameAsText("LowCardinality(Nullable(String))", withNull, withNull.Select(b => b is null ? null : Text(b)).ToArray());
+        byte[][][] nested = { Valid, Array.Empty<byte[]>(), Valid[..2] };
+        failures += SameAsText("Array(LowCardinality(String))", nested, nested.Select(r => r.Select(Text).ToArray()).ToArray());
+
+        // Invalid UTF-8: decode the candidate's bytes with the current codec and read them back as byte[].
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve("LowCardinality(String)", default);
+        byte[] wire = Data.Capture(w =>
+        {
+            ColumnWriter<byte[]> writer = WriteDerivation.Derive<byte[]>("LowCardinality(String)");
+            writer.WritePrefix(w);
+            writer.Write(w, Invalid);
+        });
+        using var reader = new ClickHouseBinaryReader(new MemoryStream(wire));
+        codec.ReadStatePrefixAsync(reader, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        using IColumn decoded = codec.ReadColumnAsync(reader, "c", "LowCardinality(String)", Invalid.Length, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        byte[][] back = new byte[Invalid.Length][];
+        ReadDerivation.Derive<byte[]>("LowCardinality(String)", default).Bind(decoded).Fill(0, back);
+        bool same = back.Zip(Invalid).All(p => p.First.AsSpan().SequenceEqual(p.Second));
+        int entries = ((ILowCardinalityColumn)decoded).Dictionary.RowCount;
+        Console.WriteLine($"candidate LowCardinality(String) from invalid UTF-8 byte[]: round trip {(same ? "same bytes" : "DIFFERENT")}, {entries} dictionary entries (1 reserved + 2 distinct)");
+        failures += same && entries == 3 ? 0 : 1;
+
+        Console.WriteLine(failures == 0 ? "ISSUE792 OK" : $"ISSUE792 FAILED: {failures}");
+        return failures == 0 ? 0 : 1;
+    }
+
+    private static string Text(byte[] bytes) => Encoding.UTF8.GetString(bytes);
+
+    private static int SameAsText<TBytes, TText>(string type, TBytes[] bytes, TText[] text)
+    {
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(type, default);
+        byte[] expected = Data.Capture(w => codec.WriteFull(w, new ArrayColumn<TText>("c", type, text)));
+        byte[] actual = Data.Capture(w =>
+        {
+            ColumnWriter<TBytes> writer = WriteDerivation.Derive<TBytes>(type);
+            writer.WritePrefix(w);
+            writer.Write(w, bytes);
+        });
+
+        // If the current client accepts byte[] (after a fix), its bytes must match too.
+        string current = "refused";
+        IColumn byteColumn = new ArrayColumn<TBytes>("c", type, bytes);
+        if (codec.CanWrite(byteColumn))
+        {
+            byte[] currentBytes = Data.Capture(w => codec.WriteFull(w, byteColumn));
+            current = currentBytes.AsSpan().SequenceEqual(expected) ? "same bytes as text" : "DIFFERENT from text";
+        }
+
+        bool same = expected.AsSpan().SequenceEqual(actual);
+        Console.WriteLine($"{type,-36} from byte[]: candidate {(same ? "same bytes as text" : "DIFFERENT")}; current {current}");
+        return same && !current.StartsWith("DIFFERENT") ? 0 : 1;
     }
 }

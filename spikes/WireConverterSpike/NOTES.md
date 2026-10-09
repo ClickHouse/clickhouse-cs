@@ -173,6 +173,33 @@ shapes, so the write combinators need their own entry point next to `IColumnCode
 7. **Shared arrays.** LowCardinality read as `byte[]` gives the same array instance to every row that has the
    same key. The current client does the same.
 
+## Related: ClickHouse/integrations#792 (`LowCardinality(String)` from `byte[]`)
+
+`dotnet run -c Release -- issue792` checks `LowCardinality(String)`, `LowCardinality(Nullable(String))`, and
+`Array(LowCardinality(String))` written from `byte[]`.
+
+- **Cause in the current client.** `StringColumnCodec.LowCardinalityKeyWriter` returns a key strategy only
+  for `string`, and `null` for `byte[]`. LowCardinality takes `null` to mean "this write type cannot be a
+  dictionary key", so `CanWrite` is false and the insert is refused. The test
+  `LowCardinalityKeyWriter_Bytes_IsUnavailableAndLowCardinalityRefusesThem` pins this. PR #594 made the
+  refusal on purpose, because an earlier version accepted the write and then threw part-way through it. It
+  lists "`LowCardinality(String)` written from bytes" as a follow-up that needs a byte-comparing dictionary
+  and a placeholder for each write type.
+- **The candidate structure writes all three** with no code for this case. The bytes are the same as the
+  current client's write of the same text. Bytes that are not valid UTF-8 (`0xFF`) round-trip unchanged,
+  which no write through `string` can do.
+- **The current structure can also fix it with one line.** Both parts that #594 named exist in `main` now:
+  the byte-content key `LowCardinalityKeys.Bytes()` (which `FixedString` uses) and
+  `StringColumnCodec.NullPlaceholderAs(typeof(byte[]))`. With `byte[] => LowCardinalityKeys.Bytes()` added to
+  the `String` key writer, the current client writes all three cases with the same bytes as the candidate.
+  The Tcp unit tests (2,192, `net10.0`, no server) then fail only on the test above, which pins the refusal.
+  The server-backed `CanWrite_ItsAnswer_IsWhetherTheInsertGoesThrough` case for
+  `LowCardinality(String)` from `byte[]` was not run.
+- **What this says about #801.** #792 is the comparer problem from #801 in small: in the current structure,
+  each pair of write type and LowCardinality inner needs its own key strategy, and a missing one shows up as
+  a refusal. In the candidate structure, the key is the canonical value, so any write type that converts
+  to the leaf gets deduplication with no extra code.
+
 ## Decision proposed by the spike
 
 **Adopt.** The fused loop removes the POCO regression. Reads in both tiers are as fast or faster, the
@@ -188,6 +215,7 @@ missing write (`LowCardinality(FixedString)` from `string`). Two items to do bef
 ```
 cd spikes/WireConverterSpike
 dotnet run -c Release -- verify
+dotnet run -c Release -- issue792                     # LowCardinality(String) from byte[]
 dotnet run -c Release -- quick 61                     # interleaved min/median timings
 SPIKE_ONLY=Wide,StringAsString dotnet run -c Release -- quick 61
 dotnet run -c Release -- bench --filter '*'           # BenchmarkDotNet; needs a quiet box
