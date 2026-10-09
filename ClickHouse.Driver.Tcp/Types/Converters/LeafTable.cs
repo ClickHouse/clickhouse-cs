@@ -8,7 +8,8 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// <summary>
 /// The leaf table: for each leaf ClickHouse type, the CLR types that it reads as and writes from, and the converter
 /// for each pair. It is the only place that knows a (leaf type, CLR type) pair. A composite only recurses to its
-/// leaves. The pairs are the readings and the writes that the leaf codecs offer.
+/// leaves. The pairs are the readings and the writes that the leaf codecs offer, and one write that no codec offers:
+/// <c>FixedString</c> from <see cref="string"/>.
 /// </summary>
 internal static class LeafTable
 {
@@ -72,7 +73,8 @@ internal static class LeafTable
         Add("FixedString")
             .Read<byte[]>(static _ => FixedStringLeafReader<byte[], CopiedBytes>.Instance)
             .Read<string>(static _ => FixedStringLeafReader<string, Utf8Text>.Instance, conversion: true)
-            .Write<byte[]>(static codec => new FixedStringBytesWriter(((FixedStringColumnCodec)codec).Size, codec.TypeName));
+            .Write<byte[]>(static codec => new FixedStringBytesWriter(((FixedStringColumnCodec)codec).Size, codec.TypeName))
+            .Write<string>(static codec => new FixedStringTextWriter(((FixedStringColumnCodec)codec).Size, codec.TypeName), conversion: true);
         Add("JSON")
             .Read<string>(static _ => StringLeafReader<string, Utf8Text>.Instance)
             .Write<string>(static _ => TextStringWriter.Json);

@@ -10,7 +10,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 /// <summary>
 /// Pins the leaf table to the leaf codecs: each leaf reads as exactly the CLR types that its codec offers and writes
 /// from exactly the CLR types that its codec writes, so the derivation answers every (type, CLR type) question as
-/// the current <see cref="ColumnProjection.Offers"/> and <see cref="IColumnCodec.CanWriteElementType"/> do.
+/// the current <see cref="ColumnProjection.Offers"/> and <see cref="IColumnCodec.CanWriteElementType"/> do. The one
+/// pair that the table adds is <c>FixedString</c> from <see cref="string"/> (<see cref="Additions"/>).
 /// </summary>
 [TestFixture]
 public class LeafTableTests
@@ -37,6 +38,9 @@ public class LeafTableTests
         .ToArray();
 
     public static IEnumerable<string> SampleTypes => LeafSamples.Types;
+
+    /// <summary>The write pairs of the table that no codec writes today: <c>FixedString</c> from text.</summary>
+    internal static readonly (string Leaf, Type ClrType)[] Additions = { ("FixedString", typeof(string)) };
 
     /// <summary>The leaf of a type string, as the derivation finds it.</summary>
     internal static Leaf LeafOf(string type)
@@ -74,7 +78,8 @@ public class LeafTableTests
 
     /// <summary>
     /// The exact pairs. The conversions are the pairs whose CLR type differs from the value that the decoded column
-    /// stores: 12 for reads and 11 for writes, and 2 more of each for the bare <c>Enum</c> spelling.
+    /// stores: 12 for reads and 12 for writes (with <c>FixedString</c> from text), and 2 more of each for the bare
+    /// <c>Enum</c> spelling.
     /// </summary>
     [Test]
     public void All_PairCounts_AreTheCodecPairs()
@@ -87,9 +92,9 @@ public class LeafTableTests
         {
             Assert.That(LeafTable.All, Has.Count.EqualTo(48), "leaves");
             Assert.That(reads, Has.Length.EqualTo(64), "read pairs");
-            Assert.That(writes, Has.Length.EqualTo(62), "write pairs");
+            Assert.That(writes, Has.Length.EqualTo(63), "write pairs");
             Assert.That(reads.Count(pair => pair.IsConversion), Is.EqualTo(14), "read conversions");
-            Assert.That(writes.Count(pair => pair.IsConversion), Is.EqualTo(13), "write conversions");
+            Assert.That(writes.Count(pair => pair.IsConversion), Is.EqualTo(14), "write conversions");
         });
     }
 
@@ -105,16 +110,23 @@ public class LeafTableTests
     public void WriteTypes_SampleType_AreTheWritableTypesOfItsCodec(string type)
     {
         IColumnCodec codec = ConverterHarness.Codec(type);
-        Type[] writable = codec.WritableElementTypes.Where(codec.CanWriteElementType).ToArray();
+        Leaf leaf = LeafOf(type);
+        Type[] writable = codec.WritableElementTypes.Where(codec.CanWriteElementType)
+            .Concat(Additions.Where(addition => addition.Leaf == leaf.Name).Select(addition => addition.ClrType))
+            .ToArray();
 
-        Assert.That(LeafOf(type).WriteTypes(codec), Is.EquivalentTo(writable));
+        Assert.That(leaf.WriteTypes(codec), Is.EquivalentTo(writable));
     }
 
-    /// <summary>The derivation succeeds for exactly the CLR types that the current read and write accept.</summary>
+    /// <summary>
+    /// The derivation succeeds for exactly the CLR types that the current read and write accept, and for the
+    /// <see cref="Additions"/>.
+    /// </summary>
     [TestCaseSource(nameof(SampleTypes))]
     public void Derive_EveryCandidateType_AgreesWithTheCurrentAnswers(string type)
     {
         IColumnCodec codec = ConverterHarness.Codec(type);
+        string leaf = LeafOf(type).Name;
         var disagreements = new List<string>();
         foreach (Type candidate in Candidates)
         {
@@ -125,7 +137,8 @@ public class LeafTableTests
                 disagreements.Add($"read as {candidate}: derived {reads}");
             }
 
-            if (writes != codec.CanWriteElementType(candidate))
+            bool added = Additions.Contains((leaf, candidate));
+            if (writes != (codec.CanWriteElementType(candidate) || added))
             {
                 disagreements.Add($"write from {candidate}: derived {writes}");
             }

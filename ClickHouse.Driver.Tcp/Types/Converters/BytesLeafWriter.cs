@@ -275,3 +275,112 @@ internal sealed class FixedStringBytesWriter : BytesLeafWriter<byte[]>
         return value;
     }
 }
+
+/// <summary>
+/// <c>FixedString(N)</c> from text: the UTF-8 bytes of the text, then zero bytes up to <c>N</c>. A value of more than
+/// <c>N</c> bytes is refused.
+/// </summary>
+/// <remarks>
+/// Text is padded and raw bytes (<see cref="FixedStringBytesWriter"/>) are not. A caller who gives text gives
+/// characters, and the number of UTF-8 bytes is not under the caller's control, so a short text is padded. A caller
+/// who gives bytes controls each byte, so a wrong length there is an error. The HTTP client pads text in the same way.
+/// </remarks>
+internal sealed class FixedStringTextWriter : BytesLeafWriter<string>
+{
+    private readonly int size;
+    private readonly string typeName;
+    private readonly byte[] placeholder;
+
+    /// <summary>Initializes the leaf for one width.</summary>
+    /// <param name="size">The <c>N</c> of <c>FixedString(N)</c>.</param>
+    /// <param name="typeName">The ClickHouse type, for the messages.</param>
+    public FixedStringTextWriter(int size, string typeName)
+    {
+        this.size = size;
+        this.typeName = typeName;
+        placeholder = new byte[size];
+    }
+
+    /// <inheritdoc/>
+    public override ReadOnlySpan<byte> Placeholder => placeholder;
+
+    /// <inheritdoc/>
+    // Equal strings have equal UTF-8, so they have equal padded bytes too.
+    public override bool ClrEqualityImpliesCanonicalEquality => true;
+
+    /// <inheritdoc/>
+    public override ReadOnlySpan<byte> ToCanonical(string value, int position, ref byte[] scratch)
+    {
+        EnsureScratch(ref scratch, size);
+        Span<byte> padded = scratch.AsSpan(0, size);
+        Pad(value, padded, position, "row");
+        return padded;
+    }
+
+    /// <inheritdoc/>
+    public override void Encode(ClickHouseBinaryWriter writer, ReadOnlySpan<byte> canonical) => writer.WriteBytes(canonical);
+
+    /// <inheritdoc/>
+    public override void Write(ClickHouseBinaryWriter writer, ValueSource<string> values, IColumnWriteState state)
+    {
+        ReadOnlySpan<byte> absent = values.Absent;
+        bool marked = values.HasAbsent;
+        byte[] scratch = ArrayPool<byte>.Shared.Rent(size);
+        try
+        {
+            Span<byte> padded = scratch.AsSpan(0, size);
+            int position = 0;
+            for (int r = 0; r < values.RunCount; r++)
+            {
+                ReadOnlySpan<string> run = values.Run(r);
+                for (int i = 0; i < run.Length; i++)
+                {
+                    if (marked && absent[position] != 0)
+                    {
+                        writer.WriteBytes(placeholder);
+                    }
+                    else
+                    {
+                        // The positions are named as for raw bytes (see FixedStringBytesWriter).
+                        if (values.IsSegmented && !marked)
+                        {
+                            Pad(run[i], padded, i, "element");
+                        }
+                        else
+                        {
+                            Pad(run[i], padded, values.FirstRow + position, "row");
+                        }
+
+                        writer.WriteBytes(padded);
+                    }
+
+                    position++;
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(scratch);
+        }
+    }
+
+    // Encodes the value into the N bytes of destination, with zero bytes after it.
+    private void Pad(string value, Span<byte> destination, int position, string positionNoun)
+    {
+        if (value is null)
+        {
+            throw new ArgumentException(
+                $"A {typeName} column cannot hold a null value (at {positionNoun} {position}); wrap the type in Nullable to write nulls.",
+                nameof(value));
+        }
+
+        if (!Encoding.UTF8.TryGetBytes(value, destination, out int written))
+        {
+            throw new ArgumentException(
+                $"A {typeName} value at {positionNoun} {position} is {Encoding.UTF8.GetByteCount(value)} bytes in UTF-8; a text value can have at most {size} bytes. Shorten it to {size} bytes or less before writing it; the write path pads a shorter text with zero bytes, but does not truncate.",
+                nameof(value));
+        }
+
+        destination.Slice(written).Clear();
+    }
+}

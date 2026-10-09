@@ -34,11 +34,11 @@ public class ConverterDerivationTests
     [Test]
     public void Derive_WriteFromATypeTheLeafDoesNotTake_RefusesAndNamesTheWriteTypes()
     {
-        Derivation derivation = Fresh().Derive("FixedString(4)", ConverterHarness.Context, typeof(string), ConversionDirection.Write);
+        Derivation derivation = Fresh().Derive("FixedString(4)", ConverterHarness.Context, typeof(Guid), ConversionDirection.Write);
 
         Assert.That(
             derivation.Refusal,
-            Is.EqualTo("'FixedString(4)' cannot be written from System.String. It is written from: System.Byte[]."));
+            Is.EqualTo("'FixedString(4)' cannot be written from System.Guid. It is written from: System.Byte[], System.String."));
     }
 
     [Test]
