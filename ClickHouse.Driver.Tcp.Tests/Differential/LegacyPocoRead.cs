@@ -6,11 +6,11 @@ using ClickHouse.Driver.Tcp.Tests.Utilities;
 namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
 /// <summary>
-/// The POCO read tier (<c>QueryAsync&lt;T&gt;</c>) as it was before it moved onto the converter derivation: the
-/// reference of the differential tests (SPEC invariant 11). The old scatter is too large to copy here, so it stays in
-/// production as <see cref="LegacyPocoColumnScatterFactory"/>, which only the tests call
-/// (<see cref="PocoReadPlan{T}.BuildLegacy"/>). The old members that it calls (<see cref="PocoValueProjection"/>, the
-/// codecs' <c>TryProjectColumnRead</c> and <c>TryProjectRead</c>) stay in production until the old path is removed.
+/// The reference of the POCO read tier (<c>QueryAsync&lt;T&gt;</c>) in the differential tests (SPEC invariant 11): the
+/// plan over the scatter of <see cref="LegacyPocoColumnScatterFactory"/> (<see cref="PocoReadPlan{T}.BuildLegacy"/>),
+/// which has more than 100 lines and is in production for that reason; only the tests call it. The members that it
+/// calls (<see cref="PocoValueProjection"/>, the codecs' <c>TryProjectColumnRead</c> and <c>TryProjectRead</c>) stay in
+/// production until the old path is removed.
 /// </summary>
 internal static class LegacyPocoRead
 {

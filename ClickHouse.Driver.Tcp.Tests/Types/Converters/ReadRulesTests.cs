@@ -198,8 +198,8 @@ public class ReadRulesTests
         return values;
     }
 
-    // The difference between the derivation and POCO mapping before it moved onto the derivation (the reference of the
-    // differential tests), for one target, or null.
+    // The difference between the derivation and the reference POCO plan of the differential tests, for one target, or
+    // null.
     private static string Compare<T>(Block block)
     {
         Derivation derivation = ConverterDerivation.Default.Derive(block[0].TypeName, block.Context, typeof(T), ConversionDirection.Read);

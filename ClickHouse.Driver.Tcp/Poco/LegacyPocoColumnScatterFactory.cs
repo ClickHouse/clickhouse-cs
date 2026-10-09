@@ -8,10 +8,10 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// The POCO read scatter before the POCO tier moved onto the converter derivation: it compiles a loop that fills one
-/// POCO property from either an elementwise conversion (<see cref="PocoValueProjection"/>) or a projected column. It
-/// is the reference path of the differential tests (<see cref="PocoReadPlan{T}.BuildLegacy"/>), and only the tests
-/// call it. The client reads through <see cref="PocoColumnScatterFactory"/>.
+/// The reference path of the POCO read scatter for the differential tests (<see cref="PocoReadPlan{T}.BuildLegacy"/>):
+/// it compiles a loop that fills one POCO property from either an elementwise conversion
+/// (<see cref="PocoValueProjection"/>) or a projected column of the codec. Only the tests call it. The client reads
+/// through <see cref="PocoColumnScatterFactory"/>.
 /// </summary>
 internal static class LegacyPocoColumnScatterFactory
 {
