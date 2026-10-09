@@ -10,9 +10,9 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The first entries are reserved, as in the current LowCardinality writer. Without NULL, entry 0 is the placeholder.
-/// With NULL, entry 0 is the NULL slot (it holds the placeholder bytes and no lookup finds it) and entry 1 is the
-/// placeholder. A value equal to the placeholder gets the key of the placeholder entry.
+/// The first entries are reserved. Without NULL, entry 0 is the placeholder. With NULL, entry 0 is the NULL slot (it
+/// holds the placeholder bytes and no lookup finds it) and entry 1 is the placeholder. A value equal to the
+/// placeholder gets the key of the placeholder entry.
 /// </para>
 /// <para>
 /// The entries are stored end to end in one buffer. The buffers come from <see cref="ArrayPool{T}.Shared"/> and

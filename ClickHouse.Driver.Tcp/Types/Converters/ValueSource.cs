@@ -3,15 +3,15 @@ using System;
 namespace ClickHouse.Driver.Tcp.Types.Converters;
 
 /// <summary>
-/// The values that one <see cref="ColumnWriter{T}"/> call writes, in wire order (decision D2). The values are one
+/// The values that one <see cref="ColumnWriter{T}"/> call writes, in wire order. The values are one
 /// span (a top-level column, a flat child) or a list of segments (the arrays of a jagged column, one for each row).
 /// The writer reads them as <see cref="RunCount"/> runs and treats the runs as one sequence.
 /// </summary>
 /// <remarks>
 /// <para>
 /// A source can also mark positions that have no value (<see cref="Absent"/>). A writer writes its canonical
-/// placeholder at such a position and does not read the value there. The <c>Nullable</c> writer uses this to put
-/// the placeholder under each NULL, and a composite gives the same marks to each of its streams.
+/// placeholder at such a position and does not read the value there. So a <c>Nullable</c> writer can put the
+/// placeholder under each NULL, and a composite can give the same marks to each of its streams.
 /// </para>
 /// <para>
 /// The source borrows its spans, so it is valid only while the caller keeps them alive.

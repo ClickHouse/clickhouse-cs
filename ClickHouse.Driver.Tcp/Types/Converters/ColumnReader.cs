@@ -10,7 +10,7 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// caches the trees.
 /// </summary>
 /// <remarks>
-/// A tree has two ways to read, and the two must give the same values (decision D4):
+/// A tree has two ways to read, and the two must give the same values:
 /// <list type="bullet">
 /// <item><description><see cref="ColumnReader{T}.Bind"/>, then <see cref="BoundReader{T}.Fill"/>: a bulk read with no
 /// dynamic code.</description></item>
