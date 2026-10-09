@@ -18,8 +18,9 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 /// </summary>
 /// <remarks>
 /// A refusal of the derivation is an <see cref="ArmRefusal"/>, as in <see cref="LeafConverterRegistration"/>. A NULL
-/// that a read rule meets (<see cref="NullValueException"/>) is reported with the text that the columnar read tier
-/// gives it (<see cref="NullFailure"/>), for the row of the column that the reader reads.
+/// that a read rule meets (<see cref="NullValueException"/>) is reported with the text of <c>Block.ReadAs</c>
+/// (<see cref="DerivedColumn.NullFailure"/>), for the row of the column that the reader reads. The client's
+/// <c>Block.ReadAs</c> and <c>ClickHouseTcpTypes.CanRead</c> run every facet of their tiers.
 /// </remarks>
 internal sealed class ReadConverterRegistration : IDifferentialRegistration
 {
@@ -55,6 +56,8 @@ internal sealed class ReadConverterRegistration : IDifferentialRegistration
         registry.Add(new FillArm(), CompositeReadFacets);
         registry.Add(new EmitArm(), CompositeReadFacets);
         registry.Add(new CanReadArm(), CompositeReadFacets);
+        registry.AddForEveryFacet(ClientArms.ReadAs);
+        registry.AddForEveryFacet(ClientArms.CanRead);
 
         foreach ((string caseId, Type target, bool failsAtNull) in D6Changes)
         {
@@ -96,18 +99,11 @@ internal sealed class ReadConverterRegistration : IDifferentialRegistration
         }
         catch (NullValueException e)
         {
-            throw NullFailure(column, typeof(T), e.Row, e);
+            throw DerivedColumn.NullFailure(column, typeof(T), e.Row, e);
         }
 
         return values;
     }
-
-    /// <summary>The failure that the columnar read tier gives a NULL in a column read as a type that cannot hold NULL.</summary>
-    internal static InvalidOperationException NullFailure(IColumn column, Type target, int row, Exception inner)
-        => new(
-            $"Column '{column.Name}' ({column.TypeName}) has NULL at row {row}, and the target type {target} cannot hold NULL. " +
-            "Read the column as a nullable type, or remove the NULL values in the query.",
-            inner);
 
     private sealed class FillArm : ReadArm
     {

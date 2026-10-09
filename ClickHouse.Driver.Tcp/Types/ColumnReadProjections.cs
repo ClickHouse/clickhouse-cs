@@ -1,38 +1,41 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using ClickHouse.Driver.Tcp.Poco;
+using System.Diagnostics.CodeAnalysis;
+using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// Caches <see cref="Block.ReadAs{T}(string)"/> projections by type name, resolution context, and target type.
-/// The context preserves session-dependent conversions such as timezone-less <c>DateTime</c>.
+/// The columnar read tier of <see cref="Block.ReadAs{T}(string)"/> over the codecs of one registry: the column itself
+/// when it already reads as the type, else a view over the reader that the converter derivation gives
+/// (<see cref="ColumnProjection"/>). The derivation caches its readers by type name, session timezone and CLR type.
 /// </summary>
 internal sealed class ColumnReadProjections
 {
-    // Distinguishes "no reading offered" from "not resolved yet", so a refused target is not re-resolved per call.
-    private static readonly object NoReading = new();
-
-    // Limit long-lived compiled projections when callers use many session timezones. The lock-free count check
-    // may overshoot slightly under concurrency; uncached projections remain correct.
-    private const int MaxCachedReaders = 1024;
-
     private readonly ColumnCodecRegistry registry;
 
-    private readonly ConcurrentDictionary<(string TypeName, string Context, Type Target), object> readers = new();
-
-    /// <summary>Initializes a cache over the codecs of one registry.</summary>
-    /// <param name="registry">The registry whose codecs decide the readings.</param>
+    /// <summary>Initializes the tier over the codecs of one registry.</summary>
+    /// <param name="registry">The registry whose codecs decoded the columns, and whose derivation reads them.</param>
     public ColumnReadProjections(ColumnCodecRegistry registry) => this.registry = registry;
 
-    /// <summary>Reads <paramref name="column"/> as <typeparamref name="T"/>, projecting if it is not already that.</summary>
+    /// <summary>Reads <paramref name="column"/> as <typeparamref name="T"/>, with a view that no block owns.</summary>
     /// <typeparam name="T">The CLR type to read the values as.</typeparam>
     /// <param name="column">The decoded column, which the result borrows.</param>
     /// <param name="context">The context the column's codec was resolved with.</param>
     /// <returns>The column itself when it already reads as <typeparamref name="T"/>, otherwise a converting view over it.</returns>
     /// <exception cref="InvalidCastException">The column's type offers no reading as <typeparamref name="T"/>.</exception>
-    public IColumn<T> ReadAs<T>(IColumn column, in ResolveContext context)
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    public IColumn<T> ReadAs<T>(IColumn column, in ResolveContext context) => ReadAs<T>(column, in context, views: null);
+
+    /// <summary>Reads <paramref name="column"/> as <typeparamref name="T"/>, with the view that <paramref name="views"/> keeps.</summary>
+    /// <typeparam name="T">The CLR type to read the values as.</typeparam>
+    /// <param name="column">The decoded column, which the result borrows.</param>
+    /// <param name="context">The context the column's codec was resolved with.</param>
+    /// <param name="views">The views of the column's block, or null for a view that no block owns.</param>
+    /// <returns>The column itself when it already reads as <typeparamref name="T"/>, otherwise a converting view over it.</returns>
+    /// <exception cref="InvalidCastException">The column's type offers no reading as <typeparamref name="T"/>.</exception>
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    public IColumn<T> ReadAs<T>(IColumn column, in ResolveContext context, DerivedViews views)
     {
         if (column is IColumn<T> already)
         {
@@ -45,32 +48,13 @@ internal sealed class ColumnReadProjections
                 $"Column '{column.Name}' carries no ClickHouse type (it was built by a caller, not decoded), so it offers no reading other than {column.ElementType}.");
         }
 
-        ColumnReadProjection projection = Projection(column.TypeName, typeof(T), in context);
-        if (projection is null)
+        if (views is not null && views.TryGet(column, out IColumn<T> kept))
         {
-            throw NoSuchReading<T>(column, in context);
+            return kept;
         }
 
-        return (IColumn<T>)projection(column);
-    }
-
-    private ColumnReadProjection Projection(string typeName, Type target, in ResolveContext context)
-    {
-        var key = (typeName, PocoBlockSignature.ContextKey(in context), target);
-        if (readers.TryGetValue(key, out object cached))
-        {
-            return cached == NoReading ? null : (ColumnReadProjection)cached;
-        }
-
-        // Not GetOrAdd: the factory would have to capture the context by value anyway, and a lost race just
-        // resolves an equivalent projection that is then dropped.
-        ColumnReadProjection projection = ColumnProjection.For(registry.Resolve(typeName, in context), target);
-        if (readers.Count < MaxCachedReaders)
-        {
-            readers[key] = projection ?? NoReading;
-        }
-
-        return projection;
+        IColumn<T> view = ColumnProjection.For<T>(column, registry.Converters, in context) ?? throw NoSuchReading<T>(column, in context);
+        return views is null ? view : views.Add(column, (DerivedColumn<T>)view);
     }
 
     private InvalidCastException NoSuchReading<T>(IColumn column, in ResolveContext context)

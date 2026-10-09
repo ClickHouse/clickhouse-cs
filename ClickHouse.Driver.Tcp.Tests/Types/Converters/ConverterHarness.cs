@@ -5,6 +5,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
+using ClickHouse.Driver.Tcp.Tests.Differential;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Converters;
@@ -47,10 +48,10 @@ internal static class ConverterHarness
         return await Codec("Nothing").ReadColumnAsync(reader, "c", "Nothing", rows, CodecTestHarness.None);
     }
 
-    /// <summary>The current read: <see cref="Block.ReadAs{T}(string)"/> over the column, row by row through the indexer.</summary>
+    /// <summary>The old read: the old dispatch of <see cref="Block.ReadAs{T}(string)"/> over the column, row by row through the indexer.</summary>
     public static T[] ReadOld<T>(IColumn column, int start, int count)
     {
-        IColumn<T> view = ColumnCodecRegistry.Default.Projections.ReadAs<T>(column, Context);
+        IColumn<T> view = LegacyColumnarRead.ReadAs<T>(column, Context);
         var values = new T[count];
         for (int i = 0; i < count; i++)
         {

@@ -67,7 +67,7 @@ public class DifferentialSelfTests
     {
         CaseReport report = RunWith(UInt64Case, r => r.Add(new NegatingAnswerArm(Tier.CanRead), expectedFacets: 3));
 
-        Assert.That(report.Mismatches, Has.Some.Contains("CanRead<ulong?>: Negating CanRead gives answer True; Client.CanRead gives answer False"));
+        Assert.That(report.Mismatches, Has.Some.Contains("CanRead<ulong?>: Negating CanRead gives answer True; Old path: CanRead gives answer False"));
     }
 
     [Test]
@@ -233,7 +233,7 @@ public class DifferentialSelfTests
 
         CaseReport report = DifferentialEngine.Run(testCase, DifferentialRegistry.WithReference());
 
-        Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<TimeOnly> rows [0, 1): Client.ReadAs gives").And.Contains("the source test states the values [00:00:01.0000000]").And.Contains("value 0: 00:00:00.0000000, not 00:00:01.0000000"));
+        Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<TimeOnly> rows [0, 1): Old path: ReadAs gives").And.Contains("the source test states the values [00:00:01.0000000]").And.Contains("value 0: 00:00:00.0000000, not 00:00:01.0000000"));
     }
 
     [Test]
@@ -247,7 +247,7 @@ public class DifferentialSelfTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(report.Mismatches, Has.Some.Contains("Client.ReadAs already gives that").And.Contains("A deliberate change must differ from the reference."));
+            Assert.That(report.Mismatches, Has.Some.Contains("Old path: ReadAs already gives that").And.Contains("A deliberate change must differ from the reference."));
             Assert.That(report.Mismatches, Has.Some.Contains("Poco as ReadAs gives 5 values").And.Contains("the kind is Values, not Refused"));
         });
     }
@@ -605,7 +605,7 @@ public class DifferentialSelfTests
         }
     }
 
-    /// <summary>The opposite of the client's answer.</summary>
+    /// <summary>The opposite of the reference's answer.</summary>
     private sealed class NegatingAnswerArm : AnswerArm
     {
         private readonly Type target;
@@ -616,6 +616,6 @@ public class DifferentialSelfTests
         public override bool Covers(Facet facet) => facet.Case.Id == UInt64Case && (target is null || facet.Target == target);
 
         public override bool Answer(string columnType, Type elementType)
-            => !(Tier == Tier.CanRead ? ClickHouseTcpTypes.CanRead(columnType, elementType) : ClickHouseTcpTypes.CanWrite(columnType, elementType));
+            => !(Tier == Tier.CanRead ? ReferenceArms.CanRead : ReferenceArms.CanWrite).Answer(columnType, elementType);
     }
 }

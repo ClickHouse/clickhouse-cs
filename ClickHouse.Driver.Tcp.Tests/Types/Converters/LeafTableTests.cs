@@ -10,7 +10,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 /// <summary>
 /// Pins the leaf table to the leaf codecs: each leaf reads as exactly the CLR types that its codec offers and writes
 /// from exactly the CLR types that its codec writes, so the derivation answers every (type, CLR type) question as
-/// the current <see cref="ColumnProjection.Offers"/> and <see cref="IColumnCodec.CanWriteElementType"/> do. The one
+/// the current <see cref="LegacyColumnProjection.Offers"/> and <see cref="IColumnCodec.CanWriteElementType"/> do. The one
 /// pair that the table adds is <c>FixedString</c> from <see cref="string"/> (<see cref="Additions"/>).
 /// </summary>
 [TestFixture]
@@ -134,7 +134,7 @@ public class LeafTableTests
         {
             bool reads = ConverterDerivation.Default.DeriveNode(root, root, ConverterHarness.Context, candidate, ConversionDirection.Read).Succeeded;
             bool writes = ConverterDerivation.Default.Derive(type, ConverterHarness.Context, candidate, ConversionDirection.Write).Succeeded;
-            if (reads != ColumnProjection.Offers(codec, candidate))
+            if (reads != LegacyColumnProjection.Offers(codec, candidate))
             {
                 disagreements.Add($"read as {candidate}: derived {reads}");
             }
