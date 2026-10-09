@@ -166,8 +166,8 @@ public class DictionaryEntryCacheTests
         return new WeakReference(column);
     }
 
-    /// <summary>A reader that counts the bulk reads of the columns that it is bound to, and emits as its inner reader does.</summary>
-    private sealed class CountingReader<T> : ColumnReader<T>
+    /// <summary>A reader that counts the bulk reads of the columns that it is bound to. It has no expression.</summary>
+    internal sealed class CountingReader<T> : ColumnReader<T>
     {
         private readonly ColumnReader<T> inner;
         private int fills;
