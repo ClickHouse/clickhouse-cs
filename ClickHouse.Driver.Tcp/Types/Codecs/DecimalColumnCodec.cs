@@ -48,6 +48,21 @@ internal sealed class DecimalColumnCodec<TMantissa, TValue> : IColumnCodec
     /// <inheritdoc/>
     public Type ElementType => typeof(TValue);
 
+    /// <summary>The declared precision: the largest number of decimal digits that a value can have.</summary>
+    internal int Precision => precision;
+
+    /// <summary>The declared scale: the number of decimal digits after the point.</summary>
+    internal int Scale => scale;
+
+    /// <summary>The smallest mantissa that the declared precision allows.</summary>
+    internal TMantissa MinMantissa => minMantissa;
+
+    /// <summary>The largest mantissa that the declared precision allows.</summary>
+    internal TMantissa MaxMantissa => maxMantissa;
+
+    /// <summary>Converts a value to its mantissa at a scale. It does not check the precision.</summary>
+    internal Func<TValue, int, TMantissa> Encode => encode;
+
     /// <inheritdoc/>
     public object NullPlaceholder => default(TValue);
 
