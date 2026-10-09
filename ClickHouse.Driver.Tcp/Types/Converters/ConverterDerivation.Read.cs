@@ -193,8 +193,8 @@ internal sealed partial class ConverterDerivation
         return Derivation.Of(Activator.CreateInstance(TupleReaderDefinitions[arity].MakeGenericType(arguments), fields), needsColumn);
     }
 
-    // Variant, Dynamic, Nested, QBit, the geo types and Tuple() read only as their canonical type, through the values of
-    // the decoded column.
+    // Variant, Dynamic, Nested, QBit, the geo types and Tuple() read only as their canonical type, through the indexer of
+    // the decoded column (IndexedReader).
     private Derivation DeriveCanonicalOnly(TypeNode node, TypeNode root, in ResolveContext context, Type clrType)
     {
         Type canonical = registry.ResolveNode(node, in context).ElementType;
@@ -203,7 +203,7 @@ internal sealed partial class ConverterDerivation
             return Refuse(node, root, $"'{node}' cannot be read as {clrType}. It reads as: {canonical}.");
         }
 
-        return Derivation.Of(Activator.CreateInstance(typeof(ValueLeafReader<,,>).MakeGenericType(canonical, canonical, typeof(Identity<>).MakeGenericType(canonical)), new object[] { null }));
+        return Derivation.Of(typeof(IndexedReader<>).MakeGenericType(canonical).GetField(nameof(IndexedReader<object>.Instance)).GetValue(null));
     }
 
     /// <summary>
