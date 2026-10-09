@@ -132,9 +132,12 @@ internal static class ConverterHarness
         });
     }
 
-    /// <summary>The derived write of rows [start, start + length) of <paramref name="values"/>, from one span.</summary>
+    /// <summary>
+    /// The derived write of rows [start, start + length) of <paramref name="values"/>, from one span, for a column with
+    /// the name of the column of <see cref="WriteOldAsync{T}(string, T[], int, int)"/>.
+    /// </summary>
     public static Task<byte[]> WriteNewAsync<T>(ColumnWriter<T> writer, T[] values, int start, int length)
-        => CodecTestHarness.WriteAsync(w => WriteAll(writer, w, ValueSource<T>.Of(values.AsSpan(start, length), start)));
+        => CodecTestHarness.WriteAsync(w => WriteAll(writer, w, ValueSource<T>.Of(values.AsSpan(start, length), start, "c")));
 
     /// <summary>The derived write of the segments, in order.</summary>
     public static Task<byte[]> WriteSegmentsAsync<T>(ColumnWriter<T> writer, T[][] segments)
