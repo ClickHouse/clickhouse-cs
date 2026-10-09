@@ -13,8 +13,8 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// Runs a derived converter and the current codec path on the same input, so a test can compare them: reads through
-/// <see cref="ColumnReadProjections.ReadAs{T}"/>, <see cref="BoundReader{T}.Fill"/> and a compiled
+/// Runs a derived converter and the old codec path on the same input, so a test can compare them: reads through
+/// the old columnar dispatch (<see cref="LegacyColumnarRead"/>), <see cref="BoundReader{T}.Fill"/> and a compiled
 /// <see cref="ColumnReader.Emit"/>; writes through <see cref="IColumnCodec.WriteColumn(ClickHouseBinaryWriter, IColumn, int, int, IColumnWriteState)"/>
 /// and <see cref="ColumnWriter{T}.Write"/>.
 /// </summary>
