@@ -10,9 +10,13 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 /// entry point (<see cref="ClientArms"/>).
 /// </summary>
 /// <remarks>
-/// When a tier of the client moves onto a new implementation, the old code of that tier must stay reachable
-/// until the old path is removed. Point the tier's arm here at that old code, and register the client's entry
-/// point as a candidate. The reference outcome counts in <c>DifferentialTests</c> must stay the same.
+/// The old members that the converter layer replaces stay in production until the old path is removed. When a tier
+/// of the client moves onto the derivation, copy the old dispatch of that tier (the lines that call the old members,
+/// for example the hook order of <c>ColumnProjection.For</c>) into an arm in this test project, and point the tier's
+/// member here at it. If the old tier has more than about 100 lines, keep it in production as an internal member
+/// whose name marks it as the reference path (for example <c>LegacyColumnProjection</c>), and call that member from
+/// the arm. Then register the client's entry point (<see cref="ClientArms"/>) as a candidate. The reference outcome
+/// counts in <c>DifferentialTests</c> must stay the same.
 /// </remarks>
 internal static class ReferenceArms
 {
