@@ -26,6 +26,9 @@ internal abstract class FixedLeafWriter<T, TCanon> : ColumnWriter<T>
     /// </summary>
     public TCanon Placeholder { get; }
 
+    /// <inheritdoc/>
+    public sealed override bool IsFlat => true;
+
     /// <summary>Writes canonical values, for example the entries of a LowCardinality dictionary.</summary>
     /// <param name="writer">The writer to encode into.</param>
     /// <param name="values">The canonical values.</param>
