@@ -8,6 +8,8 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Poco;
 using ClickHouse.Driver.Tcp.Tests.Differential;
@@ -56,13 +58,13 @@ public class PocoReadNoDynamicCodeTests
     }
 
     [Test]
-    public void Materialize_ProcessWithoutDynamicCode_ChoosesTheFillTierAndReadsTheRowsOfTheCompiledLoop()
+    public async Task Materialize_ProcessWithoutDynamicCode_ChoosesTheFillTierAndReadsTheRowsOfTheCompiledLoop()
     {
         var here = new StringWriter();
         Read(here);
         string[] expected = Lines(here.ToString());
 
-        string[] child = ReadInAProcessWithoutDynamicCode();
+        string[] child = await ReadInAProcessWithoutDynamicCodeAsync();
 
         Assert.Multiple(() =>
         {
@@ -140,8 +142,9 @@ public class PocoReadNoDynamicCodeTests
 
     private static string[] Lines(string text) => text.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
 
-    // Runs the entry point of this assembly with the runtime configuration of the tests and dynamic code off.
-    private static string[] ReadInAProcessWithoutDynamicCode()
+    // Runs the entry point of this assembly with the runtime configuration of the tests and dynamic code off. The output
+    // streams are read while the process runs, and a process that does not end in 2 minutes is killed with its children.
+    private static async Task<string[]> ReadInAProcessWithoutDynamicCodeAsync()
     {
         string assembly = typeof(PocoReadNoDynamicCodeTests).Assembly.Location;
         string directory = Path.GetDirectoryName(assembly);
@@ -171,11 +174,28 @@ public class PocoReadNoDynamicCodeTests
             }
 
             using Process process = Process.Start(start);
-            var error = process.StandardError.ReadToEndAsync();
-            string output = process.StandardOutput.ReadToEnd();
-            Assert.That(process.WaitForExit(120_000), Is.True, "the child process did not end in 2 minutes");
-            Assert.That(process.ExitCode, Is.Zero, $"the child process failed: {error.GetAwaiter().GetResult()}");
-            return Lines(output);
+            Task<string> output = process.StandardOutput.ReadToEndAsync();
+            Task<string> error = process.StandardError.ReadToEndAsync();
+            bool ended = true;
+            using (var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2)))
+            {
+                try
+                {
+                    await process.WaitForExitAsync(timeout.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    ended = false;
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync();
+                }
+            }
+
+            string text = await output;
+            string errors = await error;
+            Assert.That(ended, Is.True, $"the child process did not end in 2 minutes: {errors}");
+            Assert.That(process.ExitCode, Is.Zero, $"the child process failed: {errors}");
+            return Lines(text);
         }
         finally
         {
