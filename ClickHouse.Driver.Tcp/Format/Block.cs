@@ -22,6 +22,9 @@ public sealed class Block : IDisposable
 {
     private string[] columnNames;
 
+    // The views of ReadAs, made on the first view and released on Dispose.
+    private DerivedViews views;
+
     /// <summary>Initializes a new instance of the <see cref="Block"/> class.</summary>
     /// <param name="name">The block name (usually empty for result blocks).</param>
     /// <param name="info">The block info prefix.</param>
@@ -164,10 +167,11 @@ public sealed class Block : IDisposable
 
     /// <summary>
     /// Reads the named column as <typeparamref name="T"/> using a conversion supported by its ClickHouse type.
-    /// Returns the original column when no conversion is needed. Otherwise, the indexer converts on access and
-    /// <see cref="IColumn{T}.Values"/> materializes the converted values once. The result borrows the source
-    /// column and is valid only while this block is alive. Treat projected reference values as read-only because
-    /// dictionary-backed rows may share them.
+    /// Returns the original column when no conversion is needed. Otherwise, the first access to
+    /// <see cref="IColumn{T}.Values"/> or to the indexer converts the whole column one time, and both read those
+    /// values. The block keeps one such view for each column and type, so a second call gives the same view. The
+    /// result is valid only while this block is alive: the block releases the converted values when it is disposed.
+    /// Treat projected reference values as read-only because dictionary-backed rows may share them.
     /// </summary>
     /// <typeparam name="T">The CLR type to read the values as.</typeparam>
     /// <param name="name">The column name.</param>
@@ -175,7 +179,7 @@ public sealed class Block : IDisposable
     /// <exception cref="ArgumentNullException"><paramref name="name"/> is null.</exception>
     /// <exception cref="ArgumentException">The block has no column with that name.</exception>
     /// <exception cref="InvalidCastException">The column's ClickHouse type offers no reading as <typeparamref name="T"/>.</exception>
-    public IColumn<T> ReadAs<T>(string name) => Codecs.Projections.ReadAs<T>(this[name], Context);
+    public IColumn<T> ReadAs<T>(string name) => Codecs.Projections.ReadAs<T>(this[name], Context, Views);
 
     /// <summary>
     /// Reads the column at <paramref name="index"/> with the same conversion and lifetime rules as
@@ -186,16 +190,21 @@ public sealed class Block : IDisposable
     /// <returns>The column read as <typeparamref name="T"/>.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not a column of this block.</exception>
     /// <exception cref="InvalidCastException">The column's ClickHouse type offers no reading as <typeparamref name="T"/>.</exception>
-    public IColumn<T> ReadAs<T>(int index) => Codecs.Projections.ReadAs<T>(At(index), Context);
+    public IColumn<T> ReadAs<T>(int index) => Codecs.Projections.ReadAs<T>(At(index), Context, Views);
 
-    /// <summary>Releases the columns' storage (returning any pooled buffers). Idempotent.</summary>
+    /// <summary>Releases the columns' storage and the values of its <see cref="ReadAs{T}(string)"/> views (returning any pooled buffers). Idempotent.</summary>
     public void Dispose()
     {
+        Interlocked.Exchange(ref views, DerivedViews.Released)?.Release();
         foreach (IColumn column in Columns)
         {
             column.Dispose();
         }
     }
+
+    // A set made after Dispose is never seen: Dispose puts the released set in the field, and the exchange keeps it.
+    private DerivedViews Views
+        => Volatile.Read(ref views) ?? Interlocked.CompareExchange(ref views, new DerivedViews(), null) ?? views;
 
     private static IColumn<T> Typed<T>(IColumn column)
         => column as IColumn<T>

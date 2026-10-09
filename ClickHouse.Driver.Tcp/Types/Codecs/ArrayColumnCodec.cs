@@ -255,7 +255,7 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
             return false;
         }
 
-        projection = ColumnProjection.Close(ProjectArrayMethod, elementProjection, targetElement);
+        projection = LegacyColumnProjection.Close(ProjectArrayMethod, elementProjection, targetElement);
         return true;
     }
 
@@ -268,7 +268,7 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     /// <returns>The view.</returns>
     private static IColumn ProjectArray<T>(IColumn source, ColumnReadProjection elementProjection)
     {
-        IArrayColumn array = ColumnProjection.Surface<IArrayColumn>(source);
+        IArrayColumn array = LegacyColumnProjection.Surface<IArrayColumn>(source);
         var elements = (IColumn<T>)elementProjection(array.Inner);
         return new ProjectedReadColumn<T[]>(source, (column, row) => Row(((IArrayColumn)column).Offsets, elements, row));
     }
