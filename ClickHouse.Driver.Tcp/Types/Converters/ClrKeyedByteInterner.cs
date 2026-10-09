@@ -21,7 +21,11 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// interner stops it when more than half of them failed (the values do not repeat much). This is a heuristic: a
 /// column whose first values are distinct and whose later values repeat keeps the slower path.
 /// </para>
-/// <para>One interner serves one write, on one thread. Dispose it to return its buffers.</para>
+/// <para>
+/// The interner makes the reserved entries when it is created, and for <c>FixedString(N)</c> they hold N bytes
+/// each. So create it only for a write that has values: a LowCardinality column of zero rows has no dictionary.
+/// One interner serves one write, on one thread. Dispose it to return its buffers.
+/// </para>
 /// </remarks>
 /// <typeparam name="T">The CLR type that the leaf writes.</typeparam>
 internal sealed class ClrKeyedByteInterner<T> : IDisposable
