@@ -86,6 +86,7 @@ internal sealed class VariantWriter : ColumnWriter<object>
         var state = new State(alternatives.Length, count);
         try
         {
+            // The discriminator and the writer of each value, and the number of values of each alternative.
             ReadOnlySpan<byte> absent = values.Absent;
             bool marked = values.HasAbsent;
             int position = 0;
@@ -101,13 +102,14 @@ internal sealed class VariantWriter : ColumnWriter<object>
                     {
                         int discriminator = Place(value, out VariantChild child);
                         state.Discriminators[position] = (byte)discriminator;
-                        state.Add(discriminator, value, child);
+                        state.Selected(position, discriminator, child);
                     }
 
                     position++;
                 }
             }
 
+            state.Group(values);
             for (int i = 0; i < alternatives.Length; i++)
             {
                 state.BeginRuns(i, canonical[i], values.Column, alternatives[i].TypeName, typeName);
@@ -129,7 +131,7 @@ internal sealed class VariantWriter : ColumnWriter<object>
         writer.WriteUInt64(VariantWire.BasicDiscriminatorsMode);
         for (int i = 0; i < alternatives.Length; i++)
         {
-            VariantRun first = own.Runs(i)[0];
+            VariantRun first = own.FirstRun(i);
             first.Child.WritePrefix(writer, first, values.Column);
         }
     }
@@ -141,8 +143,9 @@ internal sealed class VariantWriter : ColumnWriter<object>
         writer.WriteBytes(own.Discriminators.AsSpan(0, values.Count));
         for (int i = 0; i < alternatives.Length; i++)
         {
-            foreach (VariantRun run in own.Runs(i))
+            for (int k = own.FirstRunIndex(i); k < own.FirstRunIndex(i + 1); k++)
             {
+                VariantRun run = own.Run(k);
                 run.Child.Write(writer, run, values.Column);
             }
         }
@@ -283,90 +286,130 @@ internal sealed class VariantWriter : ColumnWriter<object>
         public string Refusal { get; }
     }
 
-    // The discriminators, the values of each alternative in row order, and the runs that write them.
+    // The discriminators, the values of each alternative in row order, and the runs that write them. The buffers hold one
+    // entry for each value, whatever the number of alternatives: the values are grouped by alternative in one array.
     private sealed class State : IColumnWriteState
     {
-        private readonly object[][] buckets;
-        private readonly VariantChild[][] children;
-        private readonly int[] filled;
-        private readonly List<VariantRun>[] runs;
+        private readonly int[] counts;
+        private readonly int[] starts;
+        private readonly int[] firstRun;
+        private readonly List<VariantRun> runs;
+        private VariantChild[] rowChildren;
+        private object[] grouped;
+        private VariantChild[] groupedChildren;
 
         public State(int alternativeCount, int count)
         {
             Discriminators = WriteBuffers.Rent<byte>(count);
-            buckets = new object[alternativeCount][];
-            children = new VariantChild[alternativeCount][];
-            filled = new int[alternativeCount];
-            runs = new List<VariantRun>[alternativeCount];
-            for (int i = 0; i < alternativeCount; i++)
-            {
-                buckets[i] = WriteBuffers.Rent<object>(count);
-                children[i] = WriteBuffers.Rent<VariantChild>(count);
-                runs[i] = new List<VariantRun>(1);
-            }
+            rowChildren = WriteBuffers.Rent<VariantChild>(count);
+            counts = new int[alternativeCount];
+            starts = new int[alternativeCount];
+            firstRun = new int[alternativeCount + 1];
+            runs = new List<VariantRun>(alternativeCount);
         }
 
         public byte[] Discriminators { get; private set; }
 
-        public List<VariantRun> Runs(int alternative) => runs[alternative];
+        public VariantRun FirstRun(int alternative) => runs[firstRun[alternative]];
 
-        public void Add(int alternative, object value, VariantChild child)
+        // The index of the first run of an alternative; the runs of alternative i end where those of i + 1 begin.
+        public int FirstRunIndex(int alternative) => firstRun[alternative];
+
+        public VariantRun Run(int index) => runs[index];
+
+        public void Selected(int position, int alternative, VariantChild child)
         {
-            buckets[alternative][filled[alternative]] = value;
-            children[alternative][filled[alternative]] = child;
-            filled[alternative]++;
+            rowChildren[position] = child;
+            counts[alternative]++;
+        }
+
+        // Puts the values of each alternative together, in row order, the alternatives one after the other.
+        public void Group(ValueSource<object> values)
+        {
+            var next = new int[counts.Length];
+            int total = 0;
+            for (int i = 0; i < counts.Length; i++)
+            {
+                starts[i] = total;
+                next[i] = total;
+                total += counts[i];
+            }
+
+            grouped = WriteBuffers.Rent<object>(total);
+            groupedChildren = WriteBuffers.Rent<VariantChild>(total);
+            int position = 0;
+            for (int r = 0; r < values.RunCount; r++)
+            {
+                foreach (object value in values.Run(r))
+                {
+                    byte discriminator = Discriminators[position];
+                    if (discriminator != IVariantColumn.NullDiscriminator)
+                    {
+                        int at = next[discriminator]++;
+                        grouped[at] = value;
+                        groupedChildren[at] = rowChildren[position];
+                    }
+
+                    position++;
+                }
+            }
+
+            WriteBuffers.Return(rowChildren);
+            rowChildren = null;
         }
 
         // Splits the values of one alternative into runs of one writer. An alternative with no value writes one empty
-        // run of its canonical writer, for its prefix.
+        // run of its canonical writer, for its prefix. Called for each alternative in order.
         public void BeginRuns(int alternative, VariantChild canonicalChild, string column, string alternativeType, string variantType)
         {
-            object[] bucket = buckets[alternative];
-            VariantChild[] owners = children[alternative];
-            int count = filled[alternative];
+            int first = starts[alternative];
+            int count = counts[alternative];
+            firstRun[alternative] = runs.Count;
             if (count == 0)
             {
-                runs[alternative].Add(canonicalChild.Begin(bucket, 0, 0, column));
+                runs.Add(canonicalChild.Begin(grouped, first, 0, column));
+                firstRun[alternative + 1] = runs.Count;
                 return;
             }
 
-            int start = 0;
-            for (int i = 1; i <= count; i++)
+            int start = first;
+            int end = first + count;
+            for (int i = first + 1; i <= end; i++)
             {
-                if (i < count && ReferenceEquals(owners[i], owners[start]))
+                if (i < end && ReferenceEquals(groupedChildren[i], groupedChildren[start]))
                 {
                     continue;
                 }
 
-                if (start > 0 && !owners[start].IsFlat)
+                if (start > first && !groupedChildren[start].IsFlat)
                 {
                     throw new ArgumentException(
                         $"Variant '{variantType}' cannot write the values of its alternative '{alternativeType}' from more than one CLR type in one block " +
-                        $"({owners[0].ValueType} and {owners[start].ValueType}). Give the values of that alternative as one CLR type.");
+                        $"({groupedChildren[first].ValueType} and {groupedChildren[start].ValueType}). Give the values of that alternative as one CLR type.");
                 }
 
-                runs[alternative].Add(owners[start].Begin(bucket, start, i - start, column));
+                runs.Add(groupedChildren[start].Begin(grouped, start, i - start, column));
                 start = i;
             }
+
+            firstRun[alternative + 1] = runs.Count;
         }
 
         public void Dispose()
         {
-            for (int i = 0; i < runs.Length; i++)
+            foreach (VariantRun run in runs)
             {
-                foreach (VariantRun run in runs[i])
-                {
-                    run.Dispose();
-                }
-
-                runs[i].Clear();
-                WriteBuffers.Return(buckets[i]);
-                WriteBuffers.Return(children[i]);
-                buckets[i] = null;
-                children[i] = null;
+                run.Dispose();
             }
 
+            runs.Clear();
+            WriteBuffers.Return(rowChildren);
+            WriteBuffers.Return(grouped);
+            WriteBuffers.Return(groupedChildren);
             WriteBuffers.Return(Discriminators);
+            rowChildren = null;
+            grouped = null;
+            groupedChildren = null;
             Discriminators = null;
         }
     }

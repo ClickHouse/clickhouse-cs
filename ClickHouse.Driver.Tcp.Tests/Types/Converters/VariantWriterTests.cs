@@ -151,6 +151,69 @@ public class VariantWriterTests
         });
     }
 
+    /// <summary>
+    /// A Variant of many alternatives writes the bytes of the current codec, for all rows and for a slice from row 3: the
+    /// values of each alternative stay in row order when the writer groups them.
+    /// </summary>
+    [Test]
+    public async Task Write_WideVariant_GivesTheBytesOfTheCurrentWrite()
+    {
+        string type = WideVariant(64);
+        object[] values = WideValues(97);
+        ColumnWriter<object> writer = Derivation.Writer<object>(type, ConverterHarness.Context);
+
+        foreach (int start in new[] { 0, 3 })
+        {
+            byte[] expected = await ConverterHarness.WriteOldAsync(type, values, start, values.Length - start);
+            byte[] actual = await ConverterHarness.WriteNewAsync(writer, values, start, values.Length - start);
+            Assert.That(Convert.ToHexString(actual), Is.EqualTo(Convert.ToHexString(expected)), $"rows [{start}, {values.Length})");
+        }
+    }
+
+    /// <summary>
+    /// The scratch of a write holds one entry for each value, whatever the number of alternatives. The test takes the
+    /// pooled buffers of the size of the scratch out of the pool first, so each buffer that the write rents is a new
+    /// allocation: a Variant of 64 alternatives and 4,000 values then allocates about three buffers of 4,000 entries, not
+    /// two for each alternative.
+    /// </summary>
+    [Test]
+    public void Write_WideVariant_AllocatesScratchForTheValuesOnly()
+    {
+        ColumnWriter<object> writer = Derivation.Writer<object>(WideVariant(64), ConverterHarness.Context);
+        object[] values = WideValues(4000);
+        using var output = new ClickHouse.Driver.Tcp.Protocol.ClickHouseBinaryWriter(System.IO.Stream.Null);
+        ConverterHarness.WriteAll(writer, output, ValueSource<object>.Of(values));
+
+        // More buffers than the shared pool keeps of one size: a partition for each processor, at most 32 buffers each.
+        int drain = (64 * Environment.ProcessorCount) + 16;
+        var objects = new object[drain][];
+        var children = new VariantChild[drain][];
+        for (int i = 0; i < drain; i++)
+        {
+            objects[i] = System.Buffers.ArrayPool<object>.Shared.Rent(values.Length);
+            children[i] = System.Buffers.ArrayPool<VariantChild>.Shared.Rent(values.Length);
+        }
+
+        long allocated;
+        try
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            ConverterHarness.WriteAll(writer, output, ValueSource<object>.Of(values));
+            allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        finally
+        {
+            for (int i = 0; i < drain; i++)
+            {
+                System.Buffers.ArrayPool<object>.Shared.Return(objects[i], clearArray: true);
+                System.Buffers.ArrayPool<VariantChild>.Shared.Return(children[i], clearArray: true);
+            }
+        }
+
+        // Two buffers of 4,096 references for each of the 64 alternatives would be 4 MiB.
+        Assert.That(allocated, Is.LessThan(512 * 1024), "bytes allocated by one write");
+    }
+
     /// <summary>A Variant with an alternative that is written from nothing (<c>Nothing</c>) is refused before a write.</summary>
     [Test]
     public void Derive_VariantWithAnAlternativeThatIsNotWritten_IsRefused()
@@ -230,5 +293,36 @@ public class VariantWriterTests
         public bool CanWrite(IColumn column) => false;
 
         public void WriteColumn(ClickHouse.Driver.Tcp.Protocol.ClickHouseBinaryWriter writer, IColumn column, int start, int length) => throw new NotSupportedException();
+    }
+
+    // Variant(UInt8, Array(UInt8), Array(Array(UInt8)), ...): alternatives of distinct canonical CLR types.
+    private static string WideVariant(int alternatives)
+    {
+        var names = new string[alternatives];
+        names[0] = "UInt8";
+        for (int i = 1; i < alternatives; i++)
+        {
+            names[i] = $"Array({names[i - 1]})";
+        }
+
+        return $"Variant({string.Join(", ", names)})";
+    }
+
+    // Values of the first three alternatives, and NULL, in an order that interleaves them.
+    private static object[] WideValues(int count)
+    {
+        var values = new object[count];
+        for (int i = 0; i < count; i++)
+        {
+            values[i] = (i % 4) switch
+            {
+                0 => (byte)i,
+                1 => new[] { (byte)i, (byte)(i + 1) },
+                2 => new[] { new[] { (byte)i } },
+                _ => null,
+            };
+        }
+
+        return values;
     }
 }
