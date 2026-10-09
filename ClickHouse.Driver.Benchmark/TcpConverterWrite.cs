@@ -46,8 +46,9 @@ public enum ConverterWriteShape
 /// </para>
 /// <para>
 /// One operation does what <c>InsertAsync</c> does for one block of a column that the caller builds with
-/// <see cref="ClickHouseTcpColumn"/>: it resolves the codec of the target type, asks the codec whether it accepts the
-/// column, writes the data block and flushes. An invocation inserts <see cref="BlocksPerInvocation"/> different
+/// <see cref="ClickHouseTcpColumn"/>: it resolves the codec of the target type, plans the write of the column
+/// (<see cref="InsertColumnWrite.For"/>: the codec for a column that it writes from its storage, else the converter tree
+/// of the column's CLR type), writes the data block and flushes. An invocation inserts <see cref="BlocksPerInvocation"/> different
 /// columns of <see cref="Rows"/> rows, rows <c>[0, 100,000)</c> of the spike's data. The writer stays open between
 /// invocations, as the writer of a connection does, and its stream discards the bytes.
 /// </para>
@@ -109,12 +110,10 @@ public class TcpConverterWrite
         foreach (IColumn column in columns)
         {
             IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(columnType, SchemaContext);
-            if (!codec.CanWrite(column))
-            {
-                throw new InvalidOperationException($"The codec of '{columnType}' does not accept the column.");
-            }
+            InsertColumnWrite write = InsertColumnWrite.For(codec, column, columnType, SchemaContext, ColumnCodecRegistry.Default.Converters)
+                ?? throw new InvalidOperationException($"The insert plan of '{columnType}' does not accept the column.");
 
-            InsertColumn[] plan = { new("value", columnType, codec, column) };
+            InsertColumn[] plan = { new("value", columnType, codec, column, write) };
             await BlockWriter.WriteDataBlockAsync(writer, Negotiated, plan, start: 0, Rows, BlockWriter.DefaultFlushThresholdBytes, CancellationToken.None);
             await writer.FlushAsync(CancellationToken.None);
         }
