@@ -275,6 +275,32 @@ public class ConverterDerivationTests
         });
     }
 
+    /// <summary>
+    /// A cached tree keeps the width of a <c>FixedString</c>, not a buffer of that width, so deriving a very wide one
+    /// allocates little.
+    /// </summary>
+    [TestCase(typeof(byte[]), false)]
+    [TestCase(typeof(string), false)]
+    [TestCase(typeof(byte[]), true)]
+    [TestCase(typeof(string), true)]
+    public void Derive_VeryWideFixedString_AllocatesLittle(Type clrType, bool read)
+    {
+        ConverterDerivation derivation = Fresh();
+        ConversionDirection direction = read ? ConversionDirection.Read : ConversionDirection.Write;
+
+        // Run the code once at a small width first, so the measured call allocates no JIT or static state.
+        Assert.That(derivation.Derive("FixedString(8)", ConverterHarness.Context, clrType, direction).Succeeded, Is.True);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Derivation wide = derivation.Derive("FixedString(268435456)", ConverterHarness.Context, clrType, direction);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(wide.Succeeded, Is.True);
+            Assert.That(allocated, Is.LessThan(64 * 1024), "bytes allocated to derive FixedString(268435456)");
+        });
+    }
+
     [Test]
     public void OfAndRefused_Null_Throw()
     {

@@ -349,6 +349,35 @@ public class InternerTests
         });
     }
 
+    /// <summary>The placeholder of a wide FixedString is made for the write; the dictionary is the current one.</summary>
+    [Test]
+    public async Task Dictionary_WideFixedStringFromText_GivesTheBytesOfThePaddedBytes()
+    {
+        const int size = 5_000;
+        string[] values = { "a", new string('y', size), "a", string.Empty };
+        var leaf = (BytesLeafWriter<string>)Leaf<string>($"FixedString({size})");
+        using var interner = new ClrKeyedByteInterner<string>(leaf, nullable: true);
+        int[] keys = values.Select((value, i) => interner.Intern(value, i)).ToArray();
+
+        byte[] expected = await ConverterHarness.WriteOldAsync(
+            $"LowCardinality(Nullable(FixedString({size})))",
+            values.Select(text =>
+            {
+                var bytes = new byte[size];
+                Encoding.UTF8.GetBytes(text, bytes);
+                return bytes;
+            }).ToArray(),
+            0,
+            values.Length);
+        byte[] actual = await CodecTestHarness.WriteAsync(w => WriteBytesDictionary(w, leaf, interner.Entries, keys));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(interner.Entries.Count, Is.EqualTo(4), "the NULL slot, the placeholder, \"a\" and the wide value");
+            Assert.That(actual, Is.EqualTo(expected));
+        });
+    }
+
     [Test]
     public Task Dictionary_FloatsWithSignedZerosAndNaNPayloads_GiveTheCurrentLowCardinalityBytes()
         => AssertFixedDictionaryAsync(
@@ -451,7 +480,9 @@ public class InternerTests
 
         public RefusingLeaf(string refused) => this.refused = refused;
 
-        public override ReadOnlySpan<byte> Placeholder => ReadOnlySpan<byte>.Empty;
+        public override ReadOnlySpan<byte> GetPlaceholder(ref byte[] scratch) => ReadOnlySpan<byte>.Empty;
+
+        public override void WritePlaceholder(ClickHouseBinaryWriter writer) => writer.WriteString(ReadOnlySpan<byte>.Empty);
 
         public override bool ClrEqualityImpliesCanonicalEquality => true;
 
