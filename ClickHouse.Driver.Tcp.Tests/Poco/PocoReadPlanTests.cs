@@ -545,7 +545,7 @@ public class PocoReadPlanTests
     // The column that the codec of its type decodes from the bytes that it writes for source: the column that a block
     // from the server holds. A converter reads the decoded shape of the column type (for example the null map of a
     // Nullable column, or the bytes of a String column), which a column that a test builds does not have.
-    private static IColumn Decoded(IColumn source)
+    internal static IColumn Decoded(IColumn source)
     {
         IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(source.TypeName, new ResolveContext { ServerTimezone = "UTC" });
         byte[] bytes = CodecTestHarness.WriteAsync(w => codec.WriteFull(w, source)).GetAwaiter().GetResult();
