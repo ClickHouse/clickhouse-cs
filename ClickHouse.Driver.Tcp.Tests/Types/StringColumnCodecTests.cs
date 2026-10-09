@@ -256,7 +256,11 @@ public class StringColumnCodecTests
 
         var thrown = Assert.Throws<InvalidOperationException>(() => ReadAs<byte[]>(text));
 
-        Assert.That(thrown.Message, Does.Contain("Column 'c' (String)").And.Contain("IStringColumn"));
+        Assert.That(
+            thrown.Message,
+            Is.EqualTo(
+                $"Column 'c' (String) was read as {typeof(ArrayColumn<string>)}, which does not expose the wire bytes through IStringColumn, " +
+                "so its values cannot be read as a byte[]. Only a String column decoded from a server response does."));
     }
 
     private static IColumn<T> ReadAs<T>(IColumn column)
