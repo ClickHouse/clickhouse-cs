@@ -58,7 +58,8 @@ internal abstract class InsertColumnWrite
 
     /// <summary>
     /// The write of <paramref name="values"/> as <paramref name="typeName"/>: through the codec when it writes the column
-    /// from its storage, else through the converter tree of the column's CLR type.
+    /// from its storage, else through the converter tree of the column's CLR type. A column of no single CLR type (it
+    /// implements <see cref="IColumn{T}"/> more than once) goes to the codec when the codec accepts it.
     /// </summary>
     /// <param name="codec">The codec of the target type, resolved with <paramref name="context"/>.</param>
     /// <param name="values">The column that the caller gives.</param>
@@ -81,8 +82,9 @@ internal abstract class InsertColumnWrite
         }
         catch (InvalidOperationException)
         {
-            // A column that implements IColumn<> zero or several times has no single CLR type to derive a tree for.
-            return null;
+            // A column that implements IColumn<> zero or several times has no single CLR type to derive a tree for, so
+            // the codec decides whether it writes the column.
+            return codec.CanWrite(values) ? ThroughCodec(codec) : null;
         }
 
         Derivation derived = derivation.Derive(typeName, in context, elementType, ConversionDirection.Write);
