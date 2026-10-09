@@ -272,6 +272,9 @@ internal sealed class VariantColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => allChildrenWritable && column is IColumn<object>;
 
     /// <inheritdoc/>
+    public bool WritesFromStorage(IColumn column) => allChildrenWritable && column is VariantColumn dense && HasTheSameAlternatives(dense);
+
+    /// <inheritdoc/>
     // Project the slice into one column per alternative once, and open each alternative's own write state over it,
     // so the prefix and body phases share a single projection and a child never sees the variant's own column.
     // Every alternative gets a column and a state even when no row selects it: the alternative set is fixed by the
