@@ -65,7 +65,7 @@ public class InsertColumnWriteTests
         });
     }
 
-    /// <summary>A column of a CLR type that the type is not written from, or of no single CLR type, has no write.</summary>
+    /// <summary>A column of a CLR type that the type is not written from has no write.</summary>
     [Test]
     public void For_ColumnThatCannotBeWritten_GivesNull()
     {
@@ -74,8 +74,24 @@ public class InsertColumnWriteTests
         Assert.Multiple(() =>
         {
             Assert.That(InsertColumnWrite.For(codec, new ArrayColumn<int>("c", null, new[] { 1 }), "String", ConverterHarness.Context, ConverterDerivation.Default), Is.Null);
-            Assert.That(InsertColumnWrite.For(codec, new TwoTypedColumn(), "String", ConverterHarness.Context, ConverterDerivation.Default), Is.Null);
+            Assert.That(InsertColumnWrite.For(ConverterHarness.Codec("UInt8"), new TwoTypedColumn(), "UInt8", ConverterHarness.Context, ConverterDerivation.Default), Is.Null);
         });
+    }
+
+    /// <summary>
+    /// A column of no single CLR type has no converter tree, so the codec decides, and writes it as it accepts it: the
+    /// String codec writes the column's <see cref="string"/> values.
+    /// </summary>
+    [Test]
+    public async Task For_ColumnOfNoSingleClrType_IsWrittenByTheCodecWhenItAcceptsTheColumn()
+    {
+        IColumnCodec codec = ConverterHarness.Codec("String");
+        var column = new TwoTypedColumn();
+
+        InsertColumnWrite write = InsertColumnWrite.For(codec, column, "String", ConverterHarness.Context, ConverterDerivation.Default);
+
+        Assert.That(write, Is.Not.Null);
+        Assert.That(Convert.ToHexString(await WriteAsync(write, column, 0, 1)), Is.EqualTo("0161"));
     }
 
     /// <summary>
