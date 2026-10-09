@@ -23,6 +23,151 @@ A quick, partial prototype. It is not production code and it is not for merge.
 
 The only change outside `spikes/` is one `InternalsVisibleTo` line in `ClickHouse.Driver.Tcp/AssemblyInfo.cs`.
 
+## Diagrams
+
+### Current structure: read
+
+Each codec answers the conversion questions itself. A composite codec answers them again and forwards to
+its children. The POCO tier adds its own rules on top.
+
+```mermaid
+flowchart TB
+    W["wire bytes"] --> RC["codec.ReadColumnAsync"] --> DC["decoded column<br/>StringColumn · DateTimeColumn · LowCardinalityColumn · ..."]
+    DC --> RA["Block.ReadAs#lt;T#gt;<br/>(columnar)"]
+    DC --> PR["PocoReadPlan#lt;T#gt;<br/>(QueryAsync#lt;T#gt;)"]
+    PR --> SF["PocoColumnScatterFactory"]
+    RA --> CP
+    SF -->|"codec offers a column-level reading"| CP
+    SF -->|"otherwise"| PV["PocoValueProjection<br/>object-tier rules + codec.TryProjectRead"]
+
+    subgraph CP["ColumnProjection.For(codec, T): three hooks, asked in a fixed order.<br/>Nullable · Array · LowCardinality · Map · Tuple codecs answer 2 and 3 by asking their child codec."]
+        direction LR
+        H1["1. identity<br/>T is the codec's ElementType"] -->|no| H2["2. codec.TryProjectColumnRead(T)<br/>column view"]
+        H2 -->|no| H3["3. codec.TryProjectRead(expression, T)<br/>compiled per-value view"]
+        H3 -->|no| H4["refused"]
+    end
+```
+
+### Current structure: write
+
+For each leaf type and each write type, four members must agree. Each composite has its own family of write
+shapes, doubled for value types and reference types.
+
+```mermaid
+flowchart TB
+    IN["caller column: IColumn#lt;TWrite#gt;"] --> CW{"codec.CanWrite(column)"}
+    CW -->|yes| BW["BeginWrite · WriteStatePrefix · WriteColumn"]
+
+    BW --> NC["Nullable codec<br/>value shape · reference shape"]
+    BW --> LC["LowCardinality codec<br/>plain shape · nullable shape"]
+    BW --> AC["Array codec<br/>write shapes, lazy flattening view"]
+    BW --> MC["Map codec<br/>copy into pooled buffers"]
+
+    subgraph leaf["Leaf codec, for example String: four members for each write type"]
+        WC["WriteColumn<br/>type switch: IColumn#lt;string#gt; · IColumn#lt;byte[]#gt;"]
+        NP["NullPlaceholderAs(TWrite)"]
+        KW["LowCardinalityKeyWriter(TWrite)<br/>null = cannot be a dictionary key"]
+        RP["TryProjectRead · TryProjectColumnRead"]
+    end
+
+    NC -->|"value for each null row"| NP
+    NC --> WC
+    LC -->|"dictionary key for each CLR value"| KW
+    LC -->|"dictionary as ArrayColumn#lt;TWrite#gt;"| WC
+    AC --> WC
+    MC --> WC
+```
+
+### Candidate structure: layers
+
+The decoders stay as they are, because they already produce the dense wire layout. One derivation builds a
+converter tree from a type string and a CLR type, and every tier uses that tree.
+
+```mermaid
+flowchart LR
+    subgraph wire["Wire layer: the current decoders, unchanged"]
+        R["wire bytes"] --> D["dense layout<br/>raw values · bytes + offsets ·<br/>dictionary + keys · null map + inner ·<br/>offsets + flat child"]
+    end
+
+    subgraph conv["Converter layer: new"]
+        LT["leaf table<br/>(leaf type, CLR type) → read and write"]
+        CB["combinators<br/>Lift · Each · Dictionary"]
+        DV["Derive(type, context, T)<br/>cached: a tree, or a refusal with a reason"]
+        LT --> DV
+        CB --> DV
+    end
+
+    DV --> T1["columnar read<br/>Bind + Fill(span)"]
+    DV --> T2["POCO read<br/>Emit: one compiled loop per column"]
+    DV --> T3["writes<br/>convert, then encode"]
+    DV --> T4["CanRead · CanWrite<br/>= the derivation succeeds"]
+    D --> T1
+    D --> T2
+```
+
+### Candidate structure: derived trees
+
+Two trees the spike derives. Each node reads only its own part of the dense layout.
+
+```mermaid
+flowchart TB
+    subgraph a["Array(String) as byte[][]"]
+        A1["Each#lt;byte[]#gt;<br/>reads the offsets, one array per row"] --> A2["leaf String → byte[]<br/>reads bytes + offsets"]
+    end
+    subgraph b["LowCardinality(Nullable(String)) as string"]
+        B1["Dictionary#lt;string#gt;<br/>converts each entry once per block,<br/>slot 0 = NULL, then reads keys"] --> B2["leaf String → string<br/>reads the dictionary's bytes + offsets"]
+    end
+    subgraph c["Nullable(DateTime('UTC')) as DateTimeOffset?"]
+        C1["LiftValue#lt;DateTimeOffset#gt;<br/>reads the null map"] --> C2["leaf DateTime → DateTimeOffset<br/>reads uint seconds"]
+    end
+```
+
+### Candidate structure: the fused POCO loop
+
+`Emit` runs down the tree once, when the plan is built. Each node adds its setup before the loop and returns
+an expression for one row. The result is one compiled loop per column, for example for
+`Nullable(DateTime('UTC'))` into a `DateTimeOffset?` property:
+
+```mermaid
+flowchart LR
+    P["plan build"] --> E1["LiftValue.Emit<br/>setup: null map, inner column"]
+    E1 --> E2["leaf.Emit<br/>setup: time zone, uint span"]
+    E2 --> L["compiled loop"]
+```
+
+```csharp
+// before the loop: one time for each window of rows
+var nulls   = ((INullableColumn)column).NullMap;
+var inner   = ((INullableColumn)column).Inner;
+var seconds = ((IColumn<uint>)inner).Values;
+
+// the loop
+for (int i = 0; i < count; i++)
+{
+    int r = start + i;
+    rows[i].Ndt = nulls[r] != 0 ? null : DateTimeToOffset(seconds[r], zone);
+}
+```
+
+### Candidate structure: writes
+
+A writer converts each value to its canonical value just before it encodes it. A composite writes each of
+its streams across all rows, so `Each` passes the rows' arrays to its child as one list of segments.
+
+```mermaid
+flowchart LR
+    subgraph lc["LowCardinality(String) from string or byte[]"]
+        V["value"] --> CA["leaf: value → canonical bytes<br/>(or a refusal)"]
+        CA --> BI["ByteInterner<br/>canonical bytes → key"]
+        BI --> KS["keys"]
+        BI --> DE["dictionary entries"]
+        DE --> EN["leaf: encode canonical bytes"]
+    end
+    subgraph an["Array(Nullable(String)): wire order, all rows"]
+        O1["all offsets"] --> O2["whole null map"] --> O3["all values,<br/>canonical placeholder at null rows"]
+    end
+```
+
 ## Correctness
 
 `dotnet run -c Release -- verify` compares every result with the current client, on 10,000 rows:
@@ -181,21 +326,21 @@ shapes, so the write combinators need their own entry point next to `IColumnCode
 - **Cause in the current client.** `StringColumnCodec.LowCardinalityKeyWriter` returns a key strategy only
   for `string`, and `null` for `byte[]`. LowCardinality takes `null` to mean "this write type cannot be a
   dictionary key", so `CanWrite` is false and the insert is refused. The test
-  `LowCardinalityKeyWriter_Bytes_IsUnavailableAndLowCardinalityRefusesThem` pins this. PR #594 made the
+  `LowCardinalityKeyWriter_Bytes_IsUnavailableAndLowCardinalityRefusesThem` pins this. ClickHouse/clickhouse-cs#594 made the
   refusal on purpose, because an earlier version accepted the write and then threw part-way through it. It
   lists "`LowCardinality(String)` written from bytes" as a follow-up that needs a byte-comparing dictionary
   and a placeholder for each write type.
 - **The candidate structure writes all three** with no code for this case. The bytes are the same as the
   current client's write of the same text. Bytes that are not valid UTF-8 (`0xFF`) round-trip unchanged,
   which no write through `string` can do.
-- **The current structure can also fix it with one line.** Both parts that #594 named exist in `main` now:
+- **The current structure can also fix it with one line.** Both parts that ClickHouse/clickhouse-cs#594 named exist in `main` now:
   the byte-content key `LowCardinalityKeys.Bytes()` (which `FixedString` uses) and
   `StringColumnCodec.NullPlaceholderAs(typeof(byte[]))`. With `byte[] => LowCardinalityKeys.Bytes()` added to
   the `String` key writer, the current client writes all three cases with the same bytes as the candidate.
   The Tcp unit tests (2,192, `net10.0`, no server) then fail only on the test above, which pins the refusal.
   The server-backed `CanWrite_ItsAnswer_IsWhetherTheInsertGoesThrough` case for
   `LowCardinality(String)` from `byte[]` was not run.
-- **What this says about #801.** #792 is the comparer problem from #801 in small: in the current structure,
+- **What this says about ClickHouse/integrations#801.** ClickHouse/integrations#792 is the comparer problem from ClickHouse/integrations#801 in small: in the current structure,
   each pair of write type and LowCardinality inner needs its own key strategy, and a missing one shows up as
   a refusal. In the candidate structure, the key is the canonical value, so any write type that converts
   to the leaf gets deduplication with no extra code.
