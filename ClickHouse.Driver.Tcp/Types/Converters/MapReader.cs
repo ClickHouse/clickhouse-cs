@@ -78,10 +78,28 @@ internal sealed class MapReader<TKey, TValue> : ColumnReader<KeyValuePair<TKey, 
             values.Fill(from, valueScratch.AsSpan(0, length));
             return Pairs(keyScratch, valueScratch, 0, length);
         }
+        catch
+        {
+            ReadInPairOrder(keys, values, from, length);
+            throw;
+        }
         finally
         {
             ArrayPool<TKey>.Shared.Return(keyScratch, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<TKey>());
             ArrayPool<TValue>.Shared.Return(valueScratch, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<TValue>());
+        }
+    }
+
+    // After a bulk read fails: reads each entry again, the key and then the value, in entry order, so the read throws
+    // the failure of the first entry that fails, as a read of one entry at a time does.
+    private static void ReadInPairOrder(BoundReader<TKey> keys, BoundReader<TValue> values, int from, int length)
+    {
+        var key = new TKey[1];
+        var value = new TValue[1];
+        for (int entry = from; entry < from + length; entry++)
+        {
+            keys.Fill(entry, key);
+            values.Fill(entry, value);
         }
     }
 
@@ -114,7 +132,8 @@ internal sealed class MapReader<TKey, TValue> : ColumnReader<KeyValuePair<TKey, 
             this.values = values;
         }
 
-        // Reads the entries of all the rows with one bulk read of each child, then pairs them row by row.
+        // Reads the entries of all the rows with one bulk read of each child, then pairs them row by row. When a child
+        // fails, the entries are read again in entry order, so the read fails as a read of one row at a time does.
         public override void Fill(int start, Span<KeyValuePair<TKey, TValue>[]> destination)
         {
             ReadOnlySpan<int> offsets = column.Offsets.Slice(start, destination.Length + 1);
@@ -130,6 +149,11 @@ internal sealed class MapReader<TKey, TValue> : ColumnReader<KeyValuePair<TKey, 
                 {
                     destination[i] = Pairs(keyScratch, valueScratch, offsets[i] - first, offsets[i + 1] - offsets[i]);
                 }
+            }
+            catch
+            {
+                ReadInPairOrder(keys, values, first, count);
+                throw;
             }
             finally
             {
