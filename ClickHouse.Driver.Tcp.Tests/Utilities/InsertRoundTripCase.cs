@@ -64,7 +64,17 @@ public sealed class InsertRoundTripCase
     public override string ToString() => Label;
 
     /// <summary>All round-trip cases, for use as an NUnit <c>TestCaseSource</c>.</summary>
-    public static IEnumerable<InsertRoundTripCase> Cases()
+    /// <returns>The cases that the server under test supports.</returns>
+    public static IEnumerable<InsertRoundTripCase> Cases() => CasesFor(TcpServerFeatures.Supported);
+
+    /// <summary>The round-trip cases for a server with the given features.</summary>
+    /// <remarks>
+    /// The offline differential tests use <see cref="TcpFeature.All"/>. They need no server, so the number of
+    /// cases they check does not change with <c>CLICKHOUSE_VERSION</c>.
+    /// </remarks>
+    /// <param name="features">The features of the server that the cases are for.</param>
+    /// <returns>The cases that a server with those features supports.</returns>
+    internal static IEnumerable<InsertRoundTripCase> CasesFor(TcpFeature features)
     {
         yield return Primitive("UInt8", new byte[] { 0, 1, 128, 255 });
         yield return Primitive("Int8", new sbyte[] { -128, -1, 0, 127 });
@@ -294,7 +304,7 @@ public sealed class InsertRoundTripCase
         yield return NullableValues<bool>("Bool", true, null, false);
 
         // Nullable tuples require projecting the inner column before building tuple write state.
-        if (TcpServerFeatures.Has(TcpFeature.NullableTuple))
+        if (features.HasFlag(TcpFeature.NullableTuple))
         {
             yield return Same(
                 "Nullable(Tuple(UInt8, String))",
@@ -1597,7 +1607,7 @@ public sealed class InsertRoundTripCase
         yield return Arrays("Point", new[] { (0d, 0d), (1d, 2d) }, Array.Empty<(double, double)>());
 
         // Cover Nullable through the Point tuple alias.
-        if (TcpServerFeatures.Has(TcpFeature.NullableTuple))
+        if (features.HasFlag(TcpFeature.NullableTuple))
         {
             yield return Same(
                 "Nullable(Point)",
@@ -1619,12 +1629,12 @@ public sealed class InsertRoundTripCase
         // GeometryIntegrationTests asks the server for its own name for each row instead.
         // The insert source is the dense column: a gathered row of one of those pairs would name neither
         // alternative, so only explicit discriminators can express this column.
-        if (TcpServerFeatures.Has(TcpFeature.Geometry))
+        if (features.HasFlag(TcpFeature.Geometry))
         {
             yield return Same("Geometry", "Geometry", name => BuildGeometryColumn(name));
         }
 
-        if (TcpServerFeatures.Has(TcpFeature.QBit))
+        if (features.HasFlag(TcpFeature.QBit))
         {
             yield return Same(
                 "QBit(Float32, 4)",
@@ -1719,7 +1729,7 @@ public sealed class InsertRoundTripCase
                     new[] { 0d, -0d, double.NaN },
                 }));
 
-            if (TcpServerFeatures.Has(TcpFeature.QBitInt8))
+            if (features.HasFlag(TcpFeature.QBitInt8))
             {
                 yield return Same(
                     "QBit(Int8, 17)",
