@@ -59,25 +59,9 @@ internal static class PocoReadErrors
     /// <param name="row">The zero-based row of the result the NULL was found at.</param>
     /// <returns>The exception to throw.</returns>
     public static Exception NullNotAssignable(string columnName, string columnType, string pocoType, string memberName, string memberType, long row)
-        => NullNotAssignable(columnName, columnType, pocoType, memberName, memberType, row, inner: null);
-
-    /// <summary>
-    /// Creates the exception thrown when a NULL reaches a property that cannot hold it, with the failure of the reader
-    /// that found the NULL.
-    /// </summary>
-    /// <param name="columnName">The column name.</param>
-    /// <param name="columnType">The column's ClickHouse type.</param>
-    /// <param name="pocoType">The POCO type's name.</param>
-    /// <param name="memberName">The property name.</param>
-    /// <param name="memberType">The property type.</param>
-    /// <param name="row">The zero-based row of the result the NULL was found at.</param>
-    /// <param name="inner">The failure of the reader, or null.</param>
-    /// <returns>The exception to throw.</returns>
-    public static Exception NullNotAssignable(string columnName, string columnType, string pocoType, string memberName, string memberType, long row, Exception inner)
         => new InvalidOperationException(
             $"Column '{columnName}' ({columnType}) is NULL at row {row} of the result, but it maps to property '{pocoType}.{memberName}' of type {memberType}, which cannot hold null. " +
-            $"Make that property nullable, or exclude the NULLs in the query.",
-            inner);
+            $"Make that property nullable, or exclude the NULLs in the query.");
 
     /// <summary>
     /// Whether a parsed type contains a real <c>Nothing</c> node, excluding labels or field names with that text.
