@@ -145,6 +145,15 @@ public class LeafWriterTests
             new[] { ConverterHarness.Codec(type).ElementType, CanonicalType(type) },
             type);
 
+    [Test]
+    public void ToCanonical_DestinationShorterThanTheValues_Throws()
+    {
+        var writer = (FixedLeafWriter<DateTimeOffset, uint>)Derivation.Writer<DateTimeOffset>("DateTime", ConverterHarness.Context);
+
+        var thrown = Assert.Throws<ArgumentException>(() => writer.ToCanonical(new[] { DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch }, new uint[1], 0));
+        Assert.That(thrown.ParamName, Is.EqualTo("destination"));
+    }
+
     private static Type CanonicalType(string type) => type switch
     {
         "UUID" or "IPv6" => typeof(UInt128),

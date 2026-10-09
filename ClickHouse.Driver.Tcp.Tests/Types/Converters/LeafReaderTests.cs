@@ -107,6 +107,17 @@ public class LeafReaderTests
         });
     }
 
+    /// <summary>The message names a generic surface as C# writes it.</summary>
+    [Test]
+    public void Bind_ColumnWithoutTheStoredValues_NamesTheGenericSurface()
+    {
+        var column = new ArrayColumn<string>("when", "DateTime", new[] { "a" });
+        ColumnReader<DateTimeOffset> reader = Derivation.Reader<DateTimeOffset>("DateTime", ConverterHarness.Context);
+
+        var thrown = Assert.Throws<InvalidOperationException>(() => reader.Bind(column));
+        Assert.That(thrown.Message, Does.Contain("Column 'when' (DateTime)").And.Contain("does not expose IColumn<UInt32>,"));
+    }
+
     [Test]
     public async Task Fill_RowsPastTheEnd_Throws()
     {
