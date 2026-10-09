@@ -410,7 +410,8 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// assigned to the target element type (this matches the ADO.NET
     /// <see cref="DbDataReader.GetFieldValue{T}"/> contract). <see cref="InvalidOperationException"/>
     /// signals a shape-validation failure — the value's structure matches
-    /// <typeparamref name="T"/> but rows are ragged or an intermediate row is null. For every
+    /// <typeparamref name="T"/> but rows are ragged or an intermediate row is null. A
+    /// <typeparamref name="T"/> that contains a tuple is converted as described below. For every
     /// other <typeparamref name="T"/> this is a plain cast and follows the standard ADO.NET
     /// behaviour.
     /// <para>
