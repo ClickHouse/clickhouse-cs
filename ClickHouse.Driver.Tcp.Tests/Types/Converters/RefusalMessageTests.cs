@@ -77,6 +77,20 @@ public class RefusalMessageTests
             "It accepts System.UInt32[], and an Array, Map or Tuple type also accepts values of the types that its element types accept."));
     }
 
+    // A boxed value is never a nullable value type, so the message names the value type that a NULL-holding column takes.
+    [Test]
+    public void UntypedWrite_ValuesANullableColumnCannotBeWrittenFrom_NamesTheValueType()
+    {
+        object[][] rows = { new object[] { "a" } };
+        using var buffer = PocoRowBuffer<object[]>.Create(rows, "rows", rows.Length, CancellationToken.None);
+
+        var thrown = Assert.Throws<InvalidOperationException>(() => UntypedRowColumns.CreateSource(RowWriteArms.Schema("Nullable(Int32)", Context), buffer, rows.Length));
+
+        Assert.That(thrown.Message, Is.EqualTo(
+            "Column 0 ('value', Nullable(Int32)) was given values of type System.String, which it cannot be written from. " +
+            "It accepts System.Int32, and an Array, Map or Tuple type also accepts values of the types that its element types accept."));
+    }
+
     [TestCase(
         "FixedString(4)",
         "Column 'value' (FixedString(4)) was given a column of element type System.Int32, which it cannot be written from. " +
