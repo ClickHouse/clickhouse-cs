@@ -32,6 +32,18 @@ public class DifferentialTests
         [(Tier.Write, "Unavailable")] = 42,
         [(Tier.CanWrite, "Answer False")] = 60,
         [(Tier.CanWrite, "Answer True")] = 771,
+        [(Tier.PocoWrite, "Bytes")] = 759,
+        [(Tier.PocoWrite, "Failed")] = 2,
+        [(Tier.PocoWrite, "Refused")] = 28,
+        [(Tier.PocoWrite, "Unavailable")] = 42,
+        [(Tier.PocoCanWrite, "Answer False")] = 49,
+        [(Tier.PocoCanWrite, "Answer True")] = 782,
+        [(Tier.UntypedWrite, "Bytes")] = 719,
+        [(Tier.UntypedWrite, "Failed")] = 2,
+        [(Tier.UntypedWrite, "Refused")] = 68,
+        [(Tier.UntypedWrite, "Unavailable")] = 42,
+        [(Tier.UntypedCanWrite, "Answer False")] = 89,
+        [(Tier.UntypedCanWrite, "Answer True")] = 742,
     };
 
     [TestCaseSource(typeof(DifferentialCases), nameof(DifferentialCases.All))]

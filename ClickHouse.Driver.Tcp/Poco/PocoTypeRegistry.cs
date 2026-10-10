@@ -15,7 +15,7 @@ internal sealed class PocoTypeRegistry
 
     private readonly ConcurrentDictionary<(Type PocoType, string Signature, PocoScatterTier? ForcedTier), object> readPlans = new();
 
-    private readonly ConcurrentDictionary<(Type PocoType, string Signature), object> writePlans = new();
+    private readonly ConcurrentDictionary<(Type PocoType, string Signature, PocoGatherTier? ForcedTier), object> writePlans = new();
 
     /// <summary>
     /// The scatter tier of every read plan that does not ask for one, or null to let the runtime choose. The tests set
@@ -23,6 +23,12 @@ internal sealed class PocoTypeRegistry
     /// code.
     /// </summary>
     internal PocoScatterTier? ForcedTier { get; init; }
+
+    /// <summary>
+    /// The gather tier of every write plan, or null to let the runtime choose. The tests set it to run the client's row
+    /// inserts through <see cref="PocoGatherTier.Delegate"/>, the tier of a runtime without dynamic code.
+    /// </summary>
+    internal PocoGatherTier? ForcedGatherTier { get; init; }
 
     /// <summary>Gets or builds the descriptor for <typeparamref name="T"/>.</summary>
     /// <typeparam name="T">The POCO type.</typeparam>
@@ -60,12 +66,14 @@ internal sealed class PocoTypeRegistry
     /// <param name="schema">The server's sample block for the INSERT.</param>
     /// <returns>The cached plan.</returns>
     /// <exception cref="InvalidOperationException"><typeparamref name="T"/> cannot fill the target schema.</exception>
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     public PocoWritePlan<T> WritePlanFor<T>(Block schema)
         where T : class
     {
         PocoTypeDescriptor<T> descriptor = DescriptorFor<T>();
+        PocoGatherTier? tier = ForcedGatherTier;
         return (PocoWritePlan<T>)writePlans.GetOrAdd(
-            (typeof(T), PocoWritePlan.SignatureOf(schema)),
-            _ => PocoWritePlan<T>.Build(descriptor, schema));
+            (typeof(T), PocoWritePlan.SignatureOf(schema), tier),
+            _ => PocoWritePlan<T>.Build(descriptor, schema, tier));
     }
 }

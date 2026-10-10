@@ -711,11 +711,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     {
                         // The plan holds the source's columns, which keep their identity as each block refills
                         // them, so it is built once here rather than per block.
-                        // The caller's own columns go through the converter derivation; the columns that a row
-                        // insert builds are written by their codecs.
                         plan = values.Count == 0
                             ? null
-                            : BuildInsertPlan(values, schema, validateWritable: rowCount > 0, useConverters: buildColumns is null, out mismatchError);
+                            : BuildInsertPlan(values, schema, validateWritable: rowCount > 0, out mismatchError);
                     }
                 }
 
@@ -969,14 +967,14 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// </summary>
     /// <param name="columns">The caller's value columns; names are unique (validated earlier).</param>
     /// <param name="schema">The server's sample block describing the target columns.</param>
-    /// <param name="validateWritable">Whether to confirm each value column is writable as its target type.</param>
-    /// <param name="useConverters">
-    /// Whether a column is written through <see cref="InsertColumnWrite.For"/>: by its codec when the codec writes it from
-    /// its storage, else by the converter tree of its CLR type. Otherwise the codec writes every column.
+    /// <param name="validateWritable">
+    /// Whether to confirm each value column is writable as its target type. A column is then written through
+    /// <see cref="InsertColumnWrite.For"/>: by its codec when the codec writes it from its storage, else by the converter
+    /// tree of its CLR type. Otherwise the codec writes every column.
     /// </param>
     /// <param name="error">Set to a human-readable message on mismatch; null on success.</param>
     /// <returns>The per-column write plan in schema order, or null when <paramref name="error"/> is set.</returns>
-    private static InsertColumn[] BuildInsertPlan(IReadOnlyList<IColumn> columns, Block schema, bool validateWritable, bool useConverters, out string error)
+    private static InsertColumn[] BuildInsertPlan(IReadOnlyList<IColumn> columns, Block schema, bool validateWritable, out string error)
     {
         error = null;
 
@@ -1025,11 +1023,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 return null;
             }
 
-            InsertColumnWrite write = !validateWritable
-                ? InsertColumnWrite.ThroughCodec(codec)
-                : useConverters
-                    ? InsertColumnWrite.For(codec, slot.Values, slot.TypeName, schema.Context, schema.Codecs.Converters)
-                    : codec.CanWrite(slot.Values) ? InsertColumnWrite.ThroughCodec(codec) : null;
+            InsertColumnWrite write = validateWritable
+                ? InsertColumnWrite.For(codec, slot.Values, slot.TypeName, schema.Context, schema.Codecs.Converters)
+                : InsertColumnWrite.ThroughCodec(codec);
             if (write is null)
             {
                 error = DescribeUnwritableColumn(slot, codec);
