@@ -26,7 +26,22 @@ internal sealed partial class ConverterDerivation
     /// </summary>
     /// <param name="type">The ClickHouse type string. It must be well formed.</param>
     /// <returns>Whether the type holds NULL.</returns>
-    public bool HoldsNull(string type) => HoldsNull(TypeParser.Parse(type));
+    public bool HoldsNull(string type)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        if (holdsNullCache.TryGetValue(type, out bool holds))
+        {
+            return holds;
+        }
+
+        holds = HoldsNull(TypeParser.Parse(type));
+        if (holdsNullCache.Count < MaxCachedDerivations)
+        {
+            holdsNullCache.TryAdd(type, holds);
+        }
+
+        return holds;
+    }
 
     private bool HoldsNull(TypeNode node)
     {

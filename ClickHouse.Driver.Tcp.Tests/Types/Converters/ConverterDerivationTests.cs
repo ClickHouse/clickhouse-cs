@@ -331,7 +331,19 @@ public class ConverterDerivationTests
     [TestCase("Ring", false)]
     [TestCase("SimpleAggregateFunction(anyLast, String)", false)]
     public void HoldsNull_Type_IsWhetherANullRowNeedsNoValue(string type, bool holdsNull)
-        => Assert.That(ConverterDerivation.Default.HoldsNull(type), Is.EqualTo(holdsNull));
+    {
+        // A new derivation, so that the first answer is computed and the second answer comes from the cache.
+        var derivation = new ConverterDerivation(ColumnCodecRegistry.Default);
+        Assert.Multiple(() =>
+        {
+            Assert.That(derivation.HoldsNull(type), Is.EqualTo(holdsNull), "computed");
+            Assert.That(derivation.HoldsNull(type), Is.EqualTo(holdsNull), "cached");
+        });
+    }
+
+    [Test]
+    public void HoldsNull_Null_Throws()
+        => Assert.Throws<ArgumentNullException>(() => ConverterDerivation.Default.HoldsNull(null));
 
     [Test]
     public void OfAndRefused_Null_Throw()
