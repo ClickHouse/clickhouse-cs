@@ -32,23 +32,22 @@ internal sealed class RangeOutcomes
 /// <summary>The outcomes of every arm for one facet.</summary>
 internal sealed class FacetResult
 {
-    public FacetResult(Facet facet, Arm referenceArm, RangeOutcomes reference, IReadOnlyList<(Arm Arm, RangeOutcomes Outcomes)> candidates)
+    public FacetResult(Facet facet, IReadOnlyList<(Arm Arm, RangeOutcomes Outcomes)> candidates)
     {
         Facet = facet;
-        ReferenceArm = referenceArm;
-        Reference = reference;
         Candidates = candidates;
     }
 
     public Facet Facet { get; }
 
-    /// <summary>The reference arm of the facet's tier, or null when the tier has none.</summary>
-    public Arm ReferenceArm { get; }
-
-    /// <summary>The reference outcomes, or null when the tier has no reference.</summary>
-    public RangeOutcomes Reference { get; }
-
+    /// <summary>The outcomes of each candidate that covers the facet, in the order the candidates were added.</summary>
     public IReadOnlyList<(Arm Arm, RangeOutcomes Outcomes)> Candidates { get; }
+
+    /// <summary>The arm of the first candidate, or null when no candidate covers the facet.</summary>
+    public Arm BaselineArm => Candidates.Count == 0 ? null : Candidates[0].Arm;
+
+    /// <summary>The outcomes of the first candidate, or null when no candidate covers the facet.</summary>
+    public RangeOutcomes Baseline => Candidates.Count == 0 ? null : Candidates[0].Outcomes;
 }
 
 /// <summary>The result of a case: the outcomes of each facet, and each difference that the case found.</summary>
@@ -69,7 +68,7 @@ internal sealed class CaseReport
 
     public IReadOnlyList<FacetResult> Facets { get; }
 
-    /// <summary>One message for each difference. Empty when every candidate agrees with the reference.</summary>
+    /// <summary>One message for each difference. Empty when every candidate agrees with the baseline.</summary>
     public IReadOnlyList<string> Mismatches { get; }
 }
 
@@ -78,7 +77,7 @@ internal sealed class CaseReport
 /// </summary>
 /// <remarks>
 /// <para>
-/// The reference write of the case's first write input gives the bytes of the column. Each call of an arm gets
+/// The baseline write of the case's first write input gives the bytes of the column. Each call of an arm gets
 /// a block that is decoded from those bytes for that call only, with <c>ReadStatePrefixAsync</c> and
 /// <c>ReadColumnAsync</c>. A cache that a column fills on its first read is therefore empty for each arm.
 /// </para>
@@ -86,16 +85,17 @@ internal sealed class CaseReport
 /// Each facet runs for all rows and for the tail. The tail of a case of two rows or more is
 /// <c>[RowCount / 2, RowCount)</c>. The tail of a case of one row is row 1 of a column that has a row before the
 /// case's row: for an <c>Array</c> type, the row's elements twice; for other types, a copy. So every read and every
-/// write also runs with a start above zero, after a preceding row. A candidate must give the same outcome as the
-/// reference for both ranges, or the outcome that a deliberate change declares. Each arm, the reference too, must
-/// also read the same values for the tail alone as for the same rows of the case in the full read.
+/// write also runs with a start above zero, after a preceding row. The first candidate that covers a facet is its
+/// baseline. Every other candidate must give the baseline's outcome for both ranges, or every candidate must give the
+/// outcome that is declared for the facet. Each arm must also read the same values for the tail alone as for the same
+/// rows of the case in the full read.
 /// </para>
 /// <para>
 /// An outcome that the source test of the case states (<see cref="DifferentialCase.Stated"/>) must be the outcome of
-/// the reference, or of the first candidate when the tier has no reference.
+/// the baseline.
 /// </para>
 /// </remarks>
-internal sealed class DifferentialEngine : IReferenceOutcomes
+internal sealed class DifferentialEngine
 {
     private static readonly ConcurrentDictionary<string, CaseReport> CurrentReports = new(StringComparer.Ordinal);
 
@@ -146,14 +146,6 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
         return new CaseReport(testCase, engine.results.Values.ToList(), engine.mismatches, engine.hasTail ? engine.tailStart : 0);
     }
 
-    /// <inheritdoc/>
-    Outcome IReferenceOutcomes.Read(Tier tier, Type target, Rows rows)
-        => results.Values.FirstOrDefault(r => r.Facet.Tier == tier && r.Facet.Target == target)?.Reference?.For(rows);
-
-    /// <inheritdoc/>
-    Outcome IReferenceOutcomes.Write(Tier tier, string inputLabel, Rows rows)
-        => results.Values.FirstOrDefault(r => r.Facet.Tier == tier && r.Facet.Input?.Label == inputLabel)?.Reference?.For(rows);
-
     private static object Invoke(MethodInfo method, Type typeArgument, object target, params object[] arguments)
     {
         try
@@ -199,7 +191,7 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
             return;
         }
 
-        // Read facets first: a read-back write input writes the values of the reference read.
+        // Read facets first: a read-back write input writes the values of the baseline read.
         foreach (Facet facet in facets.Where(f => f.Input is null).Concat(facets.Where(f => f.Input is not null)))
         {
             results[facet] = Evaluate(facet);
@@ -216,7 +208,7 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
     private bool EncodeSource(List<Facet> facets)
     {
         Facet source = facets.First(f => f.Tier == Tier.Write && f.Input == testCase.WriteInputs[0]);
-        var arm = (WriteArm)(registry.Reference(Tier.Write) ?? registry.CandidatesFor(source).FirstOrDefault());
+        var arm = (WriteArm)registry.CandidatesFor(source).FirstOrDefault();
         if (arm is null)
         {
             mismatches.Add($"{source}: no arm can write the source column.");
@@ -296,12 +288,7 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
     }
 
     private FacetResult Evaluate(Facet facet)
-    {
-        Arm reference = registry.Reference(facet.Tier);
-        RangeOutcomes referenceOutcomes = reference is null ? null : Run(reference, facet);
-        var candidates = registry.CandidatesFor(facet).Select(arm => (arm, Run(arm, facet))).ToList();
-        return new FacetResult(facet, reference, referenceOutcomes, candidates);
-    }
+        => new(facet, registry.CandidatesFor(facet).Select(arm => (arm, Run(arm, facet))).ToList());
 
     private RangeOutcomes Run(Arm arm, Facet facet)
     {
@@ -425,14 +412,13 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
         }
     }
 
-    // The values of the reference read as the target: ReadAs first, then Poco. With no reference, the first
-    // ReadAs candidate.
+    // The values of the baseline read as the target: ReadAs first, then Poco.
     private Outcome ReadBackValues(Type target)
     {
         foreach (Tier tier in new[] { Tier.ReadAs, Tier.Poco })
         {
             FacetResult result = results.Values.FirstOrDefault(r => r.Facet.Tier == tier && r.Facet.Target == target);
-            Outcome all = result?.Reference?.All ?? result?.Candidates.FirstOrDefault().Outcomes?.All;
+            Outcome all = result?.Baseline?.All;
             if (all?.Kind == OutcomeKind.Values)
             {
                 return all;
@@ -445,22 +431,15 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
     private void Compare(FacetResult result)
     {
         Facet facet = result.Facet;
-        var arms = new List<(Arm Arm, RangeOutcomes Outcomes)>();
-        if (result.Reference is not null)
-        {
-            arms.Add((result.ReferenceArm, result.Reference));
-        }
-
-        arms.AddRange(result.Candidates);
-        foreach ((Arm arm, RangeOutcomes outcomes) in arms)
+        foreach ((Arm arm, RangeOutcomes outcomes) in result.Candidates)
         {
             CheckInvariants(facet, arm, outcomes);
         }
 
-        DeliberateChange change;
+        DeclaredOutcome declared;
         try
         {
-            change = registry.ChangeFor(facet);
+            declared = registry.DeclaredFor(facet);
         }
         catch (InvalidOperationException e)
         {
@@ -468,13 +447,13 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
             return;
         }
 
-        if (change is null)
+        if (declared is null)
         {
-            CompareWithBaseline(facet, arms);
+            CompareWithBaseline(facet, result.Candidates);
         }
         else
         {
-            CompareWithChange(facet, change, result);
+            CompareWithDeclared(facet, declared, result);
         }
     }
 
@@ -513,7 +492,7 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
         }
     }
 
-    private void CompareWithBaseline(Facet facet, List<(Arm Arm, RangeOutcomes Outcomes)> arms)
+    private void CompareWithBaseline(Facet facet, IReadOnlyList<(Arm Arm, RangeOutcomes Outcomes)> arms)
     {
         if (arms.Count < 2)
         {
@@ -541,19 +520,12 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
         }
     }
 
-    private void CompareWithChange(Facet facet, DeliberateChange change, FacetResult result)
+    private void CompareWithDeclared(Facet facet, DeclaredOutcome declared, FacetResult result)
     {
-        Expectation expected = change.ExpectationFor(facet);
-        if (result.Reference is not null && expected.Verify(result.Reference.All, Rows.All, tailCaseRow, this) is null)
-        {
-            mismatches.Add(
-                $"{facet}: the deliberate change '{change.Name}' expects {expected}, and {result.ReferenceArm.Name} already gives that ({result.Reference.All}). " +
-                "A deliberate change must differ from the reference.");
-        }
-
+        Expectation expected = declared.ExpectationFor(facet);
         if (result.Candidates.Count == 0)
         {
-            mismatches.Add($"{facet}: the deliberate change '{change.Name}' selects this facet, but no candidate arm covers it.");
+            mismatches.Add($"{facet}: the declared outcome '{declared.Name}' selects this facet, but no candidate arm covers it.");
             return;
         }
 
@@ -562,25 +534,22 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
             foreach (Rows rows in new[] { Rows.All, Rows.Tail })
             {
                 Outcome actual = outcomes.For(rows);
-                string difference = actual is null ? null : expected.Verify(actual, rows, tailCaseRow, this);
+                string difference = actual is null ? null : expected.Verify(actual, rows, tailCaseRow);
                 if (difference is not null)
                 {
-                    mismatches.Add($"{facet}{Describe(facet, rows)}: {arm.Name} gives {actual}; the deliberate change '{change.Name}' expects {expected}: {difference}.");
+                    mismatches.Add($"{facet}{Describe(facet, rows)}: {arm.Name} gives {actual}; the declared outcome '{declared.Name}' expects {expected}: {difference}.");
                 }
             }
         }
     }
 
-    // Each outcome that the source test states must be the outcome of the reference, or of the first candidate when
-    // the tier has no reference.
+    // Each outcome that the source test states must be the outcome of the baseline.
     private void CheckStated()
     {
         foreach (StatedOutcome stated in testCase.Stated)
         {
             FacetResult result = results.Values.FirstOrDefault(r => r.Facet.Tier == stated.Tier && r.Facet.Target == stated.Target);
-            (Arm arm, RangeOutcomes outcomes) = result?.Reference is not null
-                ? (result.ReferenceArm, result.Reference)
-                : result?.Candidates.FirstOrDefault() ?? default;
+            (Arm arm, RangeOutcomes outcomes) = (result?.BaselineArm, result?.Baseline);
             if (arm is null)
             {
                 mismatches.Add($"{testCase.Id}: the case states an outcome for {stated.Tier}<{TypeNames.Of(stated.Target)}>, and no arm runs that facet.");
@@ -590,7 +559,7 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
             foreach (Rows rows in new[] { Rows.All, Rows.Tail })
             {
                 Outcome actual = outcomes.For(rows);
-                string difference = actual is null ? null : stated.Expected.Verify(actual, rows, tailCaseRow, this);
+                string difference = actual is null ? null : stated.Expected.Verify(actual, rows, tailCaseRow);
                 if (difference is not null)
                 {
                     mismatches.Add($"{result.Facet}{Describe(result.Facet, rows)}: {arm.Name} gives {actual}; the source test states {stated.Expected}: {difference}.");

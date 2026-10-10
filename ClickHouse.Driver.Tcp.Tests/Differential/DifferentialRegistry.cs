@@ -6,31 +6,31 @@ using System.Reflection;
 namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
 /// <summary>
-/// Adds implementations under test, and deliberate changes, to the differential tests. The tests find every
+/// Adds implementations under test, and declared outcomes, to the differential tests. The tests find every
 /// non-abstract class of this assembly that implements this interface, create it with its parameterless
 /// constructor, and call <see cref="Register"/> once, in the order of the class's full name.
 /// </summary>
 internal interface IDifferentialRegistration
 {
-    /// <summary>Adds arms and deliberate changes to <paramref name="registry"/>.</summary>
+    /// <summary>Adds arms and declared outcomes to <paramref name="registry"/>.</summary>
     /// <param name="registry">The registry of the test run.</param>
     void Register(DifferentialRegistry registry);
 }
 
 /// <summary>
-/// The implementations that the differential tests run: the reference arm of each tier (the old path), the
-/// candidate arms, and the deliberate changes that the candidates make.
+/// The implementations that the differential tests run, and the declared outcomes. The first candidate of a tier that
+/// covers a facet is its baseline: every other candidate must give the baseline's outcome, unless an outcome is declared
+/// for the facet.
 /// </summary>
 internal sealed class DifferentialRegistry
 {
     private static readonly Lazy<DifferentialRegistry> CurrentRegistry = new(Discover);
 
-    private readonly Dictionary<Tier, Arm> references = new();
     private readonly List<Registration<Arm>> candidates = new();
-    private readonly List<DeliberateChange> changes = new();
+    private readonly List<DeclaredOutcome> declared = new();
 
     /// <summary>
-    /// The registry of the test run: <see cref="ReferenceArms"/> as the reference, and every
+    /// The registry of the test run: the client's entry points (<see cref="WithClientArms"/>), then the arms of every
     /// <see cref="IDifferentialRegistration"/> of this assembly.
     /// </summary>
     public static DifferentialRegistry Current => CurrentRegistry.Value;
@@ -38,38 +38,28 @@ internal sealed class DifferentialRegistry
     /// <summary>The candidate arms, in the order they were added.</summary>
     public IReadOnlyList<Arm> Candidates => candidates.Select(c => c.Item).ToList();
 
-    /// <summary>The deliberate changes, in the order they were declared.</summary>
-    public IReadOnlyList<DeliberateChange> Changes => changes;
+    /// <summary>The declared outcomes, in the order they were declared.</summary>
+    public IReadOnlyList<DeclaredOutcome> Declared => declared;
 
-    /// <summary>A registry with <see cref="ReferenceArms"/> as the reference of every tier, and no candidates.</summary>
+    /// <summary>
+    /// A registry whose candidates are the client's entry point of each tier (<see cref="ClientArms"/>), for every facet
+    /// of its tier. They are the first candidates, so they are the baseline of every facet.
+    /// </summary>
     /// <returns>The registry.</returns>
-    public static DifferentialRegistry WithReference()
+    public static DifferentialRegistry WithClientArms()
     {
         var registry = new DifferentialRegistry();
-        registry.SetReference(ReferenceArms.ReadAs);
-        registry.SetReference(ReferenceArms.Poco);
-        registry.SetReference(ReferenceArms.CanRead);
-        registry.SetReference(ReferenceArms.Write);
-        registry.SetReference(ReferenceArms.CanWrite);
-        registry.SetReference(ReferenceArms.PocoWrite);
-        registry.SetReference(ReferenceArms.PocoCanWrite);
-        registry.SetReference(ReferenceArms.UntypedWrite);
-        registry.SetReference(ReferenceArms.UntypedCanWrite);
+        registry.AddForEveryFacet(ClientArms.ReadAs);
+        registry.AddForEveryFacet(ClientArms.Poco);
+        registry.AddForEveryFacet(ClientArms.CanRead);
+        registry.AddForEveryFacet(ClientArms.Write);
+        registry.AddForEveryFacet(ClientArms.CanWrite);
+        registry.AddForEveryFacet(ClientArms.PocoWrite);
+        registry.AddForEveryFacet(ClientArms.PocoCanWrite);
+        registry.AddForEveryFacet(ClientArms.UntypedWrite);
+        registry.AddForEveryFacet(ClientArms.UntypedCanWrite);
         return registry;
     }
-
-    /// <summary>The reference arm of a tier, or null when the tier has none.</summary>
-    /// <param name="tier">The tier.</param>
-    /// <returns>The arm.</returns>
-    public Arm Reference(Tier tier) => references.TryGetValue(tier, out Arm arm) ? arm : null;
-
-    /// <summary>Makes <paramref name="arm"/> the reference of its tier, in place of the one before.</summary>
-    /// <param name="arm">The arm.</param>
-    public void SetReference(Arm arm) => references[arm.Tier] = arm;
-
-    /// <summary>Removes the reference of a tier. The tier's candidates are then compared with its first candidate.</summary>
-    /// <param name="tier">The tier.</param>
-    public void RemoveReference(Tier tier) => references.Remove(tier);
 
     /// <summary>Adds a candidate arm.</summary>
     /// <param name="arm">The arm. Its name must be unique in the registry.</param>
@@ -80,62 +70,25 @@ internal sealed class DifferentialRegistry
     /// <param name="arm">The arm. Its name must be unique in the registry.</param>
     public void AddForEveryFacet(Arm arm) => AddCandidate(arm, expectedFacets: null);
 
-    /// <summary>Declares that the candidates give a different outcome from the reference for one read facet.</summary>
-    /// <param name="caseId">The <see cref="DifferentialCase.Id"/> of the case.</param>
-    /// <param name="tier"><see cref="Tier.ReadAs"/>, <see cref="Tier.Poco"/> or <see cref="Tier.CanRead"/>.</param>
-    /// <param name="target">The read target of the facet.</param>
-    /// <param name="expected">The outcome that every candidate that covers the facet must give.</param>
-    /// <param name="reason">Why the outcome changes, for example the decision or the issue.</param>
-    public void DeclareChange(string caseId, Tier tier, Type target, Expectation expected, string reason)
-    {
-        if (tier is not (Tier.ReadAs or Tier.Poco or Tier.CanRead))
-        {
-            throw new ArgumentOutOfRangeException(nameof(tier), tier, "A facet with a read target is a ReadAs, Poco or CanRead facet.");
-        }
-
-        DeclareChanges(
-            $"{caseId} {tier}<{TypeNames.Of(target)}>",
-            facet => facet.Case.Id == caseId && facet.Tier == tier && facet.Target == target,
-            _ => expected,
-            reason,
-            expectedFacets: 1);
-    }
-
-    /// <summary>Declares that the candidates give a different outcome from the reference for one write facet.</summary>
-    /// <param name="caseId">The <see cref="DifferentialCase.Id"/> of the case.</param>
-    /// <param name="tier">A write tier (<see cref="Facet.IsWriteTier"/>).</param>
-    /// <param name="inputLabel">The <see cref="WriteInput.Label"/> of the facet.</param>
-    /// <param name="expected">The outcome that every candidate that covers the facet must give.</param>
-    /// <param name="reason">Why the outcome changes, for example the decision or the issue.</param>
-    public void DeclareChange(string caseId, Tier tier, string inputLabel, Expectation expected, string reason)
-    {
-        if (!Facet.IsWriteTier(tier))
-        {
-            throw new ArgumentOutOfRangeException(nameof(tier), tier, "A facet with a write input is a facet of a write tier.");
-        }
-
-        DeclareChanges(
-            $"{caseId} {tier}[{inputLabel}]",
-            facet => facet.Case.Id == caseId && facet.Tier == tier && facet.Input.Label == inputLabel,
-            _ => expected,
-            reason,
-            expectedFacets: 1);
-    }
-
-    /// <summary>Declares that the candidates give a different outcome from the reference for a family of facets.</summary>
+    /// <summary>
+    /// Declares the outcome that every candidate gives for a family of facets whose candidates give different outcomes
+    /// that are all right, so that no candidate is a baseline for the others. An example is the tail of a read that
+    /// fails at the first NULL: a view of the whole column fails at the first NULL of the column, and a reader of the
+    /// tail alone fails at the first NULL of the tail.
+    /// </summary>
     /// <param name="name">A unique name for the declaration, for failure messages.</param>
     /// <param name="facets">Selects the facets of the family.</param>
     /// <param name="expected">The outcome that every candidate that covers a facet of the family must give.</param>
-    /// <param name="reason">Why the outcomes change, for example the decision or the issue.</param>
+    /// <param name="reason">Why the candidates differ.</param>
     /// <param name="expectedFacets">The number of facets of the case list in the family. The tests check it.</param>
-    public void DeclareChanges(string name, Func<Facet, bool> facets, Func<Facet, Expectation> expected, string reason, int expectedFacets)
+    public void DeclareOutcomes(string name, Func<Facet, bool> facets, Func<Facet, Expectation> expected, string reason, int expectedFacets)
     {
-        if (changes.Any(change => change.Name == name))
+        if (declared.Any(outcome => outcome.Name == name))
         {
-            throw new ArgumentException($"A deliberate change called '{name}' is already declared.", nameof(name));
+            throw new ArgumentException($"An outcome called '{name}' is already declared.", nameof(name));
         }
 
-        changes.Add(new DeliberateChange(name, facets, expected, reason, expectedFacets));
+        declared.Add(new DeclaredOutcome(name, facets, expected, reason, expectedFacets));
     }
 
     /// <summary>The candidates of the facet's tier that cover the facet.</summary>
@@ -144,34 +97,34 @@ internal sealed class DifferentialRegistry
     public IEnumerable<Arm> CandidatesFor(Facet facet)
         => candidates.Select(c => c.Item).Where(arm => arm.Tier == facet.Tier && arm.Covers(facet));
 
-    /// <summary>The deliberate change of a facet, or null when the facet has none.</summary>
+    /// <summary>The declared outcome of a facet, or null when the facet has none.</summary>
     /// <param name="facet">The facet.</param>
-    /// <returns>The change.</returns>
-    /// <exception cref="InvalidOperationException">More than one change selects the facet.</exception>
-    public DeliberateChange ChangeFor(Facet facet)
+    /// <returns>The declared outcome.</returns>
+    /// <exception cref="InvalidOperationException">More than one declared outcome selects the facet.</exception>
+    public DeclaredOutcome DeclaredFor(Facet facet)
     {
-        DeliberateChange found = null;
-        foreach (DeliberateChange change in changes)
+        DeclaredOutcome found = null;
+        foreach (DeclaredOutcome outcome in declared)
         {
-            if (!change.Selects(facet))
+            if (!outcome.Selects(facet))
             {
                 continue;
             }
 
             if (found is not null)
             {
-                throw new InvalidOperationException($"{facet}: the deliberate changes '{found.Name}' and '{change.Name}' both select this facet.");
+                throw new InvalidOperationException($"{facet}: the declared outcomes '{found.Name}' and '{outcome.Name}' both select this facet.");
             }
 
-            found = change;
+            found = outcome;
         }
 
         return found;
     }
 
     /// <summary>
-    /// Checks the registry against a case list: unique arm names, the facet count of each arm and of each
-    /// deliberate change, and a candidate for each facet with a deliberate change.
+    /// Checks the registry against a case list: unique arm names, the facet count of each arm and of each declared
+    /// outcome, and a candidate for each facet with a declared outcome.
     /// </summary>
     /// <param name="cases">The case list.</param>
     /// <returns>One message for each problem. Empty when there is none.</returns>
@@ -197,17 +150,17 @@ internal sealed class DifferentialRegistry
             }
         }
 
-        foreach (DeliberateChange change in changes)
+        foreach (DeclaredOutcome outcome in declared)
         {
-            List<Facet> selected = facets.Where(change.Selects).ToList();
-            if (selected.Count != change.ExpectedFacets)
+            List<Facet> selected = facets.Where(outcome.Selects).ToList();
+            if (selected.Count != outcome.ExpectedFacets)
             {
-                problems.Add($"The deliberate change '{change.Name}' selects {selected.Count} facets, not {change.ExpectedFacets}.");
+                problems.Add($"The declared outcome '{outcome.Name}' selects {selected.Count} facets, not {outcome.ExpectedFacets}.");
             }
 
             foreach (Facet facet in selected.Where(f => !CandidatesFor(f).Any()))
             {
-                problems.Add($"{facet}: the deliberate change '{change.Name}' selects this facet, but no candidate arm covers it.");
+                problems.Add($"{facet}: the declared outcome '{outcome.Name}' selects this facet, but no candidate arm covers it.");
             }
         }
 
@@ -215,7 +168,7 @@ internal sealed class DifferentialRegistry
         {
             try
             {
-                ChangeFor(facet);
+                DeclaredFor(facet);
             }
             catch (InvalidOperationException e)
             {
@@ -228,7 +181,7 @@ internal sealed class DifferentialRegistry
 
     private static DifferentialRegistry Discover()
     {
-        DifferentialRegistry registry = WithReference();
+        DifferentialRegistry registry = WithClientArms();
         IEnumerable<Type> registrations = typeof(DifferentialRegistry).Assembly.GetTypes()
             .Where(t => !t.IsAbstract && !t.IsInterface && typeof(IDifferentialRegistration).IsAssignableFrom(t))
             .OrderBy(t => t.FullName, StringComparer.Ordinal);
@@ -256,13 +209,13 @@ internal sealed class DifferentialRegistry
     private sealed record Registration<T>(T Item, int? ExpectedFacets);
 }
 
-/// <summary>A declaration that the candidates give a different outcome from the reference for some facets.</summary>
-internal sealed class DeliberateChange
+/// <summary>An outcome that every candidate gives for some facets, in place of a comparison with the baseline.</summary>
+internal sealed class DeclaredOutcome
 {
     private readonly Func<Facet, bool> selects;
     private readonly Func<Facet, Expectation> expected;
 
-    public DeliberateChange(string name, Func<Facet, bool> selects, Func<Facet, Expectation> expected, string reason, int expectedFacets)
+    public DeclaredOutcome(string name, Func<Facet, bool> selects, Func<Facet, Expectation> expected, string reason, int expectedFacets)
     {
         Name = name;
         this.selects = selects;

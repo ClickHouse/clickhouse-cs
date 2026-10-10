@@ -13,14 +13,13 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 /// Runs the read combinators and the read rules of D6 in the differential tests, for every case whose column type is
 /// not a leaf (<see cref="LeafConverterRegistration"/> runs the leaf cases): reads through
 /// <see cref="BoundReader{T}.Fill"/> and through a compiled <see cref="ColumnReader.Emit"/>, and the answer of the
-/// derivation. It also declares the readings that D6 changes in every read tier: <c>ReadAs</c> and <c>CanRead</c> follow
-/// the outcome of POCO mapping (<see cref="D6Changes"/>).
+/// derivation. It declares the outcome of the readings that fail at a NULL (<see cref="NullFailures"/>), whose tail the
+/// arms read in two ways that are both right.
 /// </summary>
 /// <remarks>
 /// A refusal of the derivation is an <see cref="ArmRefusal"/>, as in <see cref="LeafConverterRegistration"/>. A NULL
 /// that a read rule meets (<see cref="NullValueException"/>) is reported with the text of <c>Block.ReadAs</c>
-/// (<see cref="DerivedColumn.NullFailure"/>), for the row of the column that the reader reads. The client's
-/// <c>Block.ReadAs</c> and <c>ClickHouseTcpTypes.CanRead</c> run every facet of their tiers.
+/// (<see cref="DerivedColumn.NullFailure"/>), for the row of the column that the reader reads.
 /// </remarks>
 internal sealed class ReadConverterRegistration : IDifferentialRegistration
 {
@@ -28,27 +27,17 @@ internal sealed class ReadConverterRegistration : IDifferentialRegistration
     internal const int CompositeReadFacets = 358;
 
     /// <summary>
-    /// The readings that the old <c>ReadAs</c> and <c>CanRead</c> refuse and POCO mapping accepts: (case, target, whether
-    /// the POCO reading fails at the NULL of row 1).
+    /// The readings of a nullable column as a value type that cannot hold NULL (a read rule of D6): (case, target). The
+    /// sample column has its first NULL at row 1, and the first NULL of its tail [2, 5) at row 4.
     /// </summary>
-    internal static readonly (string CaseId, Type Target, bool FailsAtNull)[] D6Changes =
+    internal static readonly (string CaseId, Type Target)[] NullFailures =
     {
-        ("ColumnReadProjection: UInt64", typeof(ulong?), false),
-        ("ColumnReadProjection: Date", typeof(DateOnly?), false),
-        ("ColumnReadProjection: Time", typeof(TimeSpan?), false),
-        ("ColumnReadProjection: Time64(3)", typeof(TimeSpan?), false),
-        ("ColumnReadProjection: UUID", typeof(Guid?), false),
-        ("ColumnReadProjection: DateTime('UTC')", typeof(DateTime?), false),
-        ("ColumnReadProjection: DateTime('UTC')", typeof(DateTimeOffset?), false),
-        ("ColumnReadProjection: DateTime64(3, 'UTC')", typeof(DateTime?), false),
-        ("ColumnReadProjection: Nullable(Time64(3))", typeof(TimeSpan), true),
-        ("ColumnReadProjection: Nullable(DateTime('UTC'))", typeof(DateTime), true),
-        ("ColumnReadProjection: Nullable(DateTime('UTC'))", typeof(uint), true),
-        ("ColumnReadProjection: LowCardinality(Nullable(DateTime('UTC')))", typeof(DateTime), true),
-        ("ColumnReadProjection: LowCardinality(Nullable(DateTime('UTC')))", typeof(DateTimeOffset), true),
+        ("ColumnReadProjection: Nullable(Time64(3))", typeof(TimeSpan)),
+        ("ColumnReadProjection: Nullable(DateTime('UTC'))", typeof(DateTime)),
+        ("ColumnReadProjection: Nullable(DateTime('UTC'))", typeof(uint)),
+        ("ColumnReadProjection: LowCardinality(Nullable(DateTime('UTC')))", typeof(DateTime)),
+        ("ColumnReadProjection: LowCardinality(Nullable(DateTime('UTC')))", typeof(DateTimeOffset)),
     };
-
-    private const string D6Reason = "D6: one set of read rules for every tier. ReadAs and CanRead follow the outcome of POCO mapping.";
 
     /// <inheritdoc/>
     public void Register(DifferentialRegistry registry)
@@ -56,14 +45,12 @@ internal sealed class ReadConverterRegistration : IDifferentialRegistration
         registry.Add(new FillArm(), CompositeReadFacets);
         registry.Add(new EmitArm(), CompositeReadFacets);
         registry.Add(new CanReadArm(), CompositeReadFacets);
-        registry.AddForEveryFacet(ClientArms.ReadAs);
-        registry.AddForEveryFacet(ClientArms.CanRead);
-
-        foreach ((string caseId, Type target, bool failsAtNull) in D6Changes)
-        {
-            registry.DeclareChange(caseId, Tier.ReadAs, target, failsAtNull ? FailsAtNull(caseId, target) : Expectation.SameAs(Tier.Poco, target), D6Reason);
-            registry.DeclareChange(caseId, Tier.CanRead, target, Expectation.Answer(true), D6Reason);
-        }
+        registry.DeclareOutcomes(
+            "ReadAs of a nullable column as a type that cannot hold NULL",
+            facet => facet.Tier == Tier.ReadAs && NullFailures.Contains((facet.Case.Id, facet.Target)),
+            facet => FailsAtNull(facet.Case.ColumnType, facet.Target),
+            "Block.ReadAs converts the whole column on the first access, so its read of the tail fails at the first NULL of the column; a reader of the tail alone fails at the first NULL of the tail.",
+            NullFailures.Length);
     }
 
     /// <summary>
@@ -71,9 +58,8 @@ internal sealed class ReadConverterRegistration : IDifferentialRegistration
     /// first NULL of the sample column. A read of the tail fails at the first NULL that the reader meets: row 4 for a
     /// reader of the tail alone, row 1 for <c>Block.ReadAs</c>, which converts the whole column on the first access.
     /// </summary>
-    private static Expectation FailsAtNull(string caseId, Type target)
+    private static Expectation FailsAtNull(string columnType, Type target)
     {
-        string columnType = caseId["ColumnReadProjection: ".Length..];
         string column = $"Column 'value' ({columnType}) has NULL at row ";
         string rest = $", and the target type {target} cannot hold NULL. Read the column as a nullable type, or remove the NULL values in the query.";
         return Expectation.ForRows(

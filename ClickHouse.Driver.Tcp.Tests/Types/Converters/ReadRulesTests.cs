@@ -19,6 +19,9 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 [TestFixture]
 public class ReadRulesTests
 {
+    // The old POCO read plan, which the read rules copy.
+    private static readonly ReadArm OldPocoPlan = new LegacyPocoRead.PocoArm("Old path: Poco");
+
     internal static readonly string[] ColumnTypes =
     {
         "Int8", "Int32", "UInt32", "Int64", "Enum8('a' = 1, 'b' = 2)", "String", "FixedString(4)", "Date", "DateTime('UTC')", "UUID",
@@ -206,7 +209,7 @@ public class ReadRulesTests
         RowReader<T> poco;
         try
         {
-            poco = ReferenceArms.Poco.Bind<T>(block);
+            poco = OldPocoPlan.Bind<T>(block);
         }
         catch (InvalidOperationException) when (!derivation.Succeeded)
         {

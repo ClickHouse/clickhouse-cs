@@ -12,7 +12,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 /// Runs the write combinators in the differential tests, for every case whose column type is not a leaf
 /// (<see cref="LeafConverterRegistration"/> runs the leaf cases): writes from the built and read-back columns, for all
 /// rows and for a tail that starts above row 0, and the answer of the derivation. Each arm must give the bytes and
-/// answers of the old path, except the changes that this class declares.
+/// answers of the client's insert write and of <c>ClickHouseTcpTypes.CanWrite</c>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -22,9 +22,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 /// storage.
 /// </para>
 /// <para>
-/// A refusal of the derivation is an <see cref="ArmRefusal"/>, as in <see cref="LeafConverterRegistration"/>. The
-/// client's insert write (<see cref="ClientArms.Write"/>) and <c>ClickHouseTcpTypes.CanWrite</c> run every facet of their
-/// tiers, against the old dispatch of the tier (<see cref="LegacyColumnarWrite"/>).
+/// A refusal of the derivation is an <see cref="ArmRefusal"/>, as in <see cref="LeafConverterRegistration"/>.
 /// </para>
 /// </remarks>
 internal sealed class WriteConverterRegistration : IDifferentialRegistration
@@ -34,36 +32,11 @@ internal sealed class WriteConverterRegistration : IDifferentialRegistration
     internal const int CompositeWriteFacets = 349;
     internal const int CompositeCanWriteFacets = 573;
 
-    /// <summary>
-    /// The writes that the old path refuses and the write combinators accept (decision D7): (case, input, reason). Each
-    /// writes the bytes of the case's source column, and <c>CanWrite</c> says true for it.
-    /// </summary>
-    internal static readonly (string CaseId, string Input, string Reason)[] D7Changes =
-    {
-        ("ColumnReadProjection: LowCardinality(String)", "read back as byte[]", Issue792),
-        ("ColumnReadProjection: LowCardinality(Nullable(String))", "read back as byte[]", Issue792),
-        ("ColumnReadProjection: LowCardinality(FixedString(4))", "read back as string", FixedStringFromText),
-    };
-
-    private const string Issue792 =
-        "ClickHouse/integrations#792: LowCardinality(String) is written from byte[]; the dictionary interns the bytes (decision D7).";
-
-    private const string FixedStringFromText =
-        "LowCardinality(FixedString(N)) is written from string: UTF-8, zero bytes up to N (decision D7).";
-
     /// <inheritdoc/>
     public void Register(DifferentialRegistry registry)
     {
         registry.Add(new CompositeWriteArm(), CompositeWriteFacets);
         registry.Add(new CanWriteArm(), CompositeCanWriteFacets);
-        registry.AddForEveryFacet(ClientArms.Write);
-        registry.AddForEveryFacet(ClientArms.CanWrite);
-
-        foreach ((string caseId, string input, string reason) in D7Changes)
-        {
-            registry.DeclareChange(caseId, Tier.Write, input, Expectation.SameAsWrite("canonical"), reason);
-            registry.DeclareChange(caseId, Tier.CanWrite, input, Expectation.Answer(true), reason);
-        }
     }
 
     private static bool IsComposite(Facet facet) => !LeafConverterRegistration.IsLeafType(facet.Case.ColumnType);

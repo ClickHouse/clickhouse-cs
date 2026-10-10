@@ -22,6 +22,10 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 [TestFixture]
 public class WriteRulesTests
 {
+    // The old row inserts, whose acceptance the write rules keep.
+    private static readonly WriteArm OldPocoWrite = new LegacyRowWrite.PocoArm("Old path: PocoWrite");
+    private static readonly WriteArm OldUntypedWrite = new LegacyRowWrite.UntypedArm("Old path: UntypedWrite");
+
     internal static readonly string[] ColumnTypes =
     {
         "Int8", "UInt8", "Int16", "Int32", "UInt32", "Int64", "Bool", "Float64", "Enum8('a' = 1, 'b' = 2, 'c' = 3)",
@@ -169,7 +173,7 @@ public class WriteRulesTests
                 foreach (int start in new[] { 0, 1 })
                 {
                     Array values = Samples(source, withNull);
-                    Outcome old = WriteOutcome(ReferenceArms.PocoWrite, source, values, columnType, start);
+                    Outcome old = WriteOutcome(OldPocoWrite, source, values, columnType, start);
                     foreach (WriteArm arm in PocoArms)
                     {
                         Outcome now = WriteOutcome(arm, source, values, columnType, start);
@@ -272,7 +276,7 @@ public class WriteRulesTests
                 bool canWrite = ClickHouseTcpTypes.CanWrite(columnType, present);
                 foreach (int start in new[] { 0, 1 })
                 {
-                    Outcome old = WriteOutcome(ReferenceArms.UntypedWrite, source, values, columnType, start);
+                    Outcome old = WriteOutcome(OldUntypedWrite, source, values, columnType, start);
                     Outcome now = WriteOutcome(ClientArms.UntypedWrite, source, values, columnType, start);
                     string difference = IsOutcomeChange(columnType, source)
                         ? old.Kind == OutcomeKind.Failed && now.Kind == OutcomeKind.Bytes ? null : "a listed change, which the old insert fails and the insert of today writes"
@@ -335,7 +339,7 @@ public class WriteRulesTests
             _ => new object[] { new sbyte[] { -1 }, new byte[] { 0x41, 0x42 }, new sbyte[] { 1 } },
         };
 
-        Outcome old = WriteOutcome(ReferenceArms.UntypedWrite, typeof(object), values, columnType, start: 0);
+        Outcome old = WriteOutcome(OldUntypedWrite, typeof(object), values, columnType, start: 0);
         Outcome now = WriteOutcome(ClientArms.UntypedWrite, typeof(object), values, columnType, start: 0);
 
         Assert.Multiple(() =>
@@ -351,7 +355,7 @@ public class WriteRulesTests
     {
         Array values = new[] { new[] { 3_000_000_000u }, Array.Empty<uint>(), new[] { 7u } };
 
-        Outcome old = WriteOutcome(ReferenceArms.PocoWrite, typeof(uint[]), values, "Array(Int32)", start: 0);
+        Outcome old = WriteOutcome(OldPocoWrite, typeof(uint[]), values, "Array(Int32)", start: 0);
         Outcome now = WriteOutcome(ClientArms.PocoWrite, typeof(uint[]), values, "Array(Int32)", start: 0);
 
         Assert.Multiple(() =>

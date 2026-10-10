@@ -22,6 +22,9 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 [TestFixture]
 public class ReadCombinatorTests
 {
+    // The old POCO read plan, whose failure order the per-value readings keep.
+    private static readonly ReadArm OldPocoPlan = new LegacyPocoRead.PocoArm("Old path: Poco");
+
     private const string OneMemberEnum = "Enum8('a' = 1)";
 
     private static readonly ResolveContext Context = ConverterHarness.Context;
@@ -435,7 +438,7 @@ public class ReadCombinatorTests
     {
         ColumnReader<T> reader = Reader<T>(column.TypeName);
         using var block = new Block(string.Empty, BlockInfo.Default, column.RowCount, new[] { column }, ColumnCodecRegistry.Default, Context);
-        RowReader<T> poco = ReferenceArms.Poco.Bind<T>(block);
+        RowReader<T> poco = OldPocoPlan.Bind<T>(block);
         Exception expected = ConverterHarness.Catch(() => poco(0, column.RowCount));
         Assert.That(expected, Is.Not.Null, "POCO mapping must fail for this case.");
         foreach (ReadArm client in new[] { ClientArms.Poco, new ClientArms.PocoArm("Client.Poco: Fill", PocoScatterTier.Fill) })

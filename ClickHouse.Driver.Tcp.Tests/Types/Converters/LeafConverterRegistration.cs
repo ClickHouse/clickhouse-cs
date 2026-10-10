@@ -13,12 +13,13 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 /// <summary>
 /// Runs the leaf converters in the differential tests, for every case whose column type is a leaf: reads through
 /// <see cref="BoundReader{T}.Fill"/> and through a compiled <see cref="ColumnReader.Emit"/>, writes from the built
-/// and read-back columns, and the answers of the derivation. Each arm must give the outcome of the old path.
+/// and read-back columns, and the answers of the derivation. Each arm must give the outcome of the client's entry point
+/// of its tier.
 /// </summary>
 /// <remarks>
 /// <para>
-/// A refusal of the derivation is an <see cref="ArmRefusal"/>: its message has another text than the old one, and the
-/// refusal texts have their own tests (<see cref="ConverterDerivationTests"/>).
+/// A refusal of the derivation is an <see cref="ArmRefusal"/>: its message has another text than the refusal of the
+/// client's entry point, and the refusal texts have their own tests (<see cref="ConverterDerivationTests"/>).
 /// </para>
 /// <para>
 /// The write arm does not run the <c>decoded</c> input: a decoded column is written from its own storage, by the
@@ -33,9 +34,6 @@ internal sealed class LeafConverterRegistration : IDifferentialRegistration
     internal const int CanReadFacets = ReadFacets;
     internal const int CanWriteFacets = 258;
 
-    // FixedString from text: no codec writes it, and the leaf table has the pair (UTF-8, zero-padded to N).
-    internal const int FixedStringTextWriteFacets = 1;
-
     private static readonly ConcurrentDictionary<string, bool> LeafTypes = new(StringComparer.Ordinal);
 
     /// <inheritdoc/>
@@ -47,19 +45,6 @@ internal sealed class LeafConverterRegistration : IDifferentialRegistration
         registry.Add(new AnswerLeafArm(Tier.CanRead), CanReadFacets);
         registry.Add(new AnswerLeafArm(Tier.CanWrite), CanWriteFacets);
 
-        // The leaf writes the text of a FixedString read back as text, so the bytes are those of the source column.
-        registry.DeclareChanges(
-            "Leaf converters: FixedString from string",
-            facet => facet.Tier == Tier.Write && IsFixedStringFromText(facet),
-            facet => Expectation.SameAsWrite(facet.Case.WriteInputs[0].Label),
-            "The leaf table has FixedString from string (UTF-8, zero-padded); the codec refuses it. A later part makes it visible (D7).",
-            FixedStringTextWriteFacets);
-        registry.DeclareChanges(
-            "Leaf converters: CanWrite FixedString from string",
-            facet => facet.Tier == Tier.CanWrite && IsFixedStringFromText(facet),
-            _ => Expectation.Answer(true),
-            "The leaf table has FixedString from string; the codec refuses it. A later part makes it visible (D7).",
-            FixedStringTextWriteFacets);
     }
 
     /// <summary>Whether the derivation of <paramref name="columnType"/> ends at a leaf, so a leaf arm runs it.</summary>
