@@ -28,7 +28,7 @@ internal sealed class EmptyTupleColumnCodec : IColumnCodec
 
     // Matches what the server writes. Neither side reads the value back, so this only keeps a capture of the
     // client's bytes indistinguishable from the server's.
-    private const byte Placeholder = (byte)'0';
+    internal const byte Placeholder = (byte)'0';
 
     private EmptyTupleColumnCodec()
     {
