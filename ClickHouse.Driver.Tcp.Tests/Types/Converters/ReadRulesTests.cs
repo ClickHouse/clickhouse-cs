@@ -12,16 +12,14 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// The read rules of D6 (<see cref="ReadRules"/>): the derivation accepts exactly the readings that POCO mapping
-/// accepts, with the same values, for a matrix of column types and CLR targets that the differential case list does not
-/// have (enums, casts, nullable targets, the array casts that read elements as another type).
+/// The read rules of D6 (<see cref="ReadRules"/>), for a matrix of column types and CLR targets that the differential
+/// case list does not have (enums, casts, nullable targets, the array casts that read elements as another type): the
+/// derivation gives the same outcome through <c>Fill</c> and through <c>Emit</c>, and POCO mapping accepts exactly the
+/// readings that the derivation accepts, with the same values.
 /// </summary>
 [TestFixture]
 public class ReadRulesTests
 {
-    // The old POCO read plan, which the read rules copy.
-    private static readonly ReadArm OldPocoPlan = new LegacyPocoRead.PocoArm("Old path: Poco");
-
     internal static readonly string[] ColumnTypes =
     {
         "Int8", "Int32", "UInt32", "Int64", "Enum8('a' = 1, 'b' = 2)", "String", "FixedString(4)", "Date", "DateTime('UTC')", "UUID",
@@ -70,7 +68,7 @@ public class ReadRulesTests
     private static IEnumerable<string> Types() => ColumnTypes;
 
     [TestCaseSource(nameof(Types))]
-    public void Derive_EachTarget_AcceptsWhatPocoMappingAcceptsWithTheSameValues(string columnType)
+    public void Derive_EachTarget_GivesTheOutcomeOfFillThroughEmitAndPocoMapping(string columnType)
     {
         var differences = new List<string>();
         using Block block = DecodeSample(columnType);
@@ -201,15 +199,14 @@ public class ReadRulesTests
         return values;
     }
 
-    // The difference between the derivation and the reference POCO plan of the differential tests, for one target, or
-    // null.
+    // The difference between the Fill of the derivation and its Emit or the client's POCO plan, for one target, or null.
     private static string Compare<T>(Block block)
     {
         Derivation derivation = ConverterDerivation.Default.Derive(block[0].TypeName, block.Context, typeof(T), ConversionDirection.Read);
         RowReader<T> poco;
         try
         {
-            poco = OldPocoPlan.Bind<T>(block);
+            poco = ClientArms.Poco.Bind<T>(block);
         }
         catch (InvalidOperationException) when (!derivation.Succeeded)
         {
@@ -225,10 +222,10 @@ public class ReadRulesTests
             return $"POCO mapping accepts, and the derivation refuses: {derivation.Refusal}";
         }
 
-        (T[] Values, Exception Failure) expected = Run(() => poco(0, block.RowCount));
         (T[] Values, Exception Failure) fill = Run(() => Fill<T>(block));
         (T[] Values, Exception Failure) emit = Run(() => ConverterHarness.ReadEmit((ColumnReader<T>)derivation.Converter, block[0], 0, block.RowCount));
-        return Difference(expected, fill, "Fill") ?? Difference(expected, emit, "Emit");
+        (T[] Values, Exception Failure) mapped = Run(() => poco(0, block.RowCount));
+        return Difference(fill, emit, "Emit") ?? Difference(fill, mapped, "POCO mapping");
     }
 
     private static (T[] Values, Exception Failure) Run<T>(Func<T[]> read)
@@ -243,26 +240,27 @@ public class ReadRulesTests
         }
     }
 
-    // A NULL fails POCO mapping with its own message, which names the row of the result; the reader names the row.
-    private static string Difference<T>((T[] Values, Exception Failure) expected, (T[] Values, Exception Failure) actual, string path)
+    // The difference of an outcome from the outcome of Fill. A NULL fails POCO mapping with its own message, which names
+    // the row of the result; the reader names the row.
+    private static string Difference<T>((T[] Values, Exception Failure) fill, (T[] Values, Exception Failure) actual, string path)
     {
-        if (expected.Failure is not null || actual.Failure is not null)
+        if (fill.Failure is not null || actual.Failure is not null)
         {
-            if (expected.Failure is InvalidOperationException poco && actual.Failure is NullValueException nullValue)
+            if (fill.Failure is NullValueException nullValue && actual.Failure is InvalidOperationException poco and not NullValueException)
             {
                 return poco.Message.Contains($"is NULL at row {nullValue.Row} of the result", StringComparison.Ordinal)
                     ? null
-                    : $"{path}: POCO mapping fails with \"{poco.Message}\", and the reader finds NULL at row {nullValue.Row}.";
+                    : $"{path} fails with \"{poco.Message}\", and Fill finds NULL at row {nullValue.Row}.";
             }
 
-            return expected.Failure?.GetType() == actual.Failure?.GetType() && expected.Failure?.Message == actual.Failure?.Message
+            return fill.Failure?.GetType() == actual.Failure?.GetType() && fill.Failure?.Message == actual.Failure?.Message
                 ? null
-                : $"{path}: POCO mapping gives {Describe(expected)}, and the reader gives {Describe(actual)}.";
+                : $"{path} gives {Describe(actual)}, and Fill gives {Describe(fill)}.";
         }
 
-        for (int i = 0; i < expected.Values.Length; i++)
+        for (int i = 0; i < fill.Values.Length; i++)
         {
-            string difference = ValueComparer.Difference(expected.Values[i], actual.Values[i]);
+            string difference = ValueComparer.Difference(fill.Values[i], actual.Values[i]);
             if (difference is not null)
             {
                 return $"{path}: row {i}: {difference}";

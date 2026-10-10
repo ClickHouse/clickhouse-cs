@@ -80,7 +80,7 @@ public class PocoColumnScatterFactoryTests
 
 
     // A setter that throws on row 0 and a NULL on row 1 (or the other order): the first failure in row order wins in
-    // each tier and in the old plan, also in the Fill tier, which reads the whole window before it calls a setter.
+    // each tier, also in the Fill tier, which reads the whole window before it calls a setter.
     [TestCase(1, null, "SetterFailure: the setter refuses 1")]
     [TestCase(null, 1, "InvalidOperationException: Column 'Value' (Nullable(Int32)) is NULL at row 100 of the result")]
     public void Materialize_SetterThatThrowsAndANull_ThrowsTheFirstFailureInRowOrderInEveryTier(int? first, int? second, string expected)
@@ -88,7 +88,6 @@ public class PocoColumnScatterFactoryTests
         var failures = new List<string>();
         foreach ((string name, Func<Block, PocoReadPlan<RefusingRow>> build) in new (string, Func<Block, PocoReadPlan<RefusingRow>>)[]
         {
-            ("old plan", block => PocoReadPlan<RefusingRow>.BuildLegacy(PocoTypeDescriptor<RefusingRow>.Build(), block)),
             ("Emit", block => PocoReadPlan<RefusingRow>.Build(PocoTypeDescriptor<RefusingRow>.Build(), block, PocoScatterTier.Emit)),
             ("Fill", block => PocoReadPlan<RefusingRow>.Build(PocoTypeDescriptor<RefusingRow>.Build(), block, PocoScatterTier.Fill)),
         })

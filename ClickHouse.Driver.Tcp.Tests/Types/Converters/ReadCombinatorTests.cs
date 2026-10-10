@@ -22,9 +22,6 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 [TestFixture]
 public class ReadCombinatorTests
 {
-    // The old POCO read plan, whose failure order the per-value readings keep.
-    private static readonly ReadArm OldPocoPlan = new LegacyPocoRead.PocoArm("Old path: Poco");
-
     private const string OneMemberEnum = "Enum8('a' = 1)";
 
     private static readonly ResolveContext Context = ConverterHarness.Context;
@@ -175,7 +172,7 @@ public class ReadCombinatorTests
             w.WriteInt32(90_000);
         }, keys: new byte[] { 1, 0, 2 });
 
-        AssertFailsAsPocoMapping<TimeOnly>(column);
+        AssertPocoMappingFails<TimeOnly>(column, "is NULL at row 1 of the result");
     }
 
     // Row 0 refers to slot 2 and row 1 to slot 1, and both entries are no time of day. A reading that converts each
@@ -190,7 +187,7 @@ public class ReadCombinatorTests
             w.WriteInt32(-1);
         }, keys: new byte[] { 2, 1 });
 
-        AssertFailsAsPocoMapping<TimeOnly?>(column);
+        AssertPocoMappingFails<TimeOnly?>(column, "value of -00:00:01 is not a time of day");
     }
 
     // The old projection of the whole column converts every entry before the first value, so it fails on the first
@@ -432,20 +429,17 @@ public class ReadCombinatorTests
         ConverterHarness.AssertSameFailure(old, emit, "Emit");
     }
 
-    // The old POCO plan (the reference of the differential tests), Fill and Emit fail alike: the same type and text, or
-    // a NULL at the same row. The client's POCO plan, in each tier, gives the failure of the old plan.
-    private static void AssertFailsAsPocoMapping<T>(IColumn column)
+    // The client's POCO plan fails with the expected text in both scatter tiers, and Fill and Emit fail alike: the same
+    // type and text, or a NULL at the row that the POCO message names.
+    private static void AssertPocoMappingFails<T>(IColumn column, string text)
     {
         ColumnReader<T> reader = Reader<T>(column.TypeName);
         using var block = new Block(string.Empty, BlockInfo.Default, column.RowCount, new[] { column }, ColumnCodecRegistry.Default, Context);
-        RowReader<T> poco = OldPocoPlan.Bind<T>(block);
+        RowReader<T> poco = ClientArms.Poco.Bind<T>(block);
         Exception expected = ConverterHarness.Catch(() => poco(0, column.RowCount));
-        Assert.That(expected, Is.Not.Null, "POCO mapping must fail for this case.");
-        foreach (ReadArm client in new[] { ClientArms.Poco, new ClientArms.PocoArm("Client.Poco: Fill", PocoScatterTier.Fill) })
-        {
-            RowReader<T> plan = client.Bind<T>(block);
-            ConverterHarness.AssertSameFailure(expected, ConverterHarness.Catch(() => plan(0, column.RowCount)), client.Name);
-        }
+        Assert.That(expected?.Message, Does.Contain(text), "POCO mapping");
+        RowReader<T> fillTier = new ClientArms.PocoArm("Client.Poco: Fill", PocoScatterTier.Fill).Bind<T>(block);
+        ConverterHarness.AssertSameFailure(expected, ConverterHarness.Catch(() => fillTier(0, column.RowCount)), "Client.Poco: Fill");
 
         foreach ((string path, Exception actual) in new[]
         {
