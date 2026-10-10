@@ -73,16 +73,18 @@ public class WriteDerivationTests
 
     /// <summary>
     /// The derivation writes a composite type from exactly the CLR types that its codec writes today, and from the
-    /// <see cref="Additions"/>.
+    /// <see cref="Additions"/>: the column type's own writes, with no write rule of D6 at the root
+    /// (<see cref="WriteRules"/>), which inside a composite type apply nowhere.
     /// </summary>
     [TestCaseSource(nameof(CompositeTypes))]
     public void Derive_EveryCandidateType_AgreesWithTheCurrentCodec(string type)
     {
         IColumnCodec codec = ConverterHarness.Codec(type);
+        TypeNode root = TypeParser.Parse(type);
         var disagreements = new List<string>();
         foreach (Type candidate in Candidates)
         {
-            bool derived = ConverterDerivation.Default.Derive(type, ConverterHarness.Context, candidate, ConversionDirection.Write).Succeeded;
+            bool derived = ConverterDerivation.Default.DeriveNode(root, root, ConverterHarness.Context, candidate, ConversionDirection.Write).Succeeded;
             bool expected = codec.CanWriteElementType(candidate) || Additions.Contains((type, candidate));
             if (derived != expected)
             {

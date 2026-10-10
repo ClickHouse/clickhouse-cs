@@ -1,19 +1,28 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Threading;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Poco;
+using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Poco;
 
 /// <summary>
-/// Covers POCO write-plan mapping, CLR write-type selection, and cache keys.
+/// Covers POCO write-plan mapping, CLR write-type selection, and cache keys. The plans use the gather tier that the
+/// runtime chooses; <see cref="PocoWritePlanDelegateTests"/> runs the same tests through the tier of a runtime without
+/// dynamic code.
 /// </summary>
 [TestFixture]
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Structure", "NUnit1034:Base TestFixtures should be abstract", Justification = "The fixture runs its tests in the tier that the runtime chooses, and PocoWritePlanDelegateTests runs them again in the Delegate tier.")]
 public class PocoWritePlanTests
 {
+    /// <summary>The gather tier of the plans, or null to let the runtime choose.</summary>
+    private protected virtual PocoGatherTier? Tier => null;
+
     [Test]
     public void Build_TargetColumnMatchingNoProperty_Throws()
     {
@@ -91,6 +100,7 @@ public class PocoWritePlanTests
     [Test]
     public void Gather_NonNullablePropertyIntoANullableColumn_LiftsToTheNullableWriteType()
     {
+        // The gather keeps the value type, and the converter tree writes a null map of zeros and the values.
         Block schema = SchemaOf(Target("value", "Nullable(Int32)"));
         var rows = new[] { new Row<int> { Value = 42 } };
 
@@ -98,8 +108,10 @@ public class PocoWritePlanTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(source.Columns[0], Is.InstanceOf<IColumn<int?>>());
+            Assert.That(source.Columns[0], Is.InstanceOf<IColumn<int>>());
             Assert.That(source.Columns[0].GetValue(0), Is.EqualTo(42));
+            Assert.That(Insert(schema, source), Is.EqualTo(new byte[] { 0, 42, 0, 0, 0 }));
+            Assert.That(Insert(schema, source), Is.EqualTo(LegacyInsert(schema, rows)), "the bytes of the old plan");
         });
     }
 
@@ -131,7 +143,7 @@ public class PocoWritePlanTests
         Assert.That(descriptor.CanActivate, Is.False, "the type a query could not materialize");
 
         using PocoInsertSource<ConstructorOnlyPoco> source =
-            GatherAll(PocoWritePlan<ConstructorOnlyPoco>.Build(descriptor, schema), rows, rows.Length);
+            GatherAll(PocoWritePlan<ConstructorOnlyPoco>.Build(descriptor, schema, Tier), rows, rows.Length);
 
         Assert.That(source.Columns[0].GetValue(0), Is.EqualTo(7));
     }
@@ -164,6 +176,24 @@ public class PocoWritePlanTests
         Assert.That(error.Message, Does.Contain("row 1").And.Contain("value").And.Contain("Value"));
     }
 
+    /// <summary>
+    /// A <c>T?</c> property into a column that cannot hold null is gathered as <c>T</c>, and the gather refuses a null.
+    /// The insert then writes a column of <c>T</c>, with no second pass over the values, and gives the bytes of the old
+    /// plan.
+    /// </summary>
+    [Test]
+    public void Gather_NullableIntIntoANonNullableColumn_GathersTheValueType()
+        => AssertGathersTheValueType("Int32", new int?[] { 1, -2, int.MaxValue });
+
+    [Test]
+    public void Gather_NullableDateTimeIntoANonNullableColumn_GathersTheValueType()
+        => AssertGathersTheValueType("DateTime('UTC')", new DateTime?[] { DateTime.UnixEpoch, DateTime.UnixEpoch.AddSeconds(1_700_000_000) });
+
+    /// <summary>The column is written from the enum's ordinal, so the tree of the enum is the rule of the ordinal.</summary>
+    [Test]
+    public void Gather_NullableEnumIntoANonNullableColumn_GathersTheEnum()
+        => AssertGathersTheValueType("Int8", new Level?[] { Level.Low, Level.High });
+
     [Test]
     public void Gather_ASecondBlock_NamesTheRowByItsNumberInTheInsertNotInTheBlock()
     {
@@ -195,7 +225,7 @@ public class PocoWritePlanTests
     [Test]
     public void Gather_NullablePropertyIntoAColumnWrittenFromObject_CarriesTheNullThrough()
     {
-        // Dynamic's object surface can carry null.
+        // Dynamic's object surface can carry null: the converter tree casts each value to object, a null to null.
         Block schema = SchemaOf(Target("value", "Dynamic"));
         var rows = new[] { new Row<int?> { Value = null }, new Row<int?> { Value = 7 } };
 
@@ -203,9 +233,10 @@ public class PocoWritePlanTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(source.Columns[0], Is.InstanceOf<IColumn<object>>());
+            Assert.That(source.Columns[0], Is.InstanceOf<IColumn<int?>>());
             Assert.That(source.Columns[0].GetValue(0), Is.Null);
             Assert.That(source.Columns[0].GetValue(1), Is.EqualTo(7));
+            Assert.That(Insert(schema, source), Is.EqualTo(LegacyInsert(schema, rows)), "the bytes of the old plan");
         });
     }
 
@@ -254,6 +285,7 @@ public class PocoWritePlanTests
     [Test]
     public void Gather_EnumProperty_WritesTheOrdinal()
     {
+        // The gather keeps the enum, and the converter tree writes its ordinal.
         Block schema = SchemaOf(Target("value", "Enum8('low' = -1, 'high' = 127)"));
         var rows = new[] { new Row<Level> { Value = Level.High } };
 
@@ -261,8 +293,9 @@ public class PocoWritePlanTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(source.Columns[0], Is.InstanceOf<IColumn<sbyte>>());
-            Assert.That(source.Columns[0].GetValue(0), Is.EqualTo((sbyte)127));
+            Assert.That(source.Columns[0], Is.InstanceOf<IColumn<Level>>());
+            Assert.That(Insert(schema, source), Is.EqualTo(new byte[] { 127 }));
+            Assert.That(Insert(schema, source), Is.EqualTo(LegacyInsert(schema, rows)), "the bytes of the old plan");
         });
     }
 
@@ -371,7 +404,7 @@ public class PocoWritePlanTests
     [Test]
     public void WritePlanFor_SameSchema_ReturnsTheCachedPlan()
     {
-        var registry = new PocoTypeRegistry();
+        var registry = new PocoTypeRegistry { ForcedGatherTier = Tier };
 
         PocoWritePlan<Row<int>> first = registry.WritePlanFor<Row<int>>(SchemaOf(Target("value", "Int32")));
         PocoWritePlan<Row<int>> second = registry.WritePlanFor<Row<int>>(SchemaOf(Target("value", "Int32")));
@@ -383,7 +416,7 @@ public class PocoWritePlanTests
     public void WritePlanFor_SameColumnNameDifferentType_CompilesItsOwnPlan()
     {
         // The exact target type is part of the plan key.
-        var registry = new PocoTypeRegistry();
+        var registry = new PocoTypeRegistry { ForcedGatherTier = Tier };
 
         PocoWritePlan<Row<int>> ints = registry.WritePlanFor<Row<int>>(SchemaOf(Target("value", "Int32")));
         PocoWritePlan<Row<int>> nullables = registry.WritePlanFor<Row<int>>(SchemaOf(Target("value", "Nullable(Int32)")));
@@ -394,8 +427,8 @@ public class PocoWritePlanTests
         Assert.Multiple(() =>
         {
             Assert.That(nullables, Is.Not.SameAs(ints));
-            Assert.That(intSource.Columns[0], Is.InstanceOf<IColumn<int>>());
-            Assert.That(nullableSource.Columns[0], Is.InstanceOf<IColumn<int?>>());
+            Assert.That(Insert(SchemaOf(Target("value", "Int32")), intSource), Is.EqualTo(new byte[] { 1, 0, 0, 0 }));
+            Assert.That(Insert(SchemaOf(Target("value", "Nullable(Int32)")), nullableSource), Is.EqualTo(new byte[] { 0, 1, 0, 0, 0 }));
         });
     }
 
@@ -403,7 +436,7 @@ public class PocoWritePlanTests
     public void WritePlanFor_ColumnNameHoldingTheKeySeparators_DoesNotCollideWithAnotherSchema()
     {
         // Arbitrary column names must not collide with cache-key separators.
-        var registry = new PocoTypeRegistry();
+        var registry = new PocoTypeRegistry { ForcedGatherTier = Tier };
         Block spelled = SchemaOf(Target("Id", "Int32"), Target("Name\tInt32\nScore", "Int32"));
         Block three = SchemaOf(Target("Id", "Int32"), Target("Name", "Int32"), Target("Score", "Int32"));
 
@@ -425,7 +458,7 @@ public class PocoWritePlanTests
     public void WritePlanFor_SameSchemaDifferentSessionTimezone_CompilesItsOwnPlan()
     {
         // Timezone-less DateTime plans depend on the session timezone.
-        var registry = new PocoTypeRegistry();
+        var registry = new PocoTypeRegistry { ForcedGatherTier = Tier };
         var utc = new ResolveContext { ServerTimezone = "UTC" };
         var kolkata = new ResolveContext { ServerTimezone = "Asia/Kolkata" };
 
@@ -438,16 +471,77 @@ public class PocoWritePlanTests
     [Test]
     public void WritePlanFor_BuildFailure_IsNotCached()
     {
-        var registry = new PocoTypeRegistry();
+        var registry = new PocoTypeRegistry { ForcedGatherTier = Tier };
         Block schema = SchemaOf(Target("value", "Int32"));
 
         Assert.Throws<InvalidOperationException>(() => registry.WritePlanFor<Row<Guid>>(schema));
         Assert.Throws<InvalidOperationException>(() => registry.WritePlanFor<Row<Guid>>(schema), "the failure must be reported to every caller, not only the first");
     }
 
-    private static PocoWritePlan<T> Plan<T>(Block schema)
+    /// <summary>
+    /// The bytes that the insert writes for the gathered columns of one block: the write of each column that the insert
+    /// plan gives, then its state prefix and body, one column after the other.
+    /// </summary>
+    internal static byte[] Insert(Block schema, IInsertColumnSource source)
+        => Write(schema, source, column => InsertColumnWrite.For(Codec(schema, column), column, column.TypeName, schema.Context, schema.Codecs.Converters));
+
+    /// <summary>The bytes that the old plan (<see cref="PocoWritePlan{T}.BuildLegacy"/>) and the codecs write for the rows.</summary>
+    internal static byte[] LegacyInsert<T>(Block schema, T[] rows)
         where T : class
-        => PocoWritePlan<T>.Build(PocoTypeDescriptor<T>.Build(), schema);
+    {
+        using var buffer = PocoRowBuffer<T>.Create(rows, "rows", rows.Length, CancellationToken.None);
+        using PocoInsertSource<T> source = PocoWritePlan<T>.BuildLegacy(PocoTypeDescriptor<T>.Build(), schema).CreateSource(buffer, rows.Length);
+        source.Gather(0, rows.Length);
+        return Write(schema, source, column => InsertColumnWrite.ThroughCodec(Codec(schema, column)));
+    }
+
+    private static byte[] Write(Block schema, IInsertColumnSource source, Func<IColumn, InsertColumnWrite> plan)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new ClickHouseBinaryWriter(stream))
+        {
+            foreach (IColumn column in source.Columns)
+            {
+                InsertColumnWrite write = plan(column) ?? throw new InvalidOperationException($"The insert plan refuses column '{column.Name}'.");
+                IColumnWriteState state = write.Begin(column, 0, column.RowCount);
+                try
+                {
+                    write.WritePrefix(writer, column, 0, column.RowCount, state);
+                    write.Write(writer, column, 0, column.RowCount, state);
+                }
+                finally
+                {
+                    state?.Dispose();
+                }
+            }
+
+            writer.FlushAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        }
+
+        return stream.ToArray();
+    }
+
+    private static IColumnCodec Codec(Block schema, IColumn column) => schema.Codecs.Resolve(column.TypeName, schema.Context);
+
+    private void AssertGathersTheValueType<TValue>(string type, TValue?[] values)
+        where TValue : struct
+    {
+        Block schema = SchemaOf(Target("value", type));
+        Row<TValue?>[] rows = values.Select(value => new Row<TValue?> { Value = value }).ToArray();
+
+        using PocoInsertSource<Row<TValue?>> source = GatherAll(Plan<Row<TValue?>>(schema), rows, rows.Length);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source.Columns[0], Is.InstanceOf<IColumn<TValue>>());
+            Assert.That(Enumerable.Range(0, rows.Length).Select(row => source.Columns[0].GetValue(row)), Is.EqualTo(values.Select(value => (object)value.Value)));
+            Assert.That(Insert(schema, source), Is.EqualTo(LegacyInsert(schema, rows)), "the bytes of the old plan");
+        });
+    }
+
+    private PocoWritePlan<T> Plan<T>(Block schema)
+        where T : class
+        => PocoWritePlan<T>.Build(PocoTypeDescriptor<T>.Build(), schema, Tier);
 
     /// <summary>
     /// Gathers the rows as a single block. The source is returned rather than its columns, because it owns the
@@ -483,14 +577,14 @@ public class PocoWritePlanTests
     }
 
     /// <summary>Creates an empty sample-block column.</summary>
-    private static IColumn Target(string name, string typeName) => new ArrayColumn<object>(name, typeName, Array.Empty<object>());
+    internal static IColumn Target(string name, string typeName) => new ArrayColumn<object>(name, typeName, Array.Empty<object>());
 
-    private static Block SchemaOf(params IColumn[] columns) => SchemaOf(new ResolveContext { ServerTimezone = "UTC" }, columns);
+    internal static Block SchemaOf(params IColumn[] columns) => SchemaOf(new ResolveContext { ServerTimezone = "UTC" }, columns);
 
     private static Block SchemaOf(ResolveContext context, params IColumn[] columns)
         => new(string.Empty, BlockInfo.Default, rowCount: 0, columns, ColumnCodecRegistry.Default, context);
 
-    private enum Level : sbyte
+    internal enum Level : sbyte
     {
         Low = -1,
         High = 127,
