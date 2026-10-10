@@ -232,7 +232,8 @@ public class TcpConverterRowWrite
     }
 
     // The plan that InsertAsync builds for the columns of a row insert (ClickHouseTcpConnection.BuildInsertPlan, which
-    // is private): the codec of each target type, and the write of the column.
+    // is private): the codec of each target type, and the write of the column (InsertColumnWrite.For: the converter tree
+    // of the column's CLR type).
     private InsertColumn[] Plan(IReadOnlyList<IColumn> columns)
     {
         var plan = new InsertColumn[columns.Count];
@@ -240,9 +241,8 @@ public class TcpConverterRowWrite
         {
             IColumn column = columns[i];
             IColumnCodec codec = schema.Codecs.Resolve(column.TypeName, schema.Context);
-            InsertColumnWrite write = codec.CanWrite(column)
-                ? InsertColumnWrite.ThroughCodec(codec)
-                : throw new InvalidOperationException($"The insert plan of '{column.TypeName}' does not accept the column.");
+            InsertColumnWrite write = InsertColumnWrite.For(codec, column, column.TypeName, schema.Context, schema.Codecs.Converters)
+                ?? throw new InvalidOperationException($"The insert plan of '{column.TypeName}' does not accept the column.");
             plan[i] = new InsertColumn(column.Name, column.TypeName, codec, column, write);
         }
 
