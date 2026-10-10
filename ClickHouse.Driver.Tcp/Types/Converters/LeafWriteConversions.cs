@@ -3,8 +3,8 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Runtime.Intrinsics;
 using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Types.Converters;
@@ -30,6 +30,14 @@ internal interface IWriteConversion<T, TCanon>
     /// </summary>
     bool IsReinterpretation { get; }
 
+    /// <summary>
+    /// Whether two equal values of <typeparamref name="T"/> always convert to equal canonical values. When true, a
+    /// LowCardinality dictionary finds a repeated value by the value itself, and converts only the values that it has not
+    /// seen (<see cref="ClrKeyedFixedInterner{T, TCanon}"/>). Two values that are not equal can still convert to one
+    /// canonical value. A conversion whose values cost more to look up than to convert also gives false.
+    /// </summary>
+    bool ClrEqualityImpliesCanonicalEquality { get; }
+
     /// <summary>Converts one value.</summary>
     /// <param name="value">The CLR value.</param>
     /// <param name="position">The zero-based position of the value in the write, for error messages.</param>
@@ -48,6 +56,9 @@ internal readonly struct IdentityWrite<T> : IWriteConversion<T, T>
     public bool IsReinterpretation => true;
 
     /// <inheritdoc/>
+    public bool ClrEqualityImpliesCanonicalEquality => true;
+
+    /// <inheritdoc/>
     public T Convert(T value, int position) => value;
 }
 
@@ -56,6 +67,10 @@ internal readonly struct Float32Bits : IWriteConversion<float, uint>
 {
     /// <inheritdoc/>
     public bool IsReinterpretation => true;
+
+    /// <inheritdoc/>
+    // +0 and -0 are equal values with other bits, as are two NaN values with other payloads.
+    public bool ClrEqualityImpliesCanonicalEquality => false;
 
     /// <inheritdoc/>
     public uint Convert(float value, int position) => BitConverter.SingleToUInt32Bits(value);
@@ -68,6 +83,10 @@ internal readonly struct Float64Bits : IWriteConversion<double, ulong>
     public bool IsReinterpretation => true;
 
     /// <inheritdoc/>
+    // +0 and -0 are equal values with other bits, as are two NaN values with other payloads.
+    public bool ClrEqualityImpliesCanonicalEquality => false;
+
+    /// <inheritdoc/>
     public ulong Convert(double value, int position) => BitConverter.DoubleToUInt64Bits(value);
 }
 
@@ -78,6 +97,10 @@ internal readonly struct BFloat16Bits : IWriteConversion<float, ushort>
     public bool IsReinterpretation => false;
 
     /// <inheritdoc/>
+    // +0 and -0 are equal values with other bits, as are two NaN values with other payloads.
+    public bool ClrEqualityImpliesCanonicalEquality => false;
+
+    /// <inheritdoc/>
     public ushort Convert(float value, int position) => (ushort)(BitConverter.SingleToUInt32Bits(value) >> 16);
 }
 
@@ -86,6 +109,9 @@ internal readonly struct DateDays : IWriteConversion<DateOnly, ushort>
 {
     /// <inheritdoc/>
     public bool IsReinterpretation => false;
+
+    /// <inheritdoc/>
+    public bool ClrEqualityImpliesCanonicalEquality => true;
 
     /// <inheritdoc/>
     public ushort Convert(DateOnly value, int position)
@@ -113,6 +139,9 @@ internal readonly struct Date32Days : IWriteConversion<DateOnly, int>
     public bool IsReinterpretation => false;
 
     /// <inheritdoc/>
+    public bool ClrEqualityImpliesCanonicalEquality => true;
+
+    /// <inheritdoc/>
     public int Convert(DateOnly value, int position)
     {
         int days = value.DayNumber - DateColumnCodecShared.UnixEpochDayNumber;
@@ -134,40 +163,31 @@ internal readonly struct Date32Days : IWriteConversion<DateOnly, int>
 /// </summary>
 internal readonly struct UuidBytes : IWriteConversion<Guid, UInt128>
 {
-    // result[i] = source[control[i]]: from the in-memory bytes of a Guid to the wire order.
-    private static readonly Vector128<byte> GuidToWire = Vector128.Create((byte)6, 7, 4, 5, 0, 1, 2, 3, 15, 14, 13, 12, 11, 10, 9, 8);
-
     /// <inheritdoc/>
     public bool IsReinterpretation => false;
 
     /// <inheritdoc/>
-    public UInt128 Convert(Guid value, int position)
-    {
-        if (!Vector128.IsHardwareAccelerated)
-        {
-            return ConvertScalar(value);
-        }
+    // The wire bytes are a fixed reordering of the bytes of the Guid.
+    public bool ClrEqualityImpliesCanonicalEquality => true;
 
-        ReadOnlySpan<byte> guidBytes = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref value, 1));
-        UInt128 wire = default;
-        Vector128.Shuffle(Vector128.Create(guidBytes), GuidToWire).CopyTo(MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref wire, 1)));
-        return wire;
-    }
+    /// <inheritdoc/>
+    public UInt128 Convert(Guid value, int position) => ConvertScalar(value);
 
-    /// <summary>The conversion with no SIMD instructions, for a runtime without hardware acceleration.</summary>
+    /// <summary>
+    /// The conversion, in integer operations on the two 64-bit halves of the Guid. The bytes 0 to 7 of the wire are the
+    /// bytes 6, 7, 4, 5, 0, 1, 2 and 3 of the Guid in memory, and the bytes 8 to 15 are its bytes 15 down to 8.
+    /// </summary>
     /// <param name="value">The value.</param>
     /// <returns>The wire bytes.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static UInt128 ConvertScalar(Guid value)
     {
-        ReadOnlySpan<byte> guidBytes = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref value, 1));
-        UInt128 wire = default;
-        Span<byte> wireBytes = MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref wire, 1));
-        for (int i = 0; i < wireBytes.Length; i++)
-        {
-            wireBytes[i] = guidBytes[GuidToWire[i]];
-        }
-
-        return wire;
+        // The bits of the Guid as one value, so that its halves stay in registers.
+        UInt128 bits = Unsafe.BitCast<Guid, UInt128>(value);
+        ulong first = (ulong)bits;
+        ulong second = (ulong)(bits >> 64);
+        ulong lower = (first >> 48) | (((first >> 32) & 0xFFFF) << 16) | (first << 32);
+        return new UInt128(BinaryPrimitives.ReverseEndianness(second), lower);
     }
 }
 
@@ -176,6 +196,10 @@ internal readonly struct IPv4Number : IWriteConversion<IPAddress, uint>
 {
     /// <inheritdoc/>
     public bool IsReinterpretation => false;
+
+    /// <inheritdoc/>
+    // Equal addresses convert to one number, but the lookup of an IPAddress costs more than its conversion.
+    public bool ClrEqualityImpliesCanonicalEquality => false;
 
     /// <inheritdoc/>
     public uint Convert(IPAddress value, int position)
@@ -198,6 +222,10 @@ internal readonly struct IPv6Bytes : IWriteConversion<IPAddress, UInt128>
 {
     /// <inheritdoc/>
     public bool IsReinterpretation => false;
+
+    /// <inheritdoc/>
+    // Equal addresses convert to one value, but the lookup of an IPAddress costs more than its conversion.
+    public bool ClrEqualityImpliesCanonicalEquality => false;
 
     /// <inheritdoc/>
     public UInt128 Convert(IPAddress value, int position)
@@ -242,6 +270,11 @@ internal readonly struct DecimalMantissa<TValue, TMantissa> : IWriteConversion<T
     public bool IsReinterpretation => false;
 
     /// <inheritdoc/>
+    // Equal values have one mantissa at the scale of the type. The hash of a ClickHouseTcpDecimal costs more than its
+    // conversion to an Int128 mantissa, and less than its conversion to an Int256 mantissa.
+    public bool ClrEqualityImpliesCanonicalEquality => typeof(TValue) == typeof(decimal) || typeof(TMantissa) == typeof(Int256);
+
+    /// <inheritdoc/>
     public TMantissa Convert(TValue value, int position)
     {
         TMantissa mantissa = encode(value, scale);
@@ -261,6 +294,10 @@ internal readonly struct DateTimeFromOffset : IWriteConversion<DateTimeOffset, u
     public bool IsReinterpretation => false;
 
     /// <inheritdoc/>
+    // Equal values are one instant.
+    public bool ClrEqualityImpliesCanonicalEquality => true;
+
+    /// <inheritdoc/>
     public uint Convert(DateTimeOffset value, int position) => LeafWriteConversions.ToUnixSeconds(value.UtcDateTime);
 }
 
@@ -276,6 +313,10 @@ internal readonly struct DateTimeFromDateTime : IWriteConversion<DateTime, uint>
 
     /// <inheritdoc/>
     public bool IsReinterpretation => false;
+
+    /// <inheritdoc/>
+    // DateTime equality does not compare the Kind, so equal ticks of a Utc and an Unspecified value are two instants.
+    public bool ClrEqualityImpliesCanonicalEquality => false;
 
     /// <inheritdoc/>
     public uint Convert(DateTime value, int position) => LeafWriteConversions.ToUnixSeconds(DateTimeColumnCodec.ToUtc(value, timeZone));
@@ -295,6 +336,10 @@ internal readonly struct DateTime64FromOffset : IWriteConversion<DateTimeOffset,
 
     /// <inheritdoc/>
     public bool IsReinterpretation => false;
+
+    /// <inheritdoc/>
+    // Equal values are one instant.
+    public bool ClrEqualityImpliesCanonicalEquality => true;
 
     /// <inheritdoc/>
     public long Convert(DateTimeOffset value, int position) => LeafWriteConversions.DateTime64Count(value, scale, typeName);
@@ -321,6 +366,10 @@ internal readonly struct DateTime64FromDateTime : IWriteConversion<DateTime, lon
     public bool IsReinterpretation => false;
 
     /// <inheritdoc/>
+    // DateTime equality does not compare the Kind, so equal ticks of a Utc and an Unspecified value are two instants.
+    public bool ClrEqualityImpliesCanonicalEquality => false;
+
+    /// <inheritdoc/>
     public long Convert(DateTime value, int position)
         => LeafWriteConversions.DateTime64Count(new DateTimeOffset(DateTimeColumnCodec.ToUtc(value, timeZone)), scale, typeName);
 }
@@ -330,6 +379,9 @@ internal readonly struct TimeFromTimeSpan : IWriteConversion<TimeSpan, int>
 {
     /// <inheritdoc/>
     public bool IsReinterpretation => false;
+
+    /// <inheritdoc/>
+    public bool ClrEqualityImpliesCanonicalEquality => true;
 
     /// <inheritdoc/>
     public int Convert(TimeSpan value, int position)
@@ -351,6 +403,9 @@ internal readonly struct TimeFromTimeOnly : IWriteConversion<TimeOnly, int>
     public bool IsReinterpretation => false;
 
     /// <inheritdoc/>
+    public bool ClrEqualityImpliesCanonicalEquality => true;
+
+    /// <inheritdoc/>
     public int Convert(TimeOnly value, int position) => (int)(value.Ticks / TimeSpan.TicksPerSecond);
 }
 
@@ -363,6 +418,9 @@ internal readonly struct Time64FromTimeSpan : IWriteConversion<TimeSpan, long>
 
     /// <inheritdoc/>
     public bool IsReinterpretation => false;
+
+    /// <inheritdoc/>
+    public bool ClrEqualityImpliesCanonicalEquality => true;
 
     /// <inheritdoc/>
     public long Convert(TimeSpan value, int position)
@@ -388,6 +446,9 @@ internal readonly struct Time64FromTimeOnly : IWriteConversion<TimeOnly, long>
     public bool IsReinterpretation => false;
 
     /// <inheritdoc/>
+    public bool ClrEqualityImpliesCanonicalEquality => true;
+
+    /// <inheritdoc/>
     public long Convert(TimeOnly value, int position)
         => FixedPointScaling.ShiftDecimalPlaces(value.Ticks, scale - LeafWriteConversions.DotNetTickScale);
 }
@@ -408,6 +469,9 @@ internal readonly struct EnumFromLabel<T> : IWriteConversion<string, T>
 
     /// <inheritdoc/>
     public bool IsReinterpretation => false;
+
+    /// <inheritdoc/>
+    public bool ClrEqualityImpliesCanonicalEquality => true;
 
     /// <inheritdoc/>
     public T Convert(string value, int position)

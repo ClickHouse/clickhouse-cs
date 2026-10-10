@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace ClickHouse.Driver.Tcp.Types.Converters;
@@ -21,7 +22,10 @@ internal sealed class FixedInterner<TCanon> : IDisposable
 {
     private const int InitialEntries = 64;
 
-    private readonly Dictionary<TCanon, int> keys = new();
+    // The keys of a 16-byte canonical value (UInt128, Int128) are hashed as two 64-bit halves (WideKey): its own hash
+    // costs more than the rest of a lookup. Every other canonical value is its own key.
+    private readonly Dictionary<TCanon, int> keys = Unsafe.SizeOf<TCanon>() == 16 ? null : new();
+    private readonly Dictionary<WideKey, int> wideKeys = Unsafe.SizeOf<TCanon>() == 16 ? new() : null;
 
     private TCanon[] entries;
     private int count;
@@ -52,7 +56,9 @@ internal sealed class FixedInterner<TCanon> : IDisposable
     public int Intern(TCanon value)
     {
         ObjectDisposedException.ThrowIf(entries is null, this);
-        ref int key = ref CollectionsMarshal.GetValueRefOrAddDefault(keys, value, out bool exists);
+        ref int key = ref Unsafe.SizeOf<TCanon>() == 16
+            ? ref CollectionsMarshal.GetValueRefOrAddDefault(wideKeys, WideKey.Of(ref value), out bool exists)
+            : ref CollectionsMarshal.GetValueRefOrAddDefault(keys, value, out exists);
         if (!exists)
         {
             key = Append(value);
@@ -86,4 +92,41 @@ internal sealed class FixedInterner<TCanon> : IDisposable
         entries[count] = value;
         return count++;
     }
+}
+
+/// <summary>
+/// A 16-byte canonical value as the key of a <see cref="FixedInterner{TCanon}"/>: two keys are equal when their bits are
+/// equal, which for <see cref="UInt128"/> and <see cref="Int128"/> is when the values are equal. The hash mixes the two
+/// halves with two multiplications.
+/// </summary>
+internal readonly struct WideKey : IEquatable<WideKey>
+{
+    private readonly ulong lower;
+    private readonly ulong upper;
+
+    private WideKey(ulong lower, ulong upper)
+    {
+        this.lower = lower;
+        this.upper = upper;
+    }
+
+    /// <summary>The key of a 16-byte value.</summary>
+    /// <typeparam name="TCanon">The type of the value, 16 bytes wide.</typeparam>
+    /// <param name="value">The value.</param>
+    /// <returns>The key.</returns>
+    public static WideKey Of<TCanon>(ref TCanon value)
+        where TCanon : unmanaged
+    {
+        ref ulong halves = ref Unsafe.As<TCanon, ulong>(ref value);
+        return new WideKey(halves, Unsafe.Add(ref halves, 1));
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(WideKey other) => lower == other.lower && upper == other.upper;
+
+    /// <inheritdoc/>
+    public override bool Equals(object obj) => obj is WideKey other && Equals(other);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => (int)(((lower ^ (upper * 0x9E3779B97F4A7C15UL)) * 0xBF58476D1CE4E5B9UL) >> 32);
 }

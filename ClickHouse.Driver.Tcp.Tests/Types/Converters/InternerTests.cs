@@ -274,6 +274,95 @@ public class InternerTests
         Assert.That(thrown.ParamName, Is.EqualTo("value"));
     }
 
+    /// <summary>
+    /// A Guid is looked up by itself, and converted to its wire bytes once for each distinct value. The keys are the keys
+    /// of the canonical interner, which also holds the entries.
+    /// </summary>
+    [Test]
+    public void ClrKeyedFixedInterner_RepeatingGuids_KeepsTheClrLookupAndTheCanonicalEntries()
+    {
+        var leaf = (FixedLeafWriter<Guid, UInt128>)Leaf<Guid>("UUID");
+        using var interner = new ClrKeyedFixedInterner<Guid, UInt128>(leaf, nullable: false);
+        Guid[] distinct = Enumerable.Range(1, 100).Select(i => new Guid(i, 0, 0, new byte[8])).ToArray();
+
+        int[] keys = Enumerable.Range(0, 5_000).Select(i => interner.Intern(distinct[i % 100])).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(interner.UsesClrKeys, Is.True);
+            Assert.That(keys, Is.EqualTo(Enumerable.Range(0, 5_000).Select(i => (i % 100) + 1)));
+            Assert.That(interner.Entries.Entries.ToArray(), Is.EqualTo(new[] { UInt128.Zero }.Concat(distinct.Select((g, i) => leaf.ToCanonical(g, i)))));
+        });
+    }
+
+    /// <summary>When the first values do not repeat, the probe turns the CLR lookup off. The keys stay correct after it.</summary>
+    [Test]
+    public void ClrKeyedFixedInterner_DistinctValues_TurnsTheClrLookupOffAfterTheProbe()
+    {
+        using var interner = new ClrKeyedFixedInterner<Guid, UInt128>((FixedLeafWriter<Guid, UInt128>)Leaf<Guid>("UUID"), nullable: false);
+        int probe = ClrKeyedFixedInterner<Guid, UInt128>.ProbeValues;
+        Guid[] values = Enumerable.Range(1, probe).Select(i => new Guid(i, 0, 0, new byte[8])).ToArray();
+
+        int[] first = values.Take(probe - 1).Select(interner.Intern).ToArray();
+        bool onBefore = interner.UsesClrKeys;
+        int last = interner.Intern(values[probe - 1]);
+        bool onAfter = interner.UsesClrKeys;
+        int repeated = interner.Intern(values[7]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(onBefore, Is.True);
+            Assert.That(onAfter, Is.False);
+            Assert.That(first.Append(last), Is.EqualTo(Enumerable.Range(1, probe)));
+            Assert.That(repeated, Is.EqualTo(8), "the canonical interner still finds a value that the CLR lookup knew");
+        });
+    }
+
+    /// <summary>
+    /// A leaf whose equal values can have other canonical values (a DateTime of another Kind, a float of another sign),
+    /// and a leaf whose CLR value is its canonical value, have no CLR lookup.
+    /// </summary>
+    [TestCase("DateTime('UTC')", typeof(DateTime), typeof(uint))]
+    [TestCase("Float64", typeof(double), typeof(ulong))]
+    [TestCase("Int32", typeof(int), typeof(int))]
+    public void ClrKeyedFixedInterner_LeafWithNoClrLookup_KeysOnTheCanonicalValue(string type, Type clrType, Type canonical)
+        => ConverterHarness.InvokeGeneric(typeof(InternerTests), nameof(AssertNoClrLookup), new[] { clrType, canonical }, type);
+
+    /// <summary>A value that the leaf refuses leaves no CLR key behind, so the next lookup of it fails again.</summary>
+    [Test]
+    public void ClrKeyedFixedInterner_RefusedValue_LeavesNoClrKey()
+    {
+        using var interner = new ClrKeyedFixedInterner<decimal, int>((FixedLeafWriter<decimal, int>)Leaf<decimal>("Decimal(3, 2)"), nullable: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.Throws<OverflowException>(() => interner.Intern(100m));
+            Assert.Throws<OverflowException>(() => interner.Intern(100m));
+            Assert.That(interner.Intern(1.25m), Is.EqualTo(1));
+            Assert.That(interner.Intern(1.250m), Is.EqualTo(1), "equal decimals of other scales share an entry");
+            Assert.That(interner.UsesClrKeys, Is.True);
+        });
+    }
+
+    /// <summary>
+    /// A 16-byte canonical value is keyed by its bits: values that differ in one half get an entry each, and equal values
+    /// share one.
+    /// </summary>
+    [Test]
+    public void FixedInterner_WideValues_KeyOnBothHalves()
+    {
+        using var interner = new FixedInterner<UInt128>(UInt128.Zero, nullable: false);
+        var values = new[] { new UInt128(1, 2), new UInt128(2, 1), new UInt128(1, 2), new UInt128(0, 2), UInt128.Zero, UInt128.MaxValue };
+
+        int[] keys = values.Select(interner.Intern).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(keys, Is.EqualTo(new[] { 1, 2, 1, 3, 0, 4 }));
+            Assert.That(interner.Entries.ToArray(), Is.EqualTo(new[] { UInt128.Zero, new UInt128(1, 2), new UInt128(2, 1), new UInt128(0, 2), UInt128.MaxValue }));
+        });
+    }
+
     // The dictionary that an interner builds and a leaf encodes gives the bytes of the current LowCardinality write:
     // the same entries, in the same order, with the same key width.
     [Test]
@@ -474,6 +563,13 @@ public class InternerTests
     private static long DictionarySize(byte[] bytes) => BitConverter.ToInt64(bytes, 16);
 
     // A leaf that refuses one value, to show that the interner keeps no key for a refused value.
+    private static void AssertNoClrLookup<T, TCanon>(string type)
+        where TCanon : unmanaged, IEquatable<TCanon>
+    {
+        using var interner = new ClrKeyedFixedInterner<T, TCanon>((FixedLeafWriter<T, TCanon>)Leaf<T>(type), nullable: false);
+        Assert.That(interner.UsesClrKeys, Is.False);
+    }
+
     private sealed class RefusingLeaf : BytesLeafWriter<string>
     {
         private readonly string refused;
