@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Poco;
@@ -174,6 +175,24 @@ public class PocoWritePlanTests
 
         Assert.That(error.Message, Does.Contain("row 1").And.Contain("value").And.Contain("Value"));
     }
+
+    /// <summary>
+    /// A <c>T?</c> property into a column that cannot hold null is gathered as <c>T</c>, and the gather refuses a null.
+    /// The insert then writes a column of <c>T</c>, with no second pass over the values, and gives the bytes of the old
+    /// plan.
+    /// </summary>
+    [Test]
+    public void Gather_NullableIntIntoANonNullableColumn_GathersTheValueType()
+        => AssertGathersTheValueType("Int32", new int?[] { 1, -2, int.MaxValue });
+
+    [Test]
+    public void Gather_NullableDateTimeIntoANonNullableColumn_GathersTheValueType()
+        => AssertGathersTheValueType("DateTime('UTC')", new DateTime?[] { DateTime.UnixEpoch, DateTime.UnixEpoch.AddSeconds(1_700_000_000) });
+
+    /// <summary>The column is written from the enum's ordinal, so the tree of the enum is the rule of the ordinal.</summary>
+    [Test]
+    public void Gather_NullableEnumIntoANonNullableColumn_GathersTheEnum()
+        => AssertGathersTheValueType("Int8", new Level?[] { Level.Low, Level.High });
 
     [Test]
     public void Gather_ASecondBlock_NamesTheRowByItsNumberInTheInsertNotInTheBlock()
@@ -503,6 +522,22 @@ public class PocoWritePlanTests
     }
 
     private static IColumnCodec Codec(Block schema, IColumn column) => schema.Codecs.Resolve(column.TypeName, schema.Context);
+
+    private void AssertGathersTheValueType<TValue>(string type, TValue?[] values)
+        where TValue : struct
+    {
+        Block schema = SchemaOf(Target("value", type));
+        Row<TValue?>[] rows = values.Select(value => new Row<TValue?> { Value = value }).ToArray();
+
+        using PocoInsertSource<Row<TValue?>> source = GatherAll(Plan<Row<TValue?>>(schema), rows, rows.Length);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(source.Columns[0], Is.InstanceOf<IColumn<TValue>>());
+            Assert.That(Enumerable.Range(0, rows.Length).Select(row => source.Columns[0].GetValue(row)), Is.EqualTo(values.Select(value => (object)value.Value)));
+            Assert.That(Insert(schema, source), Is.EqualTo(LegacyInsert(schema, rows)), "the bytes of the old plan");
+        });
+    }
 
     private PocoWritePlan<T> Plan<T>(Block schema)
         where T : class
