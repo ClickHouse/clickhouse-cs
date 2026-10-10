@@ -64,8 +64,10 @@ internal sealed class ClrKeyedByteInterner<T> : IDisposable
 
     /// <summary>The key of <paramref name="value"/>.</summary>
     /// <remarks>
-    /// A value that the CLR lookup finds costs one lookup and one decrement. A new value, and every value when there is no
-    /// CLR lookup, go to a method that is not inlined, as does the end of the probe, so this method stays small enough to
+    /// A value that the CLR lookup finds costs one lookup and one decrement. A lookup that only reads is cheaper than one
+    /// that can also add (<see cref="CollectionsMarshal.GetValueRefOrAddDefault{TKey, TValue}"/>), and most lookups find
+    /// their value, so a new value costs a second lookup, which adds it. A new value, and every value when there is no CLR
+    /// lookup, go to a method that is not inlined, as does the end of the probe, so this method stays small enough to
     /// inline.
     /// </remarks>
     /// <param name="value">The value. The caller handles a NULL of a nullable column before it calls this.</param>
@@ -81,21 +83,20 @@ internal sealed class ClrKeyedByteInterner<T> : IDisposable
         // A null has no CLR key. The leaf decides what a null means, and usually refuses it.
         if (map is not null && value is not null)
         {
-            ref int slot = ref CollectionsMarshal.GetValueRefOrAddDefault(map, value, out bool exists);
-            if (exists)
+            if (map.TryGetValue(value, out int key))
             {
                 if (--probeLeft == 0)
                 {
                     EndProbe();
                 }
 
-                return slot;
+                return key;
             }
 
-            return InternNew(value, map, ref slot);
+            return InternNew(value, map);
         }
 
-        return InternNew(value, null, ref Unsafe.NullRef<int>());
+        return InternNew(value, null);
     }
 
     /// <summary>Returns the buffers to the pool. The interner cannot be used after this.</summary>
@@ -111,31 +112,20 @@ internal sealed class ClrKeyedByteInterner<T> : IDisposable
         clrKeys = null;
     }
 
-    // The key of the canonical bytes of a value that the CLR lookup does not find (map is the lookup, and slot is the
-    // slot that it added for the value), or of a value with no CLR lookup (map is null). A refused value is named by the
-    // dictionary slot that it would take, and leaves no slot in the CLR lookup. Both cases are in this one method, with
-    // the conversion and the byte lookup written in it, so that the JIT can inline them here: for a column of many
-    // distinct values, almost every value comes here.
+    // The key of the canonical bytes of a value that the CLR lookup does not find (map is the lookup), or of a value with
+    // no CLR lookup (map is null). A refused value is named by the dictionary slot that it would take, and the CLR lookup
+    // gets no entry for it. Both cases are in this one method, with the conversion and the byte lookup written in it, so
+    // that the JIT can inline them here: for a column of many distinct values, almost every value comes here.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private int InternNew(T value, Dictionary<T, int> map, ref int slot)
+    private int InternNew(T value, Dictionary<T, int> map)
     {
+        int key = canonical.Intern(leaf.ToCanonical(value, canonical.Count, ref scratch));
         if (map is null)
         {
-            return canonical.Intern(leaf.ToCanonical(value, canonical.Count, ref scratch));
+            return key;
         }
 
-        int key;
-        try
-        {
-            key = canonical.Intern(leaf.ToCanonical(value, canonical.Count, ref scratch));
-        }
-        catch
-        {
-            map.Remove(value);
-            throw;
-        }
-
-        slot = key;
+        map.Add(value, key);
         misses++;
         if (--probeLeft == 0)
         {
