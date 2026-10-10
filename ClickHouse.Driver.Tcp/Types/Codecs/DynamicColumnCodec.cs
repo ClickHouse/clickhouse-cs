@@ -34,7 +34,7 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     /// <c>output_format_native_use_flattened_dynamic_and_json_serialization = 1</c>; the non-flat versions
     /// (1, 2, 4) carry an internal/on-disk representation this client rejects.
     /// </summary>
-    private const ulong FlattenedVersion = 3;
+    internal const ulong FlattenedVersion = 3;
 
     /// <summary>
     /// A defensive ceiling on the runtime type count read from the wire, so a corrupt length prefix cannot drive
@@ -297,7 +297,11 @@ internal sealed class DynamicColumnCodec : IColumnCodec
             : typeCount <= ushort.MaxValue ? 2
             : 4;
 
-    private static void WriteDiscriminators(ClickHouseBinaryWriter writer, ReadOnlySpan<int> discriminators, int width)
+    /// <summary>Writes one discriminator for each row, in <paramref name="width"/> bytes each (<see cref="DiscriminatorWidth"/>).</summary>
+    /// <param name="writer">The writer to encode into.</param>
+    /// <param name="discriminators">The discriminators.</param>
+    /// <param name="width">The width of each discriminator in bytes: 1, 2 or 4.</param>
+    internal static void WriteDiscriminators(ClickHouseBinaryWriter writer, ReadOnlySpan<int> discriminators, int width)
     {
         switch (width)
         {

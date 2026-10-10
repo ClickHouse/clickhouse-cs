@@ -42,6 +42,27 @@ internal static class GeoColumnCodecs
     private static readonly TypeNode GeometryStructure =
         TypeParser.Parse("Variant(LineString, MultiLineString, MultiPolygon, Point, Polygon, Ring)");
 
+    /// <summary>The structure of a geo type: the type that the alias names.</summary>
+    /// <param name="name">The canonical name of a type.</param>
+    /// <param name="structure">The structure, or null when <paramref name="name"/> is not a geo type.</param>
+    /// <returns>Whether <paramref name="name"/> is a geo type.</returns>
+    public static bool TryGetStructure(string name, out TypeNode structure)
+    {
+        structure = name switch
+        {
+            "Point" => PointStructure,
+            "Ring" => RingStructure,
+            "LineString" => LineStringStructure,
+            "Polygon" => PolygonStructure,
+            "MultiLineString" => MultiLineStringStructure,
+            "MultiPolygon" => MultiPolygonStructure,
+            "Geometry" => GeometryStructure,
+            _ => null,
+        };
+
+        return structure is not null;
+    }
+
     public static IColumnCodec CreatePoint(in ResolveContext context, ColumnCodecRegistry registry)
         => TupleColumnCodec.Create(PointStructure, in context, registry, "Point");
 

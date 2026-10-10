@@ -33,9 +33,11 @@ internal abstract class QBitColumnCodec : IColumnCodec
 
     public abstract object NullPlaceholder { get; }
 
-    protected int Dimension { get; }
+    /// <summary>The number of elements of each vector.</summary>
+    internal int Dimension { get; }
 
-    protected int BitWidth { get; }
+    /// <summary>The number of bit planes: the number of bits of the element type.</summary>
+    internal int BitWidth { get; }
 
     protected int BytesPerRow { get; }
 
