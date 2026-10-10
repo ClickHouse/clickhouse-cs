@@ -98,15 +98,25 @@ internal sealed class PocoColumnBuilder<T, TWrite> : PocoColumnBuilder<T>
 /// each property value into the buffer of its column, in one of two ways (<see cref="PocoGatherTier"/>).
 /// </summary>
 /// <remarks>
+/// <para>
 /// The gather finds a null that the column cannot hold before the block is written, so the error names the property and
 /// the row, and the connection stays at a block boundary. A reference type is null where the column type has no NULL
-/// (<see cref="PocoWriteConversion.TakesNull"/>); a nullable value type is null where the tree writes its value type
-/// (<see cref="NonNullWriter{T}"/>).
+/// (<see cref="PocoWriteConversion.TakesNull"/>). A <c>T?</c> property is null where the tree writes its values as
+/// <c>T</c> (<see cref="NonNullWriter{T}"/>).
+/// </para>
+/// <para>
+/// For such a <c>T?</c> property, the gather copies the <c>T</c> of each value into a column of <c>T</c>. The insert
+/// then writes that column through the tree of <c>T</c>, which is the inner tree of the <see cref="NonNullWriter{T}"/>:
+/// the values are read once, into one buffer.
+/// </para>
 /// </remarks>
 internal static class PocoColumnBuilderFactory
 {
     private static readonly MethodInfo CreateTypedMethod =
         typeof(PocoColumnBuilderFactory).GetMethod(nameof(CreateTyped), BindingFlags.NonPublic | BindingFlags.Static);
+
+    private static readonly MethodInfo CreateValuesMethod =
+        typeof(PocoColumnBuilderFactory).GetMethod(nameof(CreateValues), BindingFlags.NonPublic | BindingFlags.Static);
 
     private static readonly MethodInfo NullNotWritableMethod =
         typeof(PocoWriteErrors).GetMethod(nameof(PocoWriteErrors.NullNotWritable), BindingFlags.Public | BindingFlags.Static);
@@ -137,13 +147,18 @@ internal static class PocoColumnBuilderFactory
             throw PocoWriteErrors.NotWritableAs(column, codec, member, typeof(T));
         }
 
-        bool refusesNull = member.MemberType.IsValueType
-            ? derived.Converter.GetType() is { IsGenericType: true } writer && writer.GetGenericTypeDefinition() == typeof(NonNullWriter<>)
-            : !PocoWriteConversion.TakesNull(codec);
+        PocoGatherTier tier = SelectTier(forcedTier);
+        if (derived.Converter.GetType() is { IsGenericType: true } writer && writer.GetGenericTypeDefinition() == typeof(NonNullWriter<>))
+        {
+            return (PocoColumnBuilder<T>)CreateValuesMethod
+                .MakeGenericMethod(typeof(T), Nullable.GetUnderlyingType(member.MemberType))
+                .Invoke(null, BindingFlags.DoNotWrapExceptions, binder: null, new object[] { column.Name, column.TypeName, member, tier }, culture: null);
+        }
 
+        bool refusesNull = !member.MemberType.IsValueType && !PocoWriteConversion.TakesNull(codec);
         return (PocoColumnBuilder<T>)CreateTypedMethod
             .MakeGenericMethod(typeof(T), member.MemberType)
-            .Invoke(null, BindingFlags.DoNotWrapExceptions, binder: null, new object[] { column.Name, column.TypeName, member, refusesNull, SelectTier(forcedTier) }, culture: null);
+            .Invoke(null, BindingFlags.DoNotWrapExceptions, binder: null, new object[] { column.Name, column.TypeName, member, refusesNull, tier }, culture: null);
     }
 
     /// <summary>
@@ -155,6 +170,7 @@ internal static class PocoColumnBuilderFactory
     internal static PocoGatherTier SelectTier(PocoGatherTier? forcedTier)
         => forcedTier ?? (RuntimeFeature.IsDynamicCodeCompiled ? PocoGatherTier.Compiled : PocoGatherTier.Delegate);
 
+    // The gather of a property into a column of its own type.
     [RequiresDynamicCode("The Compiled tier compiles an expression tree.")]
     private static PocoColumnBuilder<T> CreateTyped<T, TMember>(string name, string typeName, PocoMember member, bool refusesNull, PocoGatherTier tier)
         where T : class
@@ -165,18 +181,32 @@ internal static class PocoColumnBuilderFactory
         return new PocoColumnBuilder<T, TMember>(name, typeName, gather);
     }
 
+    // The gather of a TValue? property into a column of TValue: it refuses a null and copies the TValue of each value.
+    [RequiresDynamicCode("The Compiled tier compiles an expression tree.")]
+    private static PocoColumnBuilder<T> CreateValues<T, TValue>(string name, string typeName, PocoMember member, PocoGatherTier tier)
+        where T : class
+        where TValue : struct
+    {
+        PocoColumnGather<T, TValue> gather = tier == PocoGatherTier.Delegate
+            ? DelegateValueGather<T, TValue>(name, typeName, member)
+            : CompileGather<T, TValue>(name, typeName, member, refusesNull: true);
+        return new PocoColumnBuilder<T, TValue>(name, typeName, gather);
+    }
+
     // for (slot = 0; slot < count; slot++) { value = rows[start + slot].Property; <check null>; destination[slot] = value; }
+    // For a T? property into a column of T, the destination gets value.GetValueOrDefault().
     [RequiresDynamicCode("Compiles an expression tree.")]
-    private static PocoColumnGather<T, TMember> CompileGather<T, TMember>(string name, string typeName, PocoMember member, bool refusesNull)
+    private static PocoColumnGather<T, TWrite> CompileGather<T, TWrite>(string name, string typeName, PocoMember member, bool refusesNull)
         where T : class
     {
+        Type memberType = member.MemberType;
         ParameterExpression rows = Expression.Parameter(typeof(T[]), "rows");
         ParameterExpression start = Expression.Parameter(typeof(int), "start");
         ParameterExpression rowNumber = Expression.Parameter(typeof(int), "rowNumber");
         ParameterExpression count = Expression.Parameter(typeof(int), "count");
-        ParameterExpression destination = Expression.Parameter(typeof(TMember[]), "destination");
+        ParameterExpression destination = Expression.Parameter(typeof(TWrite[]), "destination");
         ParameterExpression slot = Expression.Variable(typeof(int), "slot");
-        ParameterExpression value = Expression.Variable(typeof(TMember), "value");
+        ParameterExpression value = Expression.Variable(memberType, "value");
 
         var step = new List<Expression>
         {
@@ -186,9 +216,9 @@ internal static class PocoColumnBuilderFactory
         if (refusesNull)
         {
             // Name the row by its number in the insert, not by its position in the block.
-            Expression isNull = typeof(TMember).IsValueType
+            Expression isNull = memberType.IsValueType
                 ? Expression.Not(Expression.Property(value, nameof(Nullable<int>.HasValue)))
-                : Expression.ReferenceEqual(value, Expression.Constant(null, typeof(TMember)));
+                : Expression.ReferenceEqual(value, Expression.Constant(null, memberType));
             step.Add(Expression.IfThen(
                 isNull,
                 Expression.Throw(Expression.Call(
@@ -200,7 +230,10 @@ internal static class PocoColumnBuilderFactory
                     Expression.Convert(Expression.Add(rowNumber, slot), typeof(long))))));
         }
 
-        step.Add(Expression.Assign(Expression.ArrayAccess(destination, slot), value));
+        Expression stored = memberType == typeof(TWrite)
+            ? value
+            : Expression.Call(value, memberType.GetMethod(nameof(Nullable<int>.GetValueOrDefault), Type.EmptyTypes));
+        step.Add(Expression.Assign(Expression.ArrayAccess(destination, slot), stored));
         step.Add(Expression.PostIncrementAssign(slot));
 
         LabelTarget done = Expression.Label("done");
@@ -211,7 +244,7 @@ internal static class PocoColumnBuilderFactory
                 Expression.IfThenElse(Expression.LessThan(slot, count), Expression.Block(step), Expression.Break(done)),
                 done));
 
-        return Expression.Lambda<PocoColumnGather<T, TMember>>(body, rows, start, rowNumber, count, destination).Compile();
+        return Expression.Lambda<PocoColumnGather<T, TWrite>>(body, rows, start, rowNumber, count, destination).Compile();
     }
 
     // The same loop with a getter delegate, which compiles no code.
@@ -232,6 +265,29 @@ internal static class PocoColumnBuilderFactory
                 }
 
                 destination[slot] = value;
+            }
+        };
+    }
+
+    // The same loop for a TValue? property into a column of TValue.
+    private static PocoColumnGather<T, TValue> DelegateValueGather<T, TValue>(string name, string typeName, PocoMember member)
+        where T : class
+        where TValue : struct
+    {
+        var get = (Func<T, TValue?>)Delegate.CreateDelegate(typeof(Func<T, TValue?>), member.Property.GetMethod);
+        string pocoType = typeof(T).Name;
+        string memberName = member.MemberName;
+        return (rows, start, rowNumber, count, destination) =>
+        {
+            for (int slot = 0; slot < count; slot++)
+            {
+                TValue? value = get(rows[start + slot]);
+                if (!value.HasValue)
+                {
+                    throw PocoWriteErrors.NullNotWritable(name, typeName, pocoType, memberName, (long)rowNumber + slot);
+                }
+
+                destination[slot] = value.GetValueOrDefault();
             }
         };
     }
