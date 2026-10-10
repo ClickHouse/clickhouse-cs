@@ -189,6 +189,34 @@ public class WriteRulesTests
     }
 
     /// <summary>
+    /// Where the derivation writes a <c>T?</c> source through a <see cref="NonNullWriter{T}"/>, the POCO write plan gathers
+    /// the property into a column of <c>T</c>, which the insert writes through the derivation of <c>T</c>. That tree has
+    /// the type of the tree inside the null check.
+    /// </summary>
+    [TestCaseSource(nameof(Types))]
+    public void Derive_NullableSourceThatCannotBeNull_TheValueTypeGivesTheTreeInsideTheNullCheck(string columnType)
+    {
+        var differences = new List<string>();
+        foreach (Type source in Sources.Where(source => Nullable.GetUnderlyingType(source) is not null))
+        {
+            object writer = ConverterDerivation.Default.Derive(columnType, ConverterHarness.Context, source, ConversionDirection.Write).Converter;
+            if (writer is null || !writer.GetType().IsGenericType || writer.GetType().GetGenericTypeDefinition() != typeof(NonNullWriter<>))
+            {
+                continue;
+            }
+
+            object inner = writer.GetType().GetProperty(nameof(NonNullWriter<int>.Inner)).GetValue(writer);
+            Derivation values = ConverterDerivation.Default.Derive(columnType, ConverterHarness.Context, Nullable.GetUnderlyingType(source), ConversionDirection.Write);
+            if (!values.Succeeded || values.Converter.GetType() != inner.GetType())
+            {
+                differences.Add($"{TypeNames.Of(source)}: the tree inside the null check is {inner.GetType()}, the value type gives {(values.Succeeded ? values.Converter.GetType() : values.Refusal)}");
+            }
+        }
+
+        Assert.That(differences, Is.Empty, string.Join(Environment.NewLine, differences));
+    }
+
+    /// <summary>
     /// One set of rules for every write tier: for each source, the columnar insert accepts it exactly when the POCO write
     /// plan does and <c>ClickHouseTcpTypes.CanWrite</c> says true, and with no NULL both write the same bytes. With a NULL
     /// that the column cannot hold, both fail: each tier names the row in its own words.

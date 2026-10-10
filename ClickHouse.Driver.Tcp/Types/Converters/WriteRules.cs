@@ -338,6 +338,9 @@ internal sealed class NonNullWriter<T> : ColumnWriter<T?>
         this.columnType = columnType;
     }
 
+    /// <summary>The writer of <typeparamref name="T"/>, which writes the values after the check.</summary>
+    public ColumnWriter<T> Inner => inner;
+
     /// <inheritdoc/>
     public override bool HasPrefix => inner.HasPrefix;
 
