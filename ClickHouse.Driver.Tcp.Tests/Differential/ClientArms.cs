@@ -6,8 +6,10 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
 /// <summary>
-/// The old path: the arm of each tier that the candidates are compared with. Every arm here is the client's own
-/// entry point (<see cref="ClientArms"/>).
+/// The old path: the arm of each tier that the candidates are compared with. <see cref="ReadAs"/> and
+/// <see cref="CanRead"/> run the old dispatch of the columnar read tier (<see cref="LegacyColumnarRead"/>), because the
+/// client's entry points read through the converter derivation. The other arms are the client's own entry points
+/// (<see cref="ClientArms"/>).
 /// </summary>
 /// <remarks>
 /// The old members that the converter layer replaces stay in production until the old path is removed. When a tier
@@ -20,11 +22,11 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 /// </remarks>
 internal static class ReferenceArms
 {
-    public static ReadArm ReadAs => ClientArms.ReadAs;
+    public static ReadArm ReadAs { get; } = new LegacyColumnarRead.ReadAsArm("Old path: ReadAs");
 
     public static ReadArm Poco => ClientArms.Poco;
 
-    public static AnswerArm CanRead => ClientArms.CanRead;
+    public static AnswerArm CanRead { get; } = new ClientArms.FunctionAnswerArm("Old path: CanRead", Tier.CanRead, LegacyColumnarRead.CanRead);
 
     public static WriteArm Write => ClientArms.Write;
 
@@ -49,7 +51,8 @@ internal static class ClientArms
     /// <summary><c>ClickHouseTcpTypes.CanWrite</c>.</summary>
     public static readonly AnswerArm CanWrite = new FunctionAnswerArm("Client.CanWrite", Tier.CanWrite, ClickHouseTcpTypes.CanWrite);
 
-    private sealed class ReadAsArm : ReadArm
+    /// <summary><c>Block.ReadAs&lt;T&gt;</c> of a block's only column; a subclass can read the column another way.</summary>
+    internal class ReadAsArm : ReadArm
     {
         public ReadAsArm(string name)
             : base(name, Tier.ReadAs)
@@ -58,7 +61,7 @@ internal static class ClientArms
 
         public override RowReader<T> Bind<T>(Block block)
         {
-            IColumn<T> view = block.ReadAs<T>(0);
+            IColumn<T> view = View<T>(block);
             return (start, count) =>
             {
                 T[] values = view.Values.Slice(start, count).ToArray();
@@ -74,6 +77,9 @@ internal static class ClientArms
                 return values;
             };
         }
+
+        /// <summary>The column read as <typeparamref name="T"/>.</summary>
+        protected virtual IColumn<T> View<T>(Block block) => block.ReadAs<T>(0);
     }
 
     private sealed class PocoArm : ReadArm
@@ -129,7 +135,7 @@ internal static class ClientArms
         }
     }
 
-    private sealed class FunctionAnswerArm : AnswerArm
+    internal sealed class FunctionAnswerArm : AnswerArm
     {
         private readonly Func<string, Type, bool> answer;
 

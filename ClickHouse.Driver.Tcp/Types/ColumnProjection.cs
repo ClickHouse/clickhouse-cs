@@ -1,166 +1,152 @@
 using System;
-using System.Linq.Expressions;
-using System.Reflection;
-using System.Threading;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// Builds a view over <paramref name="source"/> whose values read as one type that source's ClickHouse type
-/// offers. The view borrows the source, so it is only as valid as the block the source came from.
-/// </summary>
-/// <param name="source">The decoded column to read from.</param>
-/// <returns>An <see cref="IColumn{T}"/> of the projected type.</returns>
-internal delegate IColumn ColumnReadProjection(IColumn source);
-
-/// <summary>
-/// Resolves the column projection used by <see cref="Block.ReadAs{T}(string)"/>, POCO reads, and
-/// <see cref="ClickHouseTcpTypes.CanRead"/>. It prefers a codec's column-level projection and otherwise builds an
-/// elementwise view.
+/// The reading of a column that <see cref="Block.ReadAs{T}(string)"/> gives: the column itself when it already is an
+/// <see cref="IColumn{T}"/>, else a <see cref="DerivedColumn{T}"/> over the reader that the converter derivation gives
+/// for the column's type (decision D1).
 /// </summary>
 internal static class ColumnProjection
 {
-    private static readonly MethodInfo ElementwiseViewMethod =
-        typeof(ColumnProjection).GetMethod(nameof(ElementwiseView), BindingFlags.NonPublic | BindingFlags.Static);
-
-    // The source already reads as the requested type, so the projection is the column itself.
-    private static readonly ColumnReadProjection Identity = static source => source;
-
-    /// <summary>
-    /// The projection a codec offers to <paramref name="targetType"/>: the column itself when that is what it
-    /// decodes to, then its own column-level reading, then an elementwise view over its values.
-    /// </summary>
-    /// <param name="codec">The column's codec.</param>
-    /// <param name="targetType">The CLR type to read the values as.</param>
-    /// <returns>The projection, or null when the type offers no such reading.</returns>
-    public static ColumnReadProjection For(IColumnCodec codec, Type targetType)
+    /// <summary>Reads <paramref name="column"/> as <typeparamref name="T"/>.</summary>
+    /// <typeparam name="T">The CLR type to read the values as.</typeparam>
+    /// <param name="column">A decoded column, which carries its ClickHouse type.</param>
+    /// <param name="derivation">The derivation of the registry that decoded the column.</param>
+    /// <param name="context">The context that the column's codec was resolved with.</param>
+    /// <returns>The column, a view over it, or null when the column's type cannot be read as <typeparamref name="T"/>.</returns>
+    /// <exception cref="InvalidOperationException">The column does not have the decoded shape that the reader needs.</exception>
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    public static IColumn<T> For<T>(IColumn column, ConverterDerivation derivation, in ResolveContext context)
     {
-        if (targetType == codec.ElementType)
+        if (column is IColumn<T> already)
         {
-            return Identity;
+            return already;
         }
 
-        return codec.TryProjectColumnRead(targetType, out ColumnReadProjection projection)
-            ? projection
-            : Elementwise(codec, targetType);
-    }
-
-    /// <summary>
-    /// Whether a codec offers a reading as <paramref name="targetType"/>, without compiling an elementwise view.
-    /// </summary>
-    /// <param name="codec">The column's codec.</param>
-    /// <param name="targetType">The CLR type to read the values as.</param>
-    /// <returns>Whether that type offers a reading as that CLR type.</returns>
-    public static bool Offers(IColumnCodec codec, Type targetType)
-        => targetType == codec.ElementType
-            || codec.TryProjectColumnRead(targetType, out _)
-            || codec.TryProjectRead(Expression.Parameter(codec.ElementType, "value"), targetType, out _);
-
-    /// <summary>
-    /// Closes a generic projection builder and binds its state once per resolution.
-    /// </summary>
-    /// <typeparam name="TState">The builder's second parameter: whatever the codec captured while resolving.</typeparam>
-    /// <param name="builder">A static <c>IColumn Build&lt;...&gt;(IColumn source, TState state)</c> method.</param>
-    /// <param name="state">The state to bind.</param>
-    /// <param name="projectedTypes">The type arguments to close <paramref name="builder"/> over.</param>
-    /// <returns>The projection.</returns>
-    public static ColumnReadProjection Close<TState>(MethodInfo builder, TState state, params Type[] projectedTypes)
-    {
-        var bound = (Func<IColumn, TState, IColumn>)Delegate.CreateDelegate(
-            typeof(Func<IColumn, TState, IColumn>),
-            builder.MakeGenericMethod(projectedTypes));
-
-        return source => bound(source, state);
-    }
-
-    /// <summary>
-    /// The column's columnar surface, which a projection needs to reach its storage or its children.
-    /// </summary>
-    /// <typeparam name="TSurface">The surface interface the reading is taken through.</typeparam>
-    /// <param name="column">The decoded column.</param>
-    /// <returns>The column, as that surface.</returns>
-    /// <exception cref="InvalidOperationException"><paramref name="column"/> does not expose that surface.</exception>
-    // Caller-built columns can carry a type name without exposing that type's decoded shape.
-    public static TSurface Surface<TSurface>(IColumn column)
-        where TSurface : class, IColumn
-        => column as TSurface
-            ?? throw new InvalidOperationException(
-                $"Column '{column.Name}' ({column.TypeName}) was read as {column.GetType()}, which does not expose " +
-                $"{typeof(TSurface).Name}, so a projected reading cannot reach its values.");
-
-    /// <summary>
-    /// Builds a view that converts one value at a time, for a codec whose reading is elementwise.
-    /// </summary>
-    /// <param name="codec">The column's codec.</param>
-    /// <param name="targetType">The CLR type to read the values as.</param>
-    /// <returns>The projection, or null when the codec offers no elementwise reading as that type.</returns>
-    private static ColumnReadProjection Elementwise(IColumnCodec codec, Type targetType)
-    {
-        ParameterExpression column = Expression.Parameter(typeof(IColumn), "column");
-        ParameterExpression row = Expression.Parameter(typeof(int), "row");
-        Type typedColumn = typeof(IColumn<>).MakeGenericType(codec.ElementType);
-        PropertyInfo indexer = typedColumn.GetProperty("Item")
-            ?? throw new InvalidOperationException($"{typedColumn} has no indexer; an elementwise projection cannot be built.");
-
-        Expression value = Expression.MakeIndex(Expression.Convert(column, typedColumn), indexer, new Expression[] { row });
-        if (!codec.TryProjectRead(value, targetType, out Expression projected))
+        Derivation derived = derivation.Derive(column.TypeName, in context, typeof(T), ConversionDirection.Read);
+        if (!derived.Succeeded)
         {
             return null;
         }
 
-        Delegate read = Expression
-            .Lambda(typeof(Func<,,>).MakeGenericType(typeof(IColumn), typeof(int), targetType), projected, column, row)
-            .Compile();
-
-        return (ColumnReadProjection)ElementwiseViewMethod.MakeGenericMethod(targetType).Invoke(null, new object[] { read });
+        // Bind now, so a column without the decoded shape fails here. The view converts on its first access.
+        return new DerivedColumn<T>(column, ((ColumnReader<T>)derived.Converter).Bind(column));
     }
-
-    private static ColumnReadProjection ElementwiseView<T>(Func<IColumn, int, T> read)
-        => source => new ProjectedReadColumn<T>(source, read);
 }
 
 /// <summary>
-/// Caches one projected view by source-column identity so repeated POCO materialization windows reuse it. The
-/// last source and view remain referenced after block disposal until another source replaces them.
+/// The views of <see cref="Block.ReadAs{T}(string)"/> that one block owns: one for each (column, CLR type), so a second
+/// call gives the view of the first, with its converted values. When the block is disposed, every view gives its values
+/// back to the pool. Safe for concurrent use.
 /// </summary>
-internal sealed class ProjectedViewCache
+internal sealed class DerivedViews
 {
-    private readonly ColumnReadProjection projection;
+    private readonly object gate = new();
+    private List<Entry> entries;
+    private bool released;
 
-    private Entry entry;
+    /// <summary>A set that is already released: a view added to it is released at once.</summary>
+    public static DerivedViews Released { get; } = new() { released = true };
 
-    /// <summary>Initializes a memo over one projection.</summary>
-    /// <param name="projection">The projection to apply, and to remember the result of.</param>
-    public ProjectedViewCache(ColumnReadProjection projection) => this.projection = projection;
-
-    /// <summary>The projected view of <paramref name="column"/>, reusing the last one when it is the same column.</summary>
-    /// <param name="column">The decoded column to project.</param>
-    /// <returns>The view.</returns>
-    // The immutable entry is published atomically. A race may project twice or evict another block's view, but
-    // cannot return a view for the wrong source.
-    public IColumn For(IColumn column)
+    /// <summary>The view of <paramref name="source"/> as <typeparamref name="T"/> that the block keeps.</summary>
+    /// <typeparam name="T">The CLR type of the view.</typeparam>
+    /// <param name="source">The decoded column.</param>
+    /// <param name="view">The view, or null when the block keeps none.</param>
+    /// <returns>Whether the block keeps a view.</returns>
+    public bool TryGet<T>(IColumn source, out IColumn<T> view)
     {
-        Entry current = Volatile.Read(ref entry);
-        if (current is not null && ReferenceEquals(current.Source, column))
+        lock (gate)
         {
-            return current.View;
+            view = Find<T>(source);
+            return view is not null;
+        }
+    }
+
+    /// <summary>
+    /// Keeps <paramref name="view"/> for <paramref name="source"/>, or gives the view that another thread kept first.
+    /// A view added after <see cref="Release"/> is released at once, so its first access throws.
+    /// </summary>
+    /// <typeparam name="T">The CLR type of the view.</typeparam>
+    /// <param name="source">The decoded column.</param>
+    /// <param name="view">A view that has not converted any value yet.</param>
+    /// <returns>The view that the block keeps.</returns>
+    public IColumn<T> Add<T>(IColumn source, DerivedColumn<T> view)
+    {
+        lock (gate)
+        {
+            if (released)
+            {
+                view.Release();
+                return view;
+            }
+
+            IColumn<T> kept = Find<T>(source);
+            if (kept is not null)
+            {
+                return kept;
+            }
+
+            (entries ??= new List<Entry>()).Add(new Entry(source, typeof(T), view));
+            return view;
+        }
+    }
+
+    /// <summary>Gives the values of every view back to the pool. A later access to a view throws <see cref="ObjectDisposedException"/>.</summary>
+    public void Release()
+    {
+        List<Entry> views;
+        lock (gate)
+        {
+            released = true;
+            views = entries;
+            entries = null;
         }
 
-        var fresh = new Entry(column, projection(column));
-        Volatile.Write(ref entry, fresh);
-        return fresh.View;
+        if (views is null)
+        {
+            return;
+        }
+
+        foreach (Entry entry in views)
+        {
+            entry.View.Release();
+        }
+    }
+
+    private IColumn<T> Find<T>(IColumn source)
+    {
+        if (entries is not null)
+        {
+            foreach (Entry entry in entries)
+            {
+                if (entry.Is(source, typeof(T)))
+                {
+                    return (IColumn<T>)entry.View;
+                }
+            }
+        }
+
+        return null;
     }
 
     private sealed class Entry
     {
-        public Entry(IColumn source, IColumn view)
+        private readonly IColumn source;
+        private readonly Type target;
+
+        public Entry(IColumn source, Type target, IDerivedColumn view)
         {
-            Source = source;
+            this.source = source;
+            this.target = target;
             View = view;
         }
 
-        public IColumn Source { get; }
+        public IDerivedColumn View { get; }
 
-        public IColumn View { get; }
+        public bool Is(IColumn column, Type type) => ReferenceEquals(source, column) && target == type;
     }
 }

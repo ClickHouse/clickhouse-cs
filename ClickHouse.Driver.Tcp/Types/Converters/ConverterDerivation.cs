@@ -93,8 +93,8 @@ internal sealed partial class ConverterDerivation
     /// <param name="registry">The registry that validates the type strings and resolves the leaf codecs.</param>
     public ConverterDerivation(ColumnCodecRegistry registry) => this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
 
-    /// <summary>The derivation over <see cref="ColumnCodecRegistry.Default"/>.</summary>
-    public static ConverterDerivation Default { get; } = new(ColumnCodecRegistry.Default);
+    /// <summary>The derivation over <see cref="ColumnCodecRegistry.Default"/> (<see cref="ColumnCodecRegistry.Converters"/>).</summary>
+    public static ConverterDerivation Default => ColumnCodecRegistry.Default.Converters;
 
     /// <summary>Derives the converter tree for one ClickHouse type, one CLR type and one direction.</summary>
     /// <param name="type">The ClickHouse type string, for example <c>Nullable(DateTime('UTC'))</c>.</param>

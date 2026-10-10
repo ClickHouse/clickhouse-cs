@@ -215,6 +215,12 @@ public class ReadCombinatorTests
     [TestCase("Nullable(Tuple(Time, Time))", typeof((TimeOnly, TimeOnly)?))]
     [TestCase("Array(Time)", typeof(TimeOnly[]))]
     [TestCase("Nullable(Time)", typeof(TimeOnly?))]
+    [TestCase("Tuple(Time)", typeof(ValueTuple<TimeOnly>))]
+    [TestCase("Tuple(Time, Time, Time)", typeof((TimeOnly, TimeOnly, TimeOnly)))]
+    [TestCase("Tuple(Time, Time, Time, Time)", typeof((TimeOnly, TimeOnly, TimeOnly, TimeOnly)))]
+    [TestCase("Tuple(Time, Time, Time, Time, Time)", typeof((TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly)))]
+    [TestCase("Tuple(Time, Time, Time, Time, Time, Time)", typeof((TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly)))]
+    [TestCase("Tuple(Time, Time, Time, Time, Time, Time, Time)", typeof((TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly)))]
     public async Task Read_CompositeWithTwoFailingValues_FailsOnTheFirstInRowOrderAsTheOldReadDoes(string type, Type target)
     {
         using IColumn column = await ConverterHarness.DecodeAsync(type, TwoFailingValues(type));
@@ -391,8 +397,23 @@ public class ReadCombinatorTests
         "Nullable(Tuple(Time, Time))" => new ArrayColumn<(int, int)?>("c", type, new (int, int)?[] { (1, 90_000), (-1, 1) }),
         "Array(Time)" => new ArrayColumn<int[]>("c", type, new[] { new[] { 1, 90_000 }, new[] { -1 } }),
         "Nullable(Time)" => new ArrayColumn<int?>("c", type, new int?[] { 90_000, null, -1 }),
+        _ when type.StartsWith("Tuple(Time", StringComparison.Ordinal) => TupleOfTimes(type),
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, "No column of two failing values."),
     };
+
+    // A Tuple of n Time fields: row 0 fails on its last field (90000), row 1 on its first field (-1).
+    private static IColumn TupleOfTimes(string type)
+    {
+        int arity = TypeParser.Parse(type).Arguments.Count;
+        Type tuple = ConverterHarness.Codec(type).ElementType;
+        object Row(int first, int last) => Activator.CreateInstance(
+            tuple,
+            Enumerable.Range(0, arity).Select(i => (object)(i == arity - 1 ? last : i == 0 ? first : 1)).ToArray());
+        Array rows = Array.CreateInstance(tuple, 2);
+        rows.SetValue(Row(arity == 1 ? 90_000 : 1, 90_000), 0);
+        rows.SetValue(Row(-1, arity == 1 ? -1 : 1), 1);
+        return (IColumn)Activator.CreateInstance(typeof(ArrayColumn<>).MakeGenericType(tuple), "c", type, rows);
+    }
 
     // The old read (ReadAs, or the old columnar dispatch), Fill and Emit fail alike, with the expected text in the message.
     private static void AssertFailsAsTheOldRead<T>(string type, IColumn column, string value)
