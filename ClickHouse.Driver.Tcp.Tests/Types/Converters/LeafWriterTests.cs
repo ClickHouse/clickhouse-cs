@@ -21,6 +21,38 @@ public class LeafWriterTests
 {
     private static readonly ConverterDerivation Derivation = ConverterDerivation.Default;
 
+    // The error of each case of RefusedValues, in order: the exception type, the parameter name and the message that the
+    // codec write gave for the same values. The messages format values with the invariant culture.
+    private static readonly (string Exception, string Parameter, string Message)[] RefusedErrors =
+    {
+        ("ArgumentOutOfRangeException", "utc", "DateTime is outside the range ClickHouse DateTime can hold (1970-01-01 to 2106-02-07 06:28:15 UTC). (Parameter 'utc')\nActual value was 12/31/1969 23:59:59."), // 0 DateTime
+        ("ArgumentOutOfRangeException", "utc", "DateTime is outside the range ClickHouse DateTime can hold (1970-01-01 to 2106-02-07 06:28:15 UTC). (Parameter 'utc')\nActual value was 02/07/2106 06:28:16."), // 1 DateTime
+        ("ArgumentOutOfRangeException", "utc", "DateTime is outside the range ClickHouse DateTime can hold (1970-01-01 to 2106-02-07 06:28:15 UTC). (Parameter 'utc')\nActual value was 01/01/1960 00:00:00."), // 2 DateTime('UTC')
+        ("ArgumentException", "value", "2024-03-10 02:30:00 does not exist in 'America/New_York': a daylight-saving change skips it. Pass a DateTimeOffset, or a DateTime with Kind=Utc, to name the instant you mean. (Parameter 'value')"), // 3 DateTime
+        ("ArgumentException", "value", "1970-01-01T00:00:00.0000001+00:00 cannot be written to DateTime64(3) (scale 3) without losing precision. (Parameter 'value')"), // 4 DateTime64(3)
+        ("ArgumentOutOfRangeException", "value", "9999-12-31T23:59:59.9999999+00:00 cannot be written to DateTime64(9) (scale 9): the count of sub-second units since 1970-01-01 does not fit in an Int64. (Parameter 'value')\nActual value was 12/31/9999 23:59:59 +00:00."), // 5 DateTime64(9)
+        ("ArgumentOutOfRangeException", "value", "1600-01-01T00:00:00.0000000+00:00 cannot be written to DateTime64(9) (scale 9): the count of sub-second units since 1970-01-01 does not fit in an Int64. (Parameter 'value')\nActual value was 01/01/1600 00:00:00 +00:00."), // 6 DateTime64(9)
+        ("ArgumentOutOfRangeException", "column", "Date is outside the range ClickHouse Date can hold (1970-01-01 to 2149-06-06). (Parameter 'column')\nActual value was 06/07/2149."), // 7 Date
+        ("ArgumentOutOfRangeException", "column", "Date is outside the range ClickHouse Date can hold (1970-01-01 to 2149-06-06). (Parameter 'column')\nActual value was 12/31/1969."), // 8 Date
+        ("ArgumentOutOfRangeException", "column", "Date32 is outside the range ClickHouse Date32 can hold (1900-01-01 to 2299-12-31). (Parameter 'column')\nActual value was 01/01/2300."), // 9 Date32
+        ("ArgumentOutOfRangeException", "value", "Time is outside the range ClickHouse Time can hold ([-999:59:59, 999:59:59]). (Parameter 'value')\nActual value was 41.16:00:00."), // 10 Time
+        ("ArgumentOutOfRangeException", "value", "Time64 is outside the range ClickHouse Time64 can hold ([-999:59:59, 999:59:59]). (Parameter 'value')\nActual value was -41.16:00:00."), // 11 Time64(3)
+        ("OverflowException", null, "Value at index 1 exceeds the declared precision 9 of decimal type 'Decimal(9, 2)'."), // 12 Decimal(9, 2)
+        ("ArgumentException", null, "Value 0.001 cannot be represented exactly at scale 2."), // 13 Decimal(9, 2)
+        ("OverflowException", null, "Value was either too large or too small for an Int128."), // 14 Decimal(38, 10)
+        ("ArgumentException", "label", "'b' is not a label of 'Enum8('a' = 1)'. Its labels are: 'a'. (Parameter 'label')"), // 15 Enum8('a' = 1)
+        ("ArgumentException", "label", "A null is not a label of 'Enum8('a' = 1)'. Declare the target Nullable to carry nulls. (Parameter 'label')"), // 16 Enum8('a' = 1)
+        ("ArgumentException", "value", "An IPv4 column requires IPv4 addresses; got '::1'. (Parameter 'value')"), // 17 IPv4
+        ("ArgumentException", "value", "An IPv4 column requires IPv4 addresses; got ''. (Parameter 'value')"), // 18 IPv4
+        ("ArgumentException", "value", "An IPv6 column requires IPv6 addresses; got ''. (Parameter 'value')"), // 19 IPv6
+        ("ArgumentNullException", "value", "Value cannot be null. (Parameter 'value')"), // 20 String
+        ("ArgumentException", "column", "A String column cannot hold a null value (at row 1); wrap the type in Nullable to write nulls. (Parameter 'column')"), // 21 String
+        ("ArgumentException", "value", "A FixedString(2) value at row 1 is 1 bytes; every value must be exactly 2 bytes. Resize it to 2 bytes before writing it \u2014 the write path will not pad or truncate, since doing so would silently alter the data. (Parameter 'value')"), // 22 FixedString(2)
+        ("ArgumentException", "value", "A FixedString(2) value at row 0 is 3 bytes; every value must be exactly 2 bytes. Resize it to 2 bytes before writing it \u2014 the write path will not pad or truncate, since doing so would silently alter the data. (Parameter 'value')"), // 23 FixedString(2)
+        ("ArgumentException", "value", "A FixedString(2) column cannot hold a null value (at row 0); wrap the type in Nullable to write nulls. (Parameter 'value')"), // 24 FixedString(2)
+        ("ArgumentNullException", "value", "Value cannot be null. (Parameter 'value')"), // 25 JSON
+    };
+
     // Texts of at most 4 UTF-8 bytes. A lone surrogate encodes as the 3 bytes EF BF BD.
     private static readonly string[] FixedStringTexts = { string.Empty, "a", "abcd", "é", "\uD800", "ab", "a" };
 
@@ -58,6 +90,24 @@ public class LeafWriterTests
             type,
             values,
             start);
+
+    /// <summary>
+    /// A value that the leaf cannot store fails with the pinned error of its case (<see cref="RefusedErrors"/>): exception
+    /// type, parameter name and message.
+    /// </summary>
+    [TestCaseSource(nameof(RefusedValuesWithErrors))]
+    [SetCulture("")]
+    public Task Write_ValueThatTheLeafCannotStore_FailsWithThePinnedError(string type, Array values, int start, string exception, string parameter, string message)
+        => (Task)ConverterHarness.InvokeGeneric(
+            typeof(LeafWriterTests),
+            nameof(AssertFailsWithAsync),
+            new[] { values.GetType().GetElementType() },
+            type,
+            values,
+            start,
+            exception,
+            parameter,
+            message);
 
     /// <summary>
     /// In a segmented source each segment is the array of one row. A refusal there names the position as the current
@@ -511,6 +561,15 @@ public class LeafWriterTests
             Assert.That(fromSpan, Is.EqualTo(expected), "span");
             Assert.That(fromSegments, Is.EqualTo(expected), "segments");
         });
+    }
+
+    private static IEnumerable<TestCaseData> RefusedValuesWithErrors() => ConverterHarness.WithErrors(RefusedValues(), RefusedErrors);
+
+    private static async Task AssertFailsWithAsync<T>(string type, T[] values, int start, string exception, string parameter, string message)
+    {
+        ColumnWriter<T> writer = Derivation.Writer<T>(type, ConverterHarness.Context);
+        Exception actual = await ConverterHarness.CatchAsync(() => ConverterHarness.WriteNewAsync(writer, values, start, values.Length - start));
+        ConverterHarness.AssertFailure(actual, exception, parameter, message, "write");
     }
 
     private static async Task AssertFailsLikeTheCurrentPathAsync<T>(string type, T[] values, int start)

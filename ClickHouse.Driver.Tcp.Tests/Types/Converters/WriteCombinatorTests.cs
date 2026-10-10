@@ -21,6 +21,40 @@ public class WriteCombinatorTests
 {
     private static readonly ConverterDerivation Derivation = ConverterDerivation.Default;
 
+    // The error of each case of RefusedValues, in order: the exception type, the parameter name and the message that the
+    // codec write gave for the same values. The messages format values with the invariant culture.
+    private static readonly (string Exception, string Parameter, string Message)[] RefusedErrors =
+    {
+        ("ArgumentException", "column", "Array column 'c' has a null value at row 2; Array(T) rows are non-nullable. Use an empty array for an empty row, or declare the column Array(Nullable(T)) to carry null elements. (Parameter 'column')"), // 0 Array(Int32)
+        ("ArgumentException", "column", "Array column 'c' has a null value at row 1; Array(T) rows are non-nullable. Use an empty array for an empty row, or declare the column Array(Nullable(T)) to carry null elements. (Parameter 'column')"), // 1 Array(Array(Int32))
+        ("ArgumentException", "column", "Map column 'c' has a null value at row 2; Map(K, V) rows are non-nullable. Use Array.Empty<KeyValuePair<K, V>>() for an empty row, or Map(K, Nullable(V)) to carry null values. (Parameter 'column')"), // 2 Map(String, Int32)
+        ("ArgumentException", "column", "Map column 'c' has a null value at row 1; Map(K, V) rows are non-nullable. Use Array.Empty<KeyValuePair<K, V>>() for an empty row, or Map(K, Nullable(V)) to carry null values. (Parameter 'column')"), // 3 Array(Map(String, Int32))
+        ("ArgumentException", "column", "Array column 'c' has a null value at row 2; Array(T) rows are non-nullable. Use an empty array for an empty row, or declare the column Array(Nullable(T)) to carry null elements. (Parameter 'column')"), // 4 Tuple(Int32, Array(String))
+        ("ArgumentException", "column", "Array column 'c' has a null value at row 0; Array(T) rows are non-nullable. Use an empty array for an empty row, or declare the column Array(Nullable(T)) to carry null elements. (Parameter 'column')"), // 5 Map(String, Array(Int32))
+        ("ArgumentNullException", "value", "Value cannot be null. (Parameter 'value')"), // 6 Map(String, Int32)
+        ("ArgumentException", "value", "A FixedString(2) value at row 2 is 1 bytes; every value must be exactly 2 bytes. Resize it to 2 bytes before writing it \u2014 the write path will not pad or truncate, since doing so would silently alter the data. (Parameter 'value')"), // 7 Nullable(FixedString(2))
+        ("ArgumentException", "value", "A FixedString(2) value at element 1 is 1 bytes; every value must be exactly 2 bytes. Resize it to 2 bytes before writing it \u2014 the write path will not pad or truncate, since doing so would silently alter the data. (Parameter 'value')"), // 8 Array(FixedString(2))
+        ("ArgumentException", "value", "A FixedString(2) value at row 1 is 1 bytes; every value must be exactly 2 bytes. Resize it to 2 bytes before writing it \u2014 the write path will not pad or truncate, since doing so would silently alter the data. (Parameter 'value')"), // 9 Array(Nullable(FixedString(2)))
+        ("ArgumentException", "value", "A FixedString(2) value at row 2 is 1 bytes; every value must be exactly 2 bytes. Resize it to 2 bytes before writing it \u2014 the write path will not pad or truncate, since doing so would silently alter the data. (Parameter 'value')"), // 10 Tuple(Int32, FixedString(2))
+        ("OverflowException", null, "Value at index 2 exceeds the declared precision 3 of decimal type 'Decimal(3, 2)'."), // 11 Nullable(Decimal(3, 2))
+        ("OverflowException", null, "Value at index 1 exceeds the declared precision 3 of decimal type 'Decimal(3, 2)'."), // 12 Array(Decimal(3, 2))
+        ("ArgumentException", null, "Variant 'Variant(String, UInt64)' has no alternative for a value of CLR type 'System.Double'. Supported CLR types: System.String, System.UInt64."), // 13 Variant(String, UInt64)
+        ("ArgumentException", null, "Variant 'Variant(IPv4, IPv6)' has no alternative for a value of CLR type 'System.String'. Supported CLR types: System.Net.IPAddress."), // 14 Variant(IPv4, IPv6)
+        ("ArgumentException", null, "Variant 'Variant(Ring, LineString)' cannot place a value of CLR type 'System.ValueTuple`2[System.Double,System.Double][]': the alternatives 'Ring', 'LineString' all surface that type, and the value does not say which of them is meant."), // 15 Variant(Ring, LineString)
+        ("NotSupportedException", null, "No ClickHouse type is inferred for a Dynamic value of CLR type 'System.Object'. Supported: the fixed-width scalars, String, UUID, Date, IP addresses, decimals, date-times, and arrays/maps/tuples of them."), // 16 Dynamic
+        ("ArgumentException", "label", "'b' is not a label of 'Enum8('a' = 1)'. Its labels are: 'a'. (Parameter 'label')"), // 17 Nullable(Enum8('a' = 1))
+        ("ArgumentNullException", "value", "Value cannot be null. (Parameter 'value')"), // 18 Array(String)
+        ("ArgumentException", "value", "An IPv4 column requires IPv4 addresses; got '::1'. (Parameter 'value')"), // 19 Nullable(IPv4)
+        ("ArgumentException", "column", "Array column 'c' has a null value at row 2; Array(T) rows are non-nullable. Use an empty array for an empty row, or declare the column Array(Nullable(T)) to carry null elements. (Parameter 'column')"), // 20 Nullable(Tuple(Int32, Array(String)))
+        ("ArgumentException", "value", "A FixedString(2) value at row 2 is 1 bytes; every value must be exactly 2 bytes. Resize it to 2 bytes before writing it \u2014 the write path will not pad or truncate, since doing so would silently alter the data. (Parameter 'value')"), // 21 LowCardinality(FixedString(2))
+        ("ArgumentException", "value", "A FixedString(2) column cannot hold a null value (at row 2); wrap the type in Nullable to write nulls. (Parameter 'value')"), // 22 LowCardinality(FixedString(2))
+        ("ArgumentException", "value", "A FixedString(2) value at row 3 is 3 bytes; every value must be exactly 2 bytes. Resize it to 2 bytes before writing it \u2014 the write path will not pad or truncate, since doing so would silently alter the data. (Parameter 'value')"), // 23 LowCardinality(Nullable(FixedString(2)))
+        ("OverflowException", null, "Value at index 3 exceeds the declared precision 3 of decimal type 'Decimal(3, 2)'."), // 24 LowCardinality(Decimal(3, 2))
+        ("OverflowException", null, "Value at index 2 exceeds the declared precision 3 of decimal type 'Decimal(3, 2)'."), // 25 LowCardinality(Nullable(Decimal(3, 2)))
+        ("ArgumentException", "label", "'b' is not a label of 'Enum8('a' = 1)'. Its labels are: 'a'. (Parameter 'label')"), // 26 LowCardinality(Enum8('a' = 1))
+        ("ArgumentOutOfRangeException", "utc", "DateTime is outside the range ClickHouse DateTime can hold (1970-01-01 to 2106-02-07 06:28:15 UTC). (Parameter 'utc')\nActual value was 01/01/1969 00:00:00."), // 27 LowCardinality(DateTime('UTC'))
+    };
+
     /// <summary>
     /// Columns that the current codecs write, with at least four rows, so a slice from row 2 starts after earlier values
     /// and every child offset of the slice is above 0.
@@ -109,6 +143,17 @@ public class WriteCombinatorTests
     [TestCaseSource(nameof(RefusedValues))]
     public Task Write_ValueThatTheCurrentWriteRefuses_FailsAsTheCurrentWriteDoes(string type, Array values, int start)
         => (Task)ConverterHarness.InvokeGeneric(typeof(WriteCombinatorTests), nameof(AssertFailsLikeTheCurrentPathAsync), new[] { values.GetType().GetElementType() }, type, values, start);
+
+    /// <summary>
+    /// A value that the type cannot store fails with the pinned error of its case (<see cref="RefusedErrors"/>): exception
+    /// type, parameter name and message.
+    /// </summary>
+    [TestCaseSource(nameof(RefusedValuesWithErrors))]
+    [SetCulture("")]
+    public Task Write_ValueThatTheTypeCannotStore_FailsWithThePinnedError(string type, Array values, int start, string exception, string parameter, string message)
+        => (Task)ConverterHarness.InvokeGeneric(typeof(WriteCombinatorTests), nameof(AssertFailsWithAsync), new[] { values.GetType().GetElementType() }, type, values, start, exception, parameter, message);
+
+    public static IEnumerable<TestCaseData> RefusedValuesWithErrors() => ConverterHarness.WithErrors(RefusedValues(), RefusedErrors);
 
     public static IEnumerable<TestCaseData> RefusedValues()
     {
@@ -306,6 +351,13 @@ public class WriteCombinatorTests
         byte[] expected = await ConverterHarness.WriteOldAsync(type, none, 0, 0);
         byte[] actual = await ConverterHarness.WriteNewAsync(writer, none, 0, 0);
         Assert.That(Convert.ToHexString(actual), Is.EqualTo(Convert.ToHexString(expected)), type);
+    }
+
+    private static async Task AssertFailsWithAsync<T>(string type, T[] values, int start, string exception, string parameter, string message)
+    {
+        ColumnWriter<T> writer = Derivation.Writer<T>(type, ConverterHarness.Context);
+        Exception actual = await ConverterHarness.CatchAsync(() => ConverterHarness.WriteNewAsync(writer, values, start, values.Length - start));
+        ConverterHarness.AssertFailure(actual, exception, parameter, message, $"{type}, rows [{start}, {values.Length})");
     }
 
     private static async Task AssertFailsLikeTheCurrentPathAsync<T>(string type, T[] values, int start)
