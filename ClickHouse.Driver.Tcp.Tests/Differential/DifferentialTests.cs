@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
+using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Differential;
@@ -168,6 +171,7 @@ public class DifferentialTests
     }
 
     // A decoded column is written from its own storage (decision D3), so it gives back the bytes that it was read from.
+    // The tail is checked by DecodedWriteDifferences.
     [Test]
     public void Run_EveryCase_TheDecodedColumnWritesTheBytesItWasReadFrom()
     {
@@ -180,6 +184,68 @@ public class DifferentialTests
             .ToArray();
 
         Assert.That(differences, Is.Empty);
+    }
+
+    [Test]
+    public void Run_EveryCase_EveryWriteOfTheDecodedColumnGivesTheValuesOfTheSourceRows()
+    {
+        string[] differences = DifferentialCases.All()
+            .Select(DifferentialEngine.ForCurrentRegistry)
+            .SelectMany(DecodedWriteDifferences)
+            .ToArray();
+
+        Assert.That(differences, Is.Empty);
+    }
+
+    /// <summary>
+    /// For each write of the decoded column of a case (the columnar insert, which writes it from its storage, and the row
+    /// inserts, which gather its values), for all rows and for the tail: the bytes decode to the values of the same rows
+    /// of the source column. Equal bytes need no decode. The bytes can differ and still be right: the write of a slice of
+    /// a decoded LowCardinality column keeps the dictionary of the whole column, and a row insert builds the dictionary
+    /// of its own values.
+    /// </summary>
+    /// <param name="report">The report of a case.</param>
+    /// <returns>One message for each write that gives other values.</returns>
+    internal static IEnumerable<string> DecodedWriteDifferences(CaseReport report)
+    {
+        DifferentialCase testCase = report.Case;
+        RangeOutcomes source = Baseline(report, Tier.Write, testCase.WriteInputs[0].Label);
+        int tailRows = testCase.RowCount == 1 ? 1 : testCase.RowCount - report.TailStart;
+        foreach (FacetResult result in report.Facets.Where(f => f.Facet.Input?.Kind == WriteInputKind.Decoded && Facet.WritesBytes(f.Facet.Tier) && f.Baseline is not null))
+        {
+            foreach (Rows rows in new[] { Rows.All, Rows.Tail })
+            {
+                Outcome expected = source.For(rows);
+                Outcome actual = result.Baseline.For(rows);
+                if (expected?.Kind != OutcomeKind.Bytes || actual?.Kind != OutcomeKind.Bytes || Outcome.Difference(expected, actual) is null)
+                {
+                    continue;
+                }
+
+                int count = rows == Rows.All ? testCase.RowCount : tailRows;
+                object[] expectedValues = DecodeValues(testCase.ColumnType, expected.Bytes, count);
+                object[] actualValues = DecodeValues(testCase.ColumnType, actual.Bytes, count);
+                for (int row = 0; row < count; row++)
+                {
+                    if (ValueComparer.Difference(expectedValues[row], actualValues[row]) is string difference)
+                    {
+                        yield return $"{result.Facet} {rows}, row {row} of the write: {difference}";
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // The values of the rows that the bytes of a column write hold (the state prefix and the body).
+    private static object[] DecodeValues(string columnType, byte[] bytes, int rows)
+    {
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(columnType, DifferentialEngine.Context);
+        using var stream = new MemoryStream(bytes);
+        using var reader = new ClickHouseBinaryReader(stream);
+        codec.ReadStatePrefixAsync(reader, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        using IColumn column = codec.ReadColumnAsync(reader, "value", columnType, rows, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        return Enumerable.Range(0, rows).Select(column.GetValue).ToArray();
     }
 
     [Test]

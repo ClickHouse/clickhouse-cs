@@ -17,6 +17,7 @@ public class DifferentialSelfTests
     private const string UInt64Case = "ColumnReadProjection: UInt64";
     private const string NullableDateTimeCase = "ColumnReadProjection: Nullable(DateTime('UTC'))";
     private const string OneRowArrayCase = "InsertRoundTrip: Array(Int16) [1 rows]";
+    private const string ArrayUInt8Case = "InsertRoundTrip: Array(UInt8) [3 rows]";
 
     // The sample values of the UInt64 case.
     private static readonly object[] UInt64Values = { 0UL, 1UL, ulong.MaxValue, 7UL, 1UL << 40 };
@@ -215,6 +216,35 @@ public class DifferentialSelfTests
             Assert.That(report.Mismatches, Has.Some.Contains("Write[decoded] rows [1, 2) after a preceding row: Start ignoring gives"));
             Assert.That(report.Mismatches, Has.None.Contains("rows [0, 1)"), "the write of all rows is right");
         });
+    }
+
+    [Test]
+    public void DecodedWriteDifferences_DenseWriteThatIgnoresTheStart_ReportsTheTail()
+    {
+        // The write of the decoded column is the only candidate of its facet, so the comparison of the decoded rows with
+        // the source rows is the check that finds a dense write that ignores the start.
+        var registry = new DifferentialRegistry();
+        registry.AddForEveryFacet(new DecodedStartIgnoringWriteArm());
+        CaseReport report = DifferentialEngine.Run(DifferentialCases.All().Single(c => c.Id == ArrayUInt8Case), registry);
+
+        string[] differences = DifferentialTests.DecodedWriteDifferences(report).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Mismatches, Is.Empty, "one candidate, so the engine compares nothing");
+            Assert.That(differences, Has.Some.Contains("Write[decoded] Tail"));
+            Assert.That(differences, Has.None.Contains("Write[decoded] All"), "the write of all rows starts at row 0");
+        });
+    }
+
+    [Test]
+    public void DecodedWriteDifferences_ClientWrites_ReportNothing()
+    {
+        var registry = new DifferentialRegistry();
+        registry.AddForEveryFacet(ClientArms.Write);
+        CaseReport report = DifferentialEngine.Run(DifferentialCases.All().Single(c => c.Id == ArrayUInt8Case), registry);
+
+        Assert.That(DifferentialTests.DecodedWriteDifferences(report), Is.Empty);
     }
 
     [Test]
@@ -581,6 +611,21 @@ public class DifferentialSelfTests
         {
             SliceWriter inner = ClientArms.Write.Bind(column, columnType, context);
             return (writer, _, length) => inner(writer, 0, length);
+        }
+    }
+
+    /// <summary>The client's write; a decoded input is written from row 0 whatever the start.</summary>
+    private sealed class DecodedStartIgnoringWriteArm : WriteArm
+    {
+        public DecodedStartIgnoringWriteArm()
+            : base("Decoded start ignoring")
+        {
+        }
+
+        public override SliceWriter Bind<T>(IColumn<T> column, string columnType, ResolveContext context)
+        {
+            SliceWriter inner = ClientArms.Write.Bind(column, columnType, context);
+            return column is IDenseArrayColumn ? (writer, _, length) => inner(writer, 0, length) : inner;
         }
     }
 
