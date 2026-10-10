@@ -111,7 +111,6 @@ public class PocoWritePlanTests
             Assert.That(source.Columns[0], Is.InstanceOf<IColumn<int>>());
             Assert.That(source.Columns[0].GetValue(0), Is.EqualTo(42));
             Assert.That(Insert(schema, source), Is.EqualTo(new byte[] { 0, 42, 0, 0, 0 }));
-            Assert.That(Insert(schema, source), Is.EqualTo(LegacyInsert(schema, rows)), "the bytes of the old plan");
         });
     }
 
@@ -236,7 +235,7 @@ public class PocoWritePlanTests
             Assert.That(source.Columns[0], Is.InstanceOf<IColumn<int?>>());
             Assert.That(source.Columns[0].GetValue(0), Is.Null);
             Assert.That(source.Columns[0].GetValue(1), Is.EqualTo(7));
-            Assert.That(Insert(schema, source), Is.EqualTo(LegacyInsert(schema, rows)), "the bytes of the old plan");
+            Assert.That(Insert(schema, source), Is.EqualTo(ColumnarInsert(schema, new ArrayColumn<object>("value", "Dynamic", new object[] { null, 7 }))), "the bytes of the columnar insert of the values as object");
         });
     }
 
@@ -295,7 +294,6 @@ public class PocoWritePlanTests
         {
             Assert.That(source.Columns[0], Is.InstanceOf<IColumn<Level>>());
             Assert.That(Insert(schema, source), Is.EqualTo(new byte[] { 127 }));
-            Assert.That(Insert(schema, source), Is.EqualTo(LegacyInsert(schema, rows)), "the bytes of the old plan");
         });
     }
 
@@ -483,24 +481,18 @@ public class PocoWritePlanTests
     /// plan gives, then its state prefix and body, one column after the other.
     /// </summary>
     internal static byte[] Insert(Block schema, IInsertColumnSource source)
-        => Write(schema, source, column => InsertColumnWrite.For(Codec(schema, column), column, column.TypeName, schema.Context, schema.Codecs.Converters));
+        => Write(source.Columns, column => InsertColumnWrite.For(Codec(schema, column), column, column.TypeName, schema.Context, schema.Codecs.Converters));
 
-    /// <summary>The bytes that the old plan (<see cref="PocoWritePlan{T}.BuildLegacy"/>) and the codecs write for the rows.</summary>
-    internal static byte[] LegacyInsert<T>(Block schema, T[] rows)
-        where T : class
-    {
-        using var buffer = PocoRowBuffer<T>.Create(rows, "rows", rows.Length, CancellationToken.None);
-        using PocoInsertSource<T> source = PocoWritePlan<T>.BuildLegacy(PocoTypeDescriptor<T>.Build(), schema).CreateSource(buffer, rows.Length);
-        source.Gather(0, rows.Length);
-        return Write(schema, source, column => InsertColumnWrite.ThroughCodec(Codec(schema, column)));
-    }
+    /// <summary>The bytes that the columnar insert writes for a column that the caller builds, in place of the gathered one.</summary>
+    internal static byte[] ColumnarInsert(Block schema, IColumn column)
+        => Write(new[] { column }, values => InsertColumnWrite.For(Codec(schema, values), values, values.TypeName, schema.Context, schema.Codecs.Converters));
 
-    private static byte[] Write(Block schema, IInsertColumnSource source, Func<IColumn, InsertColumnWrite> plan)
+    private static byte[] Write(IEnumerable<IColumn> columns, Func<IColumn, InsertColumnWrite> plan)
     {
         using var stream = new MemoryStream();
         using (var writer = new ClickHouseBinaryWriter(stream))
         {
-            foreach (IColumn column in source.Columns)
+            foreach (IColumn column in columns)
             {
                 InsertColumnWrite write = plan(column) ?? throw new InvalidOperationException($"The insert plan refuses column '{column.Name}'.");
                 IColumnWriteState state = write.Begin(column, 0, column.RowCount);
@@ -535,7 +527,7 @@ public class PocoWritePlanTests
         {
             Assert.That(source.Columns[0], Is.InstanceOf<IColumn<TValue>>());
             Assert.That(Enumerable.Range(0, rows.Length).Select(row => source.Columns[0].GetValue(row)), Is.EqualTo(values.Select(value => (object)value.Value)));
-            Assert.That(Insert(schema, source), Is.EqualTo(LegacyInsert(schema, rows)), "the bytes of the old plan");
+            Assert.That(Insert(schema, source), Is.EqualTo(ColumnarInsert(schema, new ArrayColumn<TValue?>("value", type, values))), "the bytes of the columnar insert of the nullable values");
         });
     }
 
