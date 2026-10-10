@@ -98,7 +98,11 @@ public class ConverterDerivationTests
         });
     }
 
-    /// <summary>A composite refuses a CLR type of another shape than the one it is written from, and says which shape.</summary>
+    /// <summary>
+    /// A composite refuses a CLR type of another shape than the one it is written from, and says which shape. The
+    /// column type's own writes, with no write rule of D6 at the root (<see cref="WriteRules"/>): the same texts name a
+    /// composite inside another type, where no rule applies.
+    /// </summary>
     [TestCase("Nullable(Int32)", typeof(int), "'Nullable(Int32)' cannot be written from System.Int32, which cannot hold NULL. It is written from a nullable type.")]
     [TestCase("Nullable(Int32)", typeof(object), "'Int32' cannot be written from System.Object. It is written from: System.Int32. It is inside the column type 'Nullable(Int32)'.")]
     [TestCase("Array(String)", typeof(object), "'Array(String)' cannot be written from System.Object. It is written from an array.")]
@@ -110,7 +114,8 @@ public class ConverterDerivationTests
     [TestCase("Point", typeof(object), "'Point' cannot be written from System.Object. It is written from: System.ValueTuple`2[System.Double,System.Double].")]
     public void Derive_CompositeWriteOfAnotherShape_RefusesWithTheShapeItIsWrittenFrom(string type, Type clrType, string refusal)
     {
-        Derivation derivation = Fresh().Derive(type, ConverterHarness.Context, clrType, ConversionDirection.Write);
+        TypeNode root = TypeParser.Parse(type);
+        Derivation derivation = Fresh().DeriveNode(root, root, ConverterHarness.Context, clrType, ConversionDirection.Write);
 
         Assert.That(derivation.Refusal, Is.EqualTo(refusal));
     }

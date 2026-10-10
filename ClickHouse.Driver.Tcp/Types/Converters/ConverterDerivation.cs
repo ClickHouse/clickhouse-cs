@@ -193,16 +193,21 @@ internal sealed partial class ConverterDerivation
     // Validates the whole type first, so a malformed or an unsupported type throws the same exception as a codec
     // resolution, with the same message.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    // A read that the column type's own readings refuse can still follow a read rule of D6, which applies to the whole
-    // column type only.
+    // A read or a write that the column type's own readings or writes refuse can still follow a rule of D6, which
+    // applies to the whole column type only.
     private Derivation DeriveUncached(string type, in ResolveContext context, Type clrType, ConversionDirection direction)
     {
         IColumnCodec codec = registry.Resolve(type, in context);
         TypeNode root = TypeParser.Parse(type);
         Derivation derived = DeriveNode(root, root, in context, clrType, direction);
-        return derived.Succeeded || direction != ConversionDirection.Read
-            ? derived
-            : DeriveByReadRules(root, codec.ElementType, in context, clrType, derived);
+        if (derived.Succeeded)
+        {
+            return derived;
+        }
+
+        return direction == ConversionDirection.Read
+            ? DeriveByReadRules(root, codec.ElementType, in context, clrType, derived)
+            : DeriveByWriteRules(type, root, in context, clrType, derived);
     }
 
     private Derivation DeriveLeaf(Leaf leaf, TypeNode node, TypeNode root, in ResolveContext context, Type clrType, ConversionDirection direction)
