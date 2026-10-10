@@ -18,18 +18,18 @@ internal static class VariantWire
 }
 
 /// <summary>
-/// A codec for the ClickHouse <c>Variant(T1, ..., Tn)</c> column — a discriminated union where each row holds a
+/// A codec for the ClickHouse <c>Variant(T1, ..., Tn)</c> column: a discriminated union where each row holds a
 /// value of exactly one alternative type, or NULL. The wire layout is columnar: a serialization-state prefix
 /// (a <c>UInt64</c> discriminators mode), then one <c>UInt8</c> discriminator per row, then a dense run per
 /// alternative type holding the values of the rows that selected it (in row order). NULL is the reserved
 /// discriminator <c>255</c> and consumes no value from any run; the alternatives are therefore never themselves
 /// <c>Nullable</c>. The server canonicalizes the alternatives (sorted by name) before sending the type string,
-/// so the declared order already is the discriminator order — this codec does not reorder it.
+/// so the declared order already is the discriminator order, and this codec does not reorder it.
 ///
 /// <para>
 /// The column data for <c>Variant(String, UInt64)</c> holding <c>[42, 'hi', NULL, 7, 'yo']</c>. <c>String</c> sorts
 /// before <c>UInt64</c>, so discriminator <c>0</c> is the string alternative. Each run holds only its own rows, in
-/// row order, and no run states its own length — a length is recoverable only by counting the discriminators.
+/// row order, and no run states its own length: a length is recoverable only by counting the discriminators.
 /// <code>
 /// 00 00 00 00 00 00 00 00  discriminators mode = 0 (BASIC)
 ///                          then one state prefix per alternative (both empty here)
@@ -40,7 +40,7 @@ internal static class VariantWire
 /// 07 00 00 00 00 00 00 00                            7
 /// </code>
 /// Reading row 4 therefore takes two steps: its discriminator says the string alternative, and the number of
-/// earlier rows that also chose it says which value in that run — index 1, <c>"yo"</c>.
+/// earlier rows that also chose it says which value in that run: index 1, <c>"yo"</c>.
 /// </para>
 ///
 /// <para>

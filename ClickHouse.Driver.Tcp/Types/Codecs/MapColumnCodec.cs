@@ -13,7 +13,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// A codec for the ClickHouse <c>Map(K, V)</c> column. The wire layout is byte-identical to
 /// <c>Array(Tuple(K, V))</c>: it delegates the serialization-state prefix to the key then the value codec, then
 /// reads/writes a per-row offsets stream (<c>num_rows</c> little-endian <c>UInt64</c>, each the cumulative pair
-/// end after that row) followed by two concatenated streams — every row's keys, then every row's values,
+/// end after that row) followed by two concatenated streams: every row's keys, then every row's values,
 /// positionally aligned so pair <c>i</c> is <c>(keys[i], values[i])</c>. The decoded column surfaces each row as
 /// a <see cref="KeyValuePair{TKey, TValue}"/>[]; a pair array (not a dictionary) is used so duplicate keys and
 /// pair order round-trip intact.

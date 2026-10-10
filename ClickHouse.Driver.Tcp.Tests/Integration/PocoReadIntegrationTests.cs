@@ -413,8 +413,8 @@ public class PocoReadIntegrationTests
         string sql = $"SELECT number AS Id, toString(number) AS Name FROM numbers({rowCount})";
         await using var client = TcpServerFixture.CreateClient();
 
-        // The premise, asserted rather than assumed: if the server ever splits this differently, the row assertions
-        // below would still pass while no longer testing a window boundary inside a block.
+        // The premise, asserted rather than assumed: if the server splits this differently, the row assertions below
+        // pass without a window boundary inside a block.
         int blocks = 0;
         await foreach (Block _ in client.StreamAsync(sql, options, None))
         {

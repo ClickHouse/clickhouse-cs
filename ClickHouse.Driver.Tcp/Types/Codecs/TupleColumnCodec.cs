@@ -11,7 +11,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// A codec for the ClickHouse <c>Tuple(...)</c> column. A tuple is serialized as its N element columns side by
 /// side: every child's serialization-state prefix in order, then every child's full column body in order, each
 /// body holding exactly <c>num_rows</c> values (no offsets, no null map). This codec owns one child codec per
-/// element and drives each phase by looping the children — the layout, and therefore the codec, is independent
+/// element and drives each phase by looping the children. The layout, and therefore the codec, is independent
 /// of how many elements the tuple has.
 ///
 /// <para>

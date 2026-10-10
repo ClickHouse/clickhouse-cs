@@ -9,7 +9,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// <summary>
 /// A codec for the ClickHouse <c>Nullable(T)</c> column. It owns no bytes of its own beyond the null-map: it
 /// delegates the serialization-state prefix to the inner codec, then reads/writes a per-row null-map (one
-/// <c>UInt8</c> each: non-zero means NULL) followed by the inner type's encoding for <em>all</em> rows —
+/// <c>UInt8</c> each: non-zero means NULL) followed by the inner type's encoding for <em>all</em> rows,
 /// placeholders included at the null positions. The decoded column surfaces each row as the inner CLR value or
 /// <see langword="null"/>: a value type as <c>T?</c> (<see cref="NullableValueColumn{T}"/>), a reference type as the
 /// nullable reference (<see cref="NullableReferenceColumn{T}"/>).
