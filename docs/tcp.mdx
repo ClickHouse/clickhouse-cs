@@ -627,6 +627,8 @@ insert completes before that block is released.
     `Enum16` is written, because its text is the label; a value that is not a label is refused.
     To insert such values, convert them with a `CAST` in the query, or insert a column of `string`
     values that you build from them with `ClickHouseTcpColumn.Create`.
+    An array cast that the [write rules](#write-rules) refuse is refused in such a part too: an
+    `Array(UInt32)` part is not written into an `Array(Int32)` part.
 
   A value that a NULL hides in such a column (for example after `nullIf`) is not converted into
   another target type: the row gets the placeholder of the target. When the insert cannot write a
