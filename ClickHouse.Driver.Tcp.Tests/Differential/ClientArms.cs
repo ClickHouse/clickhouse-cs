@@ -7,9 +7,9 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
 /// <summary>
 /// The old path: the arm of each tier that the candidates are compared with. <see cref="ReadAs"/> and
-/// <see cref="CanRead"/> run the old dispatch of the columnar read tier (<see cref="LegacyColumnarRead"/>), because the
-/// client's entry points read through the converter derivation. The other arms are the client's own entry points
-/// (<see cref="ClientArms"/>).
+/// <see cref="CanRead"/> run the old dispatch of the columnar read tier (<see cref="LegacyColumnarRead"/>), and
+/// <see cref="Poco"/> runs the old POCO read plan (<see cref="LegacyPocoRead"/>), because the client's entry points read
+/// through the converter derivation. The other arms are the client's own entry points (<see cref="ClientArms"/>).
 /// </summary>
 /// <remarks>
 /// The old members that the converter layer replaces stay in production until the old path is removed. When a tier
@@ -24,7 +24,7 @@ internal static class ReferenceArms
 {
     public static ReadArm ReadAs { get; } = new LegacyColumnarRead.ReadAsArm("Old path: ReadAs");
 
-    public static ReadArm Poco => ClientArms.Poco;
+    public static ReadArm Poco { get; } = new LegacyPocoRead.PocoArm("Old path: Poco");
 
     public static AnswerArm CanRead { get; } = new ClientArms.FunctionAnswerArm("Old path: CanRead", Tier.CanRead, LegacyColumnarRead.CanRead);
 
@@ -39,8 +39,11 @@ internal static class ClientArms
     /// <summary><c>Block.ReadAs&lt;T&gt;</c>, read through <c>Values</c>. The indexer must give the same values.</summary>
     public static readonly ReadArm ReadAs = new ReadAsArm("Client.ReadAs");
 
-    /// <summary>The POCO read plan, as <c>QueryAsync&lt;T&gt;</c> uses it, into <c>Row&lt;T&gt;.Value</c>.</summary>
-    public static readonly ReadArm Poco = new PocoArm("Client.Poco");
+    /// <summary>
+    /// The POCO read plan, as <c>QueryAsync&lt;T&gt;</c> uses it, into <c>Row&lt;T&gt;.Value</c>. The runtime chooses the
+    /// scatter tier, which is <see cref="PocoScatterTier.Emit"/> wherever the tests run.
+    /// </summary>
+    public static readonly ReadArm Poco = new PocoArm("Client.Poco", tier: null);
 
     /// <summary><c>ClickHouseTcpTypes.CanRead</c>.</summary>
     public static readonly AnswerArm CanRead = new FunctionAnswerArm("Client.CanRead", Tier.CanRead, ClickHouseTcpTypes.CanRead);
@@ -82,19 +85,20 @@ internal static class ClientArms
         protected virtual IColumn<T> View<T>(Block block) => block.ReadAs<T>(0);
     }
 
-    private sealed class PocoArm : ReadArm
+    /// <summary>The POCO read plan of the client, with the scatter tier that the runtime chooses or a forced one.</summary>
+    internal sealed class PocoArm : ReadArm
     {
-        // Plans are cached by POCO type and block shape, as the client caches them.
+        // Plans are cached by POCO type, block shape and tier, as the client caches them.
         private static readonly PocoTypeRegistry Plans = new();
 
-        public PocoArm(string name)
-            : base(name, Tier.Poco)
-        {
-        }
+        private readonly PocoScatterTier? tier;
+
+        public PocoArm(string name, PocoScatterTier? tier)
+            : base(name, Tier.Poco) => this.tier = tier;
 
         public override RowReader<T> Bind<T>(Block block)
         {
-            PocoReadPlan<Row<T>> plan = Plans.ReadPlanFor<Row<T>>(block, forcedTier: null);
+            PocoReadPlan<Row<T>> plan = Plans.ReadPlanFor<Row<T>>(block, tier);
             return (start, count) =>
             {
                 var rows = new Row<T>[count];

@@ -10,6 +10,8 @@
     <NoWarn>CS8002;CHTCP0001</NoWarn>
     <!-- codecov.yml ignores the vendored source in ClickHouse.Driver.Common/Vendor, so do not instrument it. -->
     <ExcludeByFile>**/Vendor/**/*.cs</ExcludeByFile>
+    <!-- The assembly has its own entry point (Program.cs), which a test starts in a child process. -->
+    <GenerateProgramFile>false</GenerateProgramFile>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,10 +1,12 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using ClickHouse.Driver.Tcp.Types;
-using ClickHouse.Driver.Tcp.Types.Codecs;
+using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Poco;
 
@@ -20,215 +22,243 @@ namespace ClickHouse.Driver.Tcp.Poco;
 internal delegate void PocoColumnScatter<in T>(IColumn column, T[] rows, int start, int rowCount, long rowOffset);
 
 /// <summary>
-/// Compiles a loop that fills one POCO property from either an elementwise conversion or a projected column.
+/// Makes the scatter that fills one POCO property from one column. The converter derivation gives the tree that reads
+/// the column type as the property type, with the read rules of POCO mapping (<see cref="ReadRules"/>). The scatter
+/// runs that tree in one of two ways (<see cref="PocoScatterTier"/>): as one compiled loop for the column, or as a
+/// bulk read followed by a setter delegate for each row.
 /// </summary>
+/// <remarks>
+/// A tree reads the decoded shape of its column type (for example the null map and the inner column of a
+/// <c>Nullable</c> column), which every column that a codec decodes has. A NULL that a read rule finds in a column read
+/// as a value type stops the read with <see cref="NullValueException"/>, which holds the row of the column. The scatter
+/// gives it the message of POCO mapping, which names the row of the result.
+/// </remarks>
 internal static class PocoColumnScatterFactory
 {
-    private static readonly MethodInfo SpanAt = typeof(PocoSpan).GetMethod(nameof(PocoSpan.At), BindingFlags.Public | BindingFlags.Static);
+    private static readonly MethodInfo CreateTypedMethod =
+        typeof(PocoColumnScatterFactory).GetMethod(nameof(CreateTyped), BindingFlags.NonPublic | BindingFlags.Static);
 
-    private static readonly MethodInfo CacheFor = typeof(ProjectedViewCache).GetMethod(nameof(ProjectedViewCache.For));
-
-    /// <summary>
-    /// Compiles the scatter for one column into one property.
-    /// </summary>
+    /// <summary>Makes the scatter for one column into one property.</summary>
     /// <typeparam name="T">The POCO type.</typeparam>
-    /// <param name="column">A column of the shape the plan was built for, for its name, type and runtime shape.</param>
+    /// <param name="column">A column of the shape the plan was built for, for its name and type.</param>
     /// <param name="codec">The column's codec, resolved the way the read resolved it.</param>
     /// <param name="member">The property the column maps to; must be settable.</param>
-    /// <param name="forcedTier">A tier to compile regardless of the runtime, or null to choose one.</param>
-    /// <param name="preferInterpretation">Whether to interpret the expression tree; used to test dynamic-code-free runtimes.</param>
-    /// <returns>The compiled scatter.</returns>
+    /// <param name="derivation">The converter derivation of the codec registry that decoded the column.</param>
+    /// <param name="context">The resolution context that decoded the column.</param>
+    /// <param name="forcedTier">A tier to use regardless of the runtime, or null to choose one (<see cref="SelectTier"/>).</param>
+    /// <returns>The scatter.</returns>
     /// <exception cref="InvalidOperationException">The column's values cannot be read as the property's type, or the
     /// column does not surface its codec's element type.</exception>
-    public static PocoColumnScatter<T> Create<T>(IColumn column, IColumnCodec codec, PocoMember member, PocoScatterTier? forcedTier, bool preferInterpretation = false)
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    public static PocoColumnScatter<T> Create<T>(
+        IColumn column,
+        IColumnCodec codec,
+        PocoMember member,
+        ConverterDerivation derivation,
+        in ResolveContext context,
+        PocoScatterTier? forcedTier)
         where T : class
     {
-        Type elementType = codec.ElementType;
-        Type typedColumn = typeof(IColumn<>).MakeGenericType(elementType);
-        if (!typedColumn.IsInstanceOfType(column))
+        if (!typeof(IColumn<>).MakeGenericType(codec.ElementType).IsInstanceOfType(column))
         {
-            throw NotSurfacingItsElementType(column, codec);
+            throw PocoReadErrors.NotSurfacingItsElementType(column, codec);
         }
 
-        ParameterExpression columnParameter = Expression.Parameter(typeof(IColumn), "column");
-        ParameterExpression rows = Expression.Parameter(typeof(T[]), "rows");
-        ParameterExpression start = Expression.Parameter(typeof(int), "start");
-        ParameterExpression rowCount = Expression.Parameter(typeof(int), "rowCount");
-        ParameterExpression rowOffset = Expression.Parameter(typeof(long), "rowOffset");
-        ParameterExpression row = Expression.Variable(typeof(int), "row");
-        Expression columnRow = Expression.Add(start, row);
-
-        var site = new PocoProjectionSite
+        Derivation derived = derivation.Derive(column.TypeName, in context, member.MemberType, ConversionDirection.Read);
+        if (!derived.Succeeded)
         {
-            ColumnName = column.Name,
-            ColumnType = column.TypeName,
-            PocoTypeName = typeof(T).Name,
-            MemberName = member.MemberName,
-            Row = Expression.Add(rowOffset, Expression.Convert(row, typeof(long))),
-        };
-
-        var locals = new List<ParameterExpression>(3) { row };
-        var body = new List<Expression>(4);
-
-        // Cache column-level projections across materialization windows so dictionaries and child columns are
-        // converted once per source column.
-        Expression assign;
-        if (member.MemberType != elementType
-            && codec.TryProjectColumnRead(member.MemberType, out ColumnReadProjection projection))
-        {
-            Type typedView = typeof(IColumn<>).MakeGenericType(member.MemberType);
-            ParameterExpression view = Expression.Variable(typedView, "view");
-            locals.Add(view);
-            body.Add(Expression.Assign(
-                view,
-                Expression.Convert(
-                    Expression.Call(Expression.Constant(new ProjectedViewCache(projection)), CacheFor, columnParameter),
-                    typedView)));
-
-            assign = Expression.Assign(
-                Expression.Property(Expression.ArrayIndex(rows, row), member.Property),
-                Expression.MakeIndex(view, typedView.GetProperty("Item", member.MemberType, new[] { typeof(int) }), new[] { columnRow }));
-        }
-        else
-        {
-            ParameterExpression value = Expression.Variable(elementType, "value");
-            if (!PocoValueProjection.TryResolve(codec, value, member.MemberType, site, out Expression projected))
-            {
-                throw NotReadableAs(column, codec, member, typeof(T));
-            }
-
-            Expression source = SourceOneValue(SelectTier(forcedTier, column), columnParameter, typedColumn, elementType, columnRow, locals, body);
-            assign = Expression.Block(
-                new[] { value },
-                Expression.Assign(value, source),
-                Expression.Assign(Expression.Property(Expression.ArrayIndex(rows, row), member.Property), projected));
+            throw PocoReadErrors.NotReadableAs(column, codec, member, typeof(T));
         }
 
-        // row = 0; while (row < rowCount) { <assign>; row++; }
-        LabelTarget done = Expression.Label("done");
-        body.Add(Expression.Assign(row, Expression.Constant(0)));
-        body.Add(Expression.Loop(
-            Expression.IfThenElse(
-                Expression.LessThan(row, rowCount),
-                Expression.Block(assign, Expression.PostIncrementAssign(row)),
-                Expression.Break(done)),
-            done));
+        return ForReader<T>((ColumnReader)derived.Converter, column, member, SelectTier(forcedTier));
+    }
 
-        return Expression.Lambda<PocoColumnScatter<T>>(Expression.Block(locals, body), columnParameter, rows, start, rowCount, rowOffset)
-            .Compile(preferInterpretation);
+    /// <summary>Makes the scatter that runs one converter tree into one property, in one tier.</summary>
+    /// <typeparam name="T">The POCO type.</typeparam>
+    /// <param name="reader">The tree, which reads values of the property's type.</param>
+    /// <param name="column">A column of the shape the plan was built for, for its name and type.</param>
+    /// <param name="member">The property the column maps to; must be settable.</param>
+    /// <param name="tier">The tier.</param>
+    /// <returns>The scatter.</returns>
+    [RequiresDynamicCode("Closes generic types at run time, and the Emit tier compiles an expression tree.")]
+    internal static PocoColumnScatter<T> ForReader<T>(ColumnReader reader, IColumn column, PocoMember member, PocoScatterTier tier)
+        where T : class
+    {
+        var site = new Site(column.Name, column.TypeName, typeof(T).Name, member.MemberName, member.MemberType.ToString());
+        return (PocoColumnScatter<T>)CreateTypedMethod
+            .MakeGenericMethod(typeof(T), member.MemberType)
+            .Invoke(null, BindingFlags.DoNotWrapExceptions, binder: null, new object[] { reader, member.Property, site, tier }, culture: null);
     }
 
     /// <summary>
-    /// Uses the forced tier, or selects spans only when dynamic code is compiled and values are already stored.
+    /// Uses the forced tier, or <see cref="PocoScatterTier.Emit"/> when the runtime compiles expression trees, else
+    /// <see cref="PocoScatterTier.Fill"/>.
     /// </summary>
     /// <param name="forcedTier">A tier to use in place of the choice, or null to choose.</param>
-    /// <param name="column">The column to be read, consulted for whether its values are stored or built.</param>
-    /// <returns>The tier to compile.</returns>
-    internal static PocoScatterTier SelectTier(PocoScatterTier? forcedTier, IColumn column)
-        => forcedTier ?? (RuntimeFeature.IsDynamicCodeCompiled && column is IStoredValuesColumn
-            ? PocoScatterTier.Span
-            : PocoScatterTier.Indexer);
+    /// <returns>The tier.</returns>
+    internal static PocoScatterTier SelectTier(PocoScatterTier? forcedTier)
+        => forcedTier ?? (RuntimeFeature.IsDynamicCodeCompiled ? PocoScatterTier.Emit : PocoScatterTier.Fill);
 
-    /// <summary>
-    /// Builds one indexed read and adds its hoisted locals and prologue to the enclosing expression block.
-    /// </summary>
-    /// <param name="tier">The tier to source through.</param>
-    /// <param name="column">The scatter's column parameter.</param>
-    /// <param name="typedColumn">The <see cref="IColumn{T}"/> type over the codec's element type.</param>
-    /// <param name="elementType">The codec's element type.</param>
-    /// <param name="columnRow">The row of the column to read: the loop counter rebased by the scatter's start.</param>
-    /// <param name="locals">The enclosing block's locals, added to by both tiers.</param>
-    /// <param name="prologue">The statements before the loop, added to by both tiers.</param>
-    /// <returns>An expression of type <paramref name="elementType"/>.</returns>
-    private static Expression SourceOneValue(
-        PocoScatterTier tier,
-        ParameterExpression column,
-        Type typedColumn,
-        Type elementType,
-        Expression columnRow,
-        List<ParameterExpression> locals,
-        List<Expression> prologue)
+    [RequiresDynamicCode("Compiles an expression tree.")]
+    private static PocoColumnScatter<T> CreateTyped<T, TProp>(ColumnReader<TProp> reader, PropertyInfo property, Site site, PocoScatterTier tier)
+        where T : class
+        => tier == PocoScatterTier.Fill
+            ? new FillScatter<T, TProp>(reader, (Action<T, TProp>)Delegate.CreateDelegate(typeof(Action<T, TProp>), property.SetMethod), site).Run
+            : new EmitScatter<T, TProp>(CompileLoop<T, TProp>(reader, property), site).Run;
+
+    // for (i = 0; i < count; i++) { row = start + i; rows[i].Property = <the tree at row>; }, after the setup of the
+    // tree, which runs once for each call.
+    [RequiresDynamicCode("Compiles an expression tree.")]
+    private static Action<IColumn, T[], int, int> CompileLoop<T, TProp>(ColumnReader<TProp> reader, PropertyInfo property)
     {
-        switch (tier)
-        {
-            case PocoScatterTier.Span:
-                // The span is read once: IColumn<T>.Values recomputes it per access, and it cannot be cached in a
-                // field, so hoisting it into a local is the whole point of the tier. For a jagged column
-                // (Array/Map/Nested) Values materializes the block's rows into a cache, which the indexer would do
-                // per row instead — the same work either way, plus one array of references here.
-                ParameterExpression values = Expression.Variable(typeof(ReadOnlySpan<>).MakeGenericType(elementType), "values");
-                locals.Add(values);
-                prologue.Add(Expression.Assign(values, Expression.Property(Expression.Convert(column, typedColumn), "Values")));
-                return Expression.Call(SpanAt.MakeGenericMethod(elementType), values, columnRow);
+        ParameterExpression column = Expression.Parameter(typeof(IColumn), "column");
+        ParameterExpression rows = Expression.Parameter(typeof(T[]), "rows");
+        ParameterExpression start = Expression.Parameter(typeof(int), "start");
+        ParameterExpression count = Expression.Parameter(typeof(int), "count");
+        ParameterExpression i = Expression.Variable(typeof(int), "i");
+        ParameterExpression row = Expression.Variable(typeof(int), "row");
 
-            default:
-                ParameterExpression typed = Expression.Variable(typedColumn, "typed");
-                locals.Add(typed);
-                prologue.Add(Expression.Assign(typed, Expression.Convert(column, typedColumn)));
-                return Expression.MakeIndex(typed, typedColumn.GetProperty("Item", elementType, new[] { typeof(int) }), new[] { columnRow });
-        }
+        var scope = new EmitScope();
+        Expression value = reader.Emit(column, row, scope);
+        LabelTarget done = Expression.Label("done");
+        var body = new List<Expression>(scope.Setup)
+        {
+            Expression.Assign(i, Expression.Constant(0)),
+            Expression.Loop(
+                Expression.IfThenElse(
+                    Expression.LessThan(i, count),
+                    Expression.Block(
+                        Expression.Assign(row, Expression.Add(start, i)),
+                        Expression.Assign(Expression.Property(Expression.ArrayIndex(rows, i), property), value),
+                        Expression.PostIncrementAssign(i)),
+                    Expression.Break(done)),
+                done),
+        };
+
+        var locals = new List<ParameterExpression>(scope.Locals) { i, row };
+        return Expression.Lambda<Action<IColumn, T[], int, int>>(Expression.Block(locals, body), column, rows, start, count).Compile();
     }
 
-    /// <summary>
-    /// Reports a column that does not implement <see cref="IColumn{T}"/> for its codec's element type.
-    /// </summary>
-    /// <param name="column">The column.</param>
-    /// <param name="codec">The column's codec.</param>
-    /// <returns>The exception to throw.</returns>
-    private static Exception NotSurfacingItsElementType(IColumn column, IColumnCodec codec)
-        => new InvalidOperationException(
-            $"Column '{column.Name}' ({column.TypeName}) was read as {column.GetType()}, which does not implement IColumn<{codec.ElementType}> " +
-            $"as its codec {codec.GetType()} declares. A POCO read sources every value through that interface, so the column cannot be read into a property.");
-
-    /// <summary>
-    /// Reports a property type the column cannot be read as.
-    /// </summary>
-    /// <param name="column">The column.</param>
-    /// <param name="codec">The column's codec, for the types it can be read as.</param>
-    /// <param name="member">The property that cannot be filled.</param>
-    /// <param name="pocoType">The POCO type.</param>
-    /// <returns>The exception to throw.</returns>
-    private static Exception NotReadableAs(IColumn column, IColumnCodec codec, PocoMember member, Type pocoType)
+    /// <summary>The names that a NULL failure of one scatter gives.</summary>
+    private sealed class Site
     {
-        IReadOnlyList<Type> readable = codec.ReadableElementTypes;
-        var offered = new string[readable.Count];
-        for (int i = 0; i < readable.Count; i++)
+        private readonly string columnName;
+        private readonly string columnType;
+        private readonly string pocoTypeName;
+        private readonly string memberName;
+        private readonly string memberType;
+
+        public Site(string columnName, string columnType, string pocoTypeName, string memberName, string memberType)
         {
-            offered[i] = readable[i].ToString();
+            this.columnName = columnName;
+            this.columnType = columnType;
+            this.pocoTypeName = pocoTypeName;
+            this.memberName = memberName;
+            this.memberType = memberType;
         }
 
-        // A bare NULL or empty-array literal comes back as Nothing (or a composite of it): the column carries no type
-        // of its own, so it reads only as object however nullable the property is. Changing the property cannot help,
-        // so that case gets its own remedy.
-        string remedy = NamesTheNothingType(TypeParser.Parse(column.TypeName))
-            ? "That column is an untyped NULL, so it carries no type to read as anything else: give it one in the query (for example CAST(NULL AS Nullable(String))), or exclude the property with [ClickHouseTcpNotMapped]."
-            : "Give the property one of those types, exclude it with [ClickHouseTcpNotMapped], or read the column through the block-level API.";
-
-        return new InvalidOperationException(
-            $"Column '{column.Name}' ({column.TypeName}) maps to property '{pocoType.Name}.{member.MemberName}' of type {member.MemberType}, which it cannot be read as. " +
-            $"It reads as {string.Join(" or ", offered)}. {remedy}");
+        // The reader names the row of the column. rows[0] holds column row start, and is row rowOffset of the result.
+        public Exception NullFailure(NullValueException failure, int start, long rowOffset)
+            => PocoReadErrors.NullNotAssignable(columnName, columnType, pocoTypeName, memberName, memberType, rowOffset + (failure.Row - start));
     }
 
-    /// <summary>
-    /// Whether a parsed type contains a real <c>Nothing</c> node, excluding labels or field names with that text.
-    /// </summary>
-    /// <param name="node">The parsed column type.</param>
-    /// <returns>Whether the type is, or contains, <c>Nothing</c>.</returns>
-    private static bool NamesTheNothingType(TypeNode node)
+    /// <summary>The scatter of <see cref="PocoScatterTier.Emit"/>: one compiled loop.</summary>
+    private sealed class EmitScatter<T, TProp>
     {
-        if (string.Equals(node.Name, NothingColumnCodec.Instance.TypeName, StringComparison.Ordinal))
+        private readonly Action<IColumn, T[], int, int> loop;
+        private readonly Site site;
+
+        public EmitScatter(Action<IColumn, T[], int, int> loop, Site site)
         {
-            return true;
+            this.loop = loop;
+            this.site = site;
         }
 
-        for (int i = 0; i < node.Arguments.Count; i++)
+        public void Run(IColumn column, T[] rows, int start, int rowCount, long rowOffset)
         {
-            if (NamesTheNothingType(node.Arguments[i]))
+            try
             {
-                return true;
+                loop(column, rows, start, rowCount);
+            }
+            catch (NullValueException failure)
+            {
+                throw site.NullFailure(failure, start, rowOffset);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The scatter of <see cref="PocoScatterTier.Fill"/>: a bulk read of the rows into a pooled buffer, then the setter
+    /// of the property for each row. It compiles no code. When the bulk read fails, it reads and sets the rows again one
+    /// at a time, as the compiled loop does, so the first failure in row order is the one that it throws, also when that
+    /// is the failure of a setter.
+    /// </summary>
+    private sealed class FillScatter<T, TProp>
+    {
+        private readonly ColumnReader<TProp> reader;
+        private readonly Action<T, TProp> set;
+        private readonly Site site;
+
+        public FillScatter(ColumnReader<TProp> reader, Action<T, TProp> set, Site site)
+        {
+            this.reader = reader;
+            this.set = set;
+            this.site = site;
+        }
+
+        public void Run(IColumn column, T[] rows, int start, int rowCount, long rowOffset)
+        {
+            // Bind reads no rows. A LowCardinality reader keeps the converted dictionary of each column, so the windows
+            // of one block convert it once.
+            BoundReader<TProp> bound = reader.Bind(column);
+            TProp[] values = ArrayPool<TProp>.Shared.Rent(rowCount);
+            try
+            {
+                try
+                {
+                    bound.Fill(start, values.AsSpan(0, rowCount));
+                }
+                catch (Exception failure)
+                {
+                    ReadAndSetInRowOrder(bound, rows, start, rowCount, rowOffset);
+                    if (failure is NullValueException nullValue)
+                    {
+                        throw site.NullFailure(nullValue, start, rowOffset);
+                    }
+
+                    throw;
+                }
+
+                Action<T, TProp> setter = set;
+                for (int i = 0; i < rowCount; i++)
+                {
+                    setter(rows[i], values[i]);
+                }
+            }
+            finally
+            {
+                ArrayPool<TProp>.Shared.Return(values, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<TProp>());
             }
         }
 
-        return false;
+        // After a bulk read fails: reads and sets one row at a time and throws the first failure, of a read or of a
+        // setter. The caller throws the failure of the bulk read when no row fails here.
+        private void ReadAndSetInRowOrder(BoundReader<TProp> bound, T[] rows, int start, int rowCount, long rowOffset)
+        {
+            var value = new TProp[1];
+            for (int i = 0; i < rowCount; i++)
+            {
+                try
+                {
+                    bound.Fill(start + i, value);
+                }
+                catch (NullValueException failure)
+                {
+                    throw site.NullFailure(failure, start, rowOffset);
+                }
+
+                set(rows[i], value[0]);
+            }
+        }
     }
 }
