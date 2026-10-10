@@ -11,8 +11,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
 /// Sample values for every leaf of the converter table: the column that a read decodes, and the values that a write
-/// encodes. Each set holds edge values (bounds, NaN payloads, signed zeros, invalid UTF-8) that the current path
-/// accepts, so the comparison with it covers them.
+/// encodes. Each set holds edge values (bounds, NaN payloads, signed zeros, invalid UTF-8) that a read or a write
+/// accepts, so the comparisons cover them.
 /// </summary>
 internal static class LeafSamples
 {
@@ -38,7 +38,7 @@ internal static class LeafSamples
 
     /// <summary>
     /// The decoded column that a read of <paramref name="type"/> as <paramref name="target"/> starts from. The
-    /// values are in range for the target, so the current read succeeds.
+    /// values are in range for the target, so the read succeeds.
     /// </summary>
     public static Task<IColumn> DecodedAsync(string type, Type target)
         => type == "Nothing" ? ConverterHarness.DecodeNothingAsync(4) : ConverterHarness.DecodeAsync(type, Source(type, target));

@@ -1,6 +1,5 @@
 using System;
 using System.Buffers;
-using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -34,9 +33,6 @@ internal sealed class NullableColumnCodec : IColumnCodec
     private readonly IColumnCodec inner;
     private readonly INullableShape canonicalShape;
 
-    // Built lazily because only diagnostics and POCO planning enumerate it. Races are harmless.
-    private Type[] writableElementTypes;
-
     private NullableColumnCodec(string typeName, IColumnCodec inner)
     {
         TypeName = typeName;
@@ -45,7 +41,6 @@ internal sealed class NullableColumnCodec : IColumnCodec
         // The canonical shape drives reads and the read-back element type: reads always surface the inner's
         // canonical ElementType made nullable.
         canonicalShape = NullableShapes.For(inner.ElementType);
-
     }
 
     /// <inheritdoc/>
@@ -53,11 +48,6 @@ internal sealed class NullableColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public Type ElementType => canonicalShape.NullableElementType;
-
-    /// <summary>
-    /// The inner codec's writable CLR types, each made nullable.
-    /// </summary>
-    public IReadOnlyList<Type> WritableElementTypes => EnsureWritableElementTypes();
 
     /// <summary>
     /// The placeholder for an absent value.
@@ -146,27 +136,6 @@ internal sealed class NullableColumnCodec : IColumnCodec
             innerColumn?.Dispose();
             throw;
         }
-    }
-
-    /// <summary>Builds the nullable write-type list on first use.</summary>
-    /// <returns>The write types, each the inner's spelling made nullable.</returns>
-    private Type[] EnsureWritableElementTypes()
-    {
-        Type[] surface = writableElementTypes;
-        if (surface is not null)
-        {
-            return surface;
-        }
-
-        IReadOnlyList<Type> innerTypes = inner.WritableElementTypes;
-        surface = new Type[innerTypes.Count];
-        for (int i = 0; i < innerTypes.Count; i++)
-        {
-            surface[i] = NullableShapes.For(innerTypes[i]).NullableElementType;
-        }
-
-        writableElementTypes = surface;
-        return surface;
     }
 
     /// <inheritdoc/>

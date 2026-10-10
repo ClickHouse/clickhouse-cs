@@ -177,8 +177,8 @@ public class PocoWritePlanTests
 
     /// <summary>
     /// A <c>T?</c> property into a column that cannot hold null is gathered as <c>T</c>, and the gather refuses a null.
-    /// The insert then writes a column of <c>T</c>, with no second pass over the values, and gives the bytes of the old
-    /// plan.
+    /// The insert then writes a column of <c>T</c>, with no second pass over the values, and gives the bytes of the
+    /// columnar insert of the nullable values.
     /// </summary>
     [Test]
     public void Gather_NullableIntIntoANonNullableColumn_GathersTheValueType()
