@@ -34,6 +34,15 @@ public enum ConverterRowWriteShape
     /// <c>LowCardinality(Nullable(String))</c> from <c>string</c> (30 distinct values, every tenth row NULL).
     /// </summary>
     Wide,
+
+    /// <summary><c>Int32</c> from an <c>int?</c> property with no null (the untyped rows hold a boxed <c>int</c>).</summary>
+    NullableIntPropertyIntoInt32,
+
+    /// <summary>
+    /// <c>DateTime('UTC')</c> from a <c>DateTime?</c> property with no null (the untyped rows hold a boxed
+    /// <c>DateTime</c>).
+    /// </summary>
+    NullableDateTimePropertyIntoDateTime,
 }
 
 /// <summary>
@@ -45,7 +54,8 @@ public enum ConverterRowWriteShape
 /// <remarks>
 /// <para>
 /// The benchmark measures whichever implementation is behind those entry points, so a run on two commits compares
-/// the two implementations. The shapes are the write shapes of the converter spike, as rows.
+/// the two implementations. The shapes are the write shapes of the converter spike, as rows, and two shapes of a
+/// nullable property into a column that cannot hold null.
 /// </para>
 /// <para>
 /// One operation does what an insert of one block of rows does: it opens the column source of the insert over the
@@ -116,6 +126,8 @@ public class TcpConverterRowWrite
             ConverterRowWriteShape.LowCardinalityStringLowRepeat => PocoInserter(i => new CategoryRow { Category = Category(i, distinct: AllRows) }),
             ConverterRowWriteShape.NullableDateTimeFromOffset => PocoInserter(i => new SeenAtRow { SeenAt = SeenAt(i) }),
             ConverterRowWriteShape.ArrayStringFromText => PocoInserter(i => new ItemsRow { Items = Items(i) }),
+            ConverterRowWriteShape.NullableIntPropertyIntoInt32 => PocoInserter(i => new CountRow { Count = Count(i) }),
+            ConverterRowWriteShape.NullableDateTimePropertyIntoDateTime => PocoInserter(i => new UpdatedAtRow { UpdatedAt = UpdatedAt(i) }),
             _ => PocoInserter(i => new WideRow
             {
                 Items = Items(i),
@@ -171,6 +183,8 @@ public class TcpConverterRowWrite
         ConverterRowWriteShape.LowCardinalityStringHighRepeat or ConverterRowWriteShape.LowCardinalityStringLowRepeat => new[] { ("category", "LowCardinality(String)") },
         ConverterRowWriteShape.NullableDateTimeFromOffset => new[] { ("seen_at", "Nullable(DateTime('UTC'))") },
         ConverterRowWriteShape.ArrayStringFromText => new[] { ("items", "Array(String)") },
+        ConverterRowWriteShape.NullableIntPropertyIntoInt32 => new[] { ("count", "Int32") },
+        ConverterRowWriteShape.NullableDateTimePropertyIntoDateTime => new[] { ("updated_at", "DateTime('UTC')") },
         _ => new[]
         {
             ("items", "Array(String)"),
@@ -194,6 +208,10 @@ public class TcpConverterRowWrite
 
     private static string Tag(int i) => i % 10 == 0 ? null : $"tag-{i % 30}";
 
+    private static int? Count(int i) => i % 1_000;
+
+    private static DateTime? UpdatedAt(int i) => DateTime.UnixEpoch.AddSeconds(1_650_000_000 + i);
+
     // A boxed DateTimeOffset? is a boxed DateTimeOffset or null, as in a row that a caller builds.
     private object[] UntypedRow(ConverterRowWriteShape shape, int i) => shape switch
     {
@@ -201,6 +219,8 @@ public class TcpConverterRowWrite
         ConverterRowWriteShape.LowCardinalityStringLowRepeat => new object[] { Category(i, distinct: AllRows) },
         ConverterRowWriteShape.NullableDateTimeFromOffset => new object[] { SeenAt(i) },
         ConverterRowWriteShape.ArrayStringFromText => new object[] { Items(i) },
+        ConverterRowWriteShape.NullableIntPropertyIntoInt32 => new object[] { Count(i) },
+        ConverterRowWriteShape.NullableDateTimePropertyIntoDateTime => new object[] { UpdatedAt(i) },
         _ => new object[] { Items(i), Category(i, distinct: 100), SeenAt(i), Text(i), CreatedAt(i), Tag(i) },
     };
 
@@ -265,6 +285,18 @@ public class TcpConverterRowWrite
     public sealed class ItemsRow
     {
         public string[] Items { get; set; }
+    }
+
+    /// <summary>A row of <see cref="ConverterRowWriteShape.NullableIntPropertyIntoInt32"/>.</summary>
+    public sealed class CountRow
+    {
+        public int? Count { get; set; }
+    }
+
+    /// <summary>A row of <see cref="ConverterRowWriteShape.NullableDateTimePropertyIntoDateTime"/>.</summary>
+    public sealed class UpdatedAtRow
+    {
+        public DateTime? UpdatedAt { get; set; }
     }
 
     /// <summary>A row of <see cref="ConverterRowWriteShape.Wide"/>.</summary>
