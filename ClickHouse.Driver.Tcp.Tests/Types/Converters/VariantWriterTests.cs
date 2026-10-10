@@ -9,8 +9,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
 /// The placement of a value in a <c>Variant</c> (<see cref="VariantWriter"/>): by the canonical CLR type of an
-/// alternative first, as the current codec places it, then by the derivation of each alternative for the value's CLR
-/// type. A tie goes to the alternative that claims the value.
+/// alternative first, then by the derivation of each alternative for the value's CLR type. A tie goes to the alternative
+/// that claims the value.
 /// </summary>
 [TestFixture]
 public class VariantWriterTests
@@ -19,32 +19,45 @@ public class VariantWriterTests
 
     /// <summary>
     /// A value whose CLR type is the canonical type of an alternative goes there, also when another alternative is
-    /// written from that type too: the bytes are those of the current codec.
+    /// written from that type too. The bytes: mode 0, the discriminators of the rows (the value, NULL, the value), then the
+    /// values of the alternative.
     /// </summary>
-    [TestCase("Variant(String, FixedString(3))", "abc")]
-    [TestCase("Variant(Enum8('a' = 1), String)", "a")]
-    [TestCase("Variant(DateTime('UTC'), UInt32)", 5u)]
-    [TestCase("Variant(Decimal(9, 2), String)", "1.5")]
-    public async Task Write_ValueOfTheCanonicalTypeOfAnAlternative_GoesWhereTheCurrentCodecPutsIt(string type, object value)
+    [TestCase("Variant(String, FixedString(3))", "abc", "0000000000000000" + "00FF00" + "03616263" + "03616263")]
+    [TestCase("Variant(Enum8('a' = 1), String)", "a", "0000000000000000" + "01FF01" + "0161" + "0161")]
+    [TestCase("Variant(Decimal(9, 2), String)", "1.5", "0000000000000000" + "01FF01" + "03312E35" + "03312E35")]
+    public async Task Write_ValueOfTheCanonicalTypeOfAnAlternative_GoesToThatAlternative(string type, object value, string expected)
     {
         object[] values = { value, null, value };
         ColumnWriter<object> writer = Derivation.Writer<object>(type, ConverterHarness.Context);
-        Exception current = await ConverterHarness.CatchAsync(() => ConverterHarness.WriteOldAsync(type, values, 0, values.Length));
-        if (current is not null)
-        {
-            // The current codec refuses a canonical collision that no value claims; the writer refuses it the same way.
-            Exception actual = await ConverterHarness.CatchAsync(() => ConverterHarness.WriteNewAsync(writer, values, 0, values.Length));
-            ConverterHarness.AssertSameFailure(current, actual, type);
-            return;
-        }
 
-        byte[] expected = await ConverterHarness.WriteOldAsync(type, values, 0, values.Length);
-        Assert.That(Convert.ToHexString(await ConverterHarness.WriteNewAsync(writer, values, 0, values.Length)), Is.EqualTo(Convert.ToHexString(expected)));
+        Assert.That(Convert.ToHexString(await ConverterHarness.WriteNewAsync(writer, values, 0, values.Length)), Is.EqualTo(expected));
+    }
+
+    /// <summary>
+    /// A value whose CLR type is the canonical type of two alternatives, and that neither claims, is refused:
+    /// <c>DateTime</c> stores <see cref="uint"/> seconds.
+    /// </summary>
+    [Test]
+    public async Task Write_ValueOfTheCanonicalTypeOfTwoAlternatives_IsRefused()
+    {
+        const string type = "Variant(DateTime('UTC'), UInt32)";
+        object[] values = { 5u, null, 5u };
+        ColumnWriter<object> writer = Derivation.Writer<object>(type, ConverterHarness.Context);
+
+        Exception failure = await ConverterHarness.CatchAsync(() => ConverterHarness.WriteNewAsync(writer, values, 0, values.Length));
+
+        ConverterHarness.AssertFailure(
+            failure,
+            "ArgumentException",
+            null,
+            "Variant 'Variant(DateTime('UTC'), UInt32)' cannot place a value of CLR type 'System.UInt32': the alternatives 'DateTime('UTC')', 'UInt32' all " +
+                "surface that type, and the value does not say which of them is meant.",
+            type);
     }
 
     /// <summary>
     /// A value whose CLR type is the canonical type of no alternative goes to the alternative that is written from its
-    /// type: the bytes are those of the same values given in the canonical type of that alternative.
+    /// type: the bytes of the canonical values 1718452800, "ab", NULL, 7 and "x".
     /// </summary>
     [Test]
     public async Task Write_ValueThatOneAlternativeIsWrittenFrom_GoesToThatAlternative()
@@ -52,12 +65,11 @@ public class VariantWriterTests
         const string type = "Variant(DateTime('UTC'), String, UInt64)";
         ColumnWriter<object> writer = Derivation.Writer<object>(type, ConverterHarness.Context);
         object[] derived = { new DateTimeOffset(2024, 6, 15, 12, 0, 0, TimeSpan.Zero), new byte[] { 0x61, 0x62 }, null, 7UL, "x" };
-        object[] canonical = { 1718452800u, "ab", null, 7UL, "x" };
 
-        byte[] expected = await ConverterHarness.WriteOldAsync(type, canonical, 0, canonical.Length);
         byte[] actual = await ConverterHarness.WriteNewAsync(writer, derived, 0, derived.Length);
 
-        Assert.That(Convert.ToHexString(actual), Is.EqualTo(Convert.ToHexString(expected)));
+        // Mode 0; the discriminators; the DateTime 1718452800; the strings "ab" and "x"; the UInt64 7.
+        Assert.That(Convert.ToHexString(actual), Is.EqualTo("0000000000000000" + "0001FF0201" + "40826D66" + "026162" + "0178" + "0700000000000000"));
     }
 
     /// <summary>
@@ -124,15 +136,15 @@ public class VariantWriterTests
         ColumnWriter<object> writer = Derivation.Writer<object>(type, ConverterHarness.Context);
         object[] values = { IPAddress.Parse("::1"), IPAddress.Parse("1.2.3.4"), (byte)7 };
 
-        byte[] expected = await ConverterHarness.WriteOldAsync(type, values, 0, values.Length);
         byte[] actual = await ConverterHarness.WriteNewAsync(writer, values, 0, values.Length);
 
-        Assert.That(Convert.ToHexString(actual), Is.EqualTo(Convert.ToHexString(expected)));
+        // Mode 0; the discriminators IPv6, IPv4, UInt8; the IPv4 1.2.3.4; the IPv6 ::1; the UInt8 7.
+        Assert.That(Convert.ToHexString(actual), Is.EqualTo("0000000000000000" + "010002" + "04030201" + "00000000000000000000000000000001" + "07"));
     }
 
     /// <summary>
-    /// An alternative that no value selects still writes its prefix: a LowCardinality alternative writes its version, as
-    /// the current codec does.
+    /// An alternative that no value selects still writes its prefix: a LowCardinality alternative writes its version, and
+    /// no body.
     /// </summary>
     [Test]
     public async Task Write_AlternativeThatNoValueSelects_WritesItsPrefix()
@@ -141,22 +153,18 @@ public class VariantWriterTests
         ColumnWriter<object> writer = Derivation.Writer<object>(type, ConverterHarness.Context);
         object[] values = { 1UL, null, 2UL };
 
-        byte[] expected = await ConverterHarness.WriteOldAsync(type, values, 0, values.Length);
         byte[] actual = await ConverterHarness.WriteNewAsync(writer, values, 0, values.Length);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(Convert.ToHexString(actual), Is.EqualTo(Convert.ToHexString(expected)));
-            Assert.That(Convert.ToHexString(actual), Does.StartWith("0000000000000000" + "0100000000000000"), "mode 0, then the LowCardinality version 1");
-        });
+        // Mode 0; the LowCardinality version 1; the discriminators; the UInt64 values 1 and 2.
+        Assert.That(Convert.ToHexString(actual), Is.EqualTo("0000000000000000" + "0100000000000000" + "01FF01" + "0100000000000000" + "0200000000000000"));
     }
 
     /// <summary>
-    /// A Variant of many alternatives writes the bytes of the current codec, for all rows and for a slice from row 3: the
-    /// values of each alternative stay in row order when the writer groups them.
+    /// A Variant of many alternatives gives bytes that the codec reads back as the values, for all rows and for a slice
+    /// from row 3: the values of each alternative stay in row order when the writer groups them.
     /// </summary>
     [Test]
-    public async Task Write_WideVariant_GivesTheBytesOfTheCurrentWrite()
+    public async Task Write_WideVariant_GivesBytesThatReadBackAsTheValues()
     {
         string type = WideVariant(64);
         object[] values = WideValues(97);
@@ -164,9 +172,10 @@ public class VariantWriterTests
 
         foreach (int start in new[] { 0, 3 })
         {
-            byte[] expected = await ConverterHarness.WriteOldAsync(type, values, start, values.Length - start);
-            byte[] actual = await ConverterHarness.WriteNewAsync(writer, values, start, values.Length - start);
-            Assert.That(Convert.ToHexString(actual), Is.EqualTo(Convert.ToHexString(expected)), $"rows [{start}, {values.Length})");
+            int length = values.Length - start;
+            byte[] actual = await ConverterHarness.WriteNewAsync(writer, values, start, length);
+            using IColumn read = await ConverterHarness.ReadBackAsync(type, actual, length);
+            Assert.That(ConverterHarness.ReadAs<object>(read, 0, length), Is.EqualTo(values[start..]), $"rows [{start}, {values.Length})");
         }
     }
 
