@@ -41,7 +41,7 @@ public class SuggestedTypesTests
                         : pairs.Select(type => lifted && type.IsValueType ? typeof(Nullable<>).MakeGenericType(type) : type).ToArray();
                     if (!suggested.SequenceEqual(expected))
                     {
-                        problems.Add($"{form} {direction}: suggests [{string.Join(", ", suggested)}], not [{string.Join(", ", expected)}].");
+                        problems.Add($"{form} {direction}: suggests [{string.Join<Type>(", ", suggested)}], not [{string.Join<Type>(", ", expected)}].");
                     }
                 }
             }
