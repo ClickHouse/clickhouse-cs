@@ -20,6 +20,26 @@ internal sealed partial class ConverterDerivation
         typeof(TupleWriter<,,,,,,>),
     };
 
+    /// <summary>
+    /// Whether a column of the type holds NULL: <c>Nullable(X)</c>, <c>LowCardinality(Nullable(X))</c>, <c>Variant</c>,
+    /// <c>Dynamic</c> and <c>Geometry</c>, also as the value type of a <c>SimpleAggregateFunction</c>.
+    /// </summary>
+    /// <param name="type">The ClickHouse type string. It must be well formed.</param>
+    /// <returns>Whether the type holds NULL.</returns>
+    public bool HoldsNull(string type) => HoldsNull(TypeParser.Parse(type));
+
+    private bool HoldsNull(TypeNode node)
+    {
+        string name = registry.TryCanonicalName(node.Name, out string canonical) ? canonical : node.Name;
+        return name switch
+        {
+            "Nullable" or "Variant" or "Dynamic" or "Geometry" => true,
+            "LowCardinality" => node.Arguments.Count == 1 && HoldsNull(node.Arguments[0]),
+            "SimpleAggregateFunction" => node.Arguments.Count == 2 && HoldsNull(node.Arguments[1]),
+            _ => false,
+        };
+    }
+
     // A composite node, or a node that is written only from its canonical type.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     private Derivation DeriveCompositeWrite(string name, TypeNode node, TypeNode root, in ResolveContext context, Type clrType)
