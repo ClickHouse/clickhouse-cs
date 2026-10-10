@@ -99,8 +99,6 @@ public class LeafConverterRegistrationTests
         Both("Enum", typeof(sbyte));
         Both("Enum", typeof(short));
         Both("Enum", typeof(string));
-        Both("Decimal32", typeof(decimal));
-        Both("Decimal128", typeof(ClickHouseTcpDecimal));
         Both("Decimal256", typeof(ClickHouseTcpDecimal));
         return pairs.ToHashSet();
     }

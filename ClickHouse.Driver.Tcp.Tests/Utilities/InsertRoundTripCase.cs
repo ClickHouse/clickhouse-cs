@@ -170,6 +170,15 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<uint>(name, "DateTime", Array.ConvertAll(dateTimeOffsets, o => (uint)o.ToUnixTimeSeconds())),
             settings: null);
 
+        // A Kind=Local DateTime names an instant through the timezone of the host, and the column timezone takes no
+        // part. The expected seconds use the same host conversion, so the case holds on every host. Pacific/Kiritimati
+        // is UTC+14 all year, so a write that read the value as a wall clock in the column timezone gives another instant
+        // on every host but one in that zone. January and July give two offsets on a host with daylight saving time.
+        yield return DateTimes(
+            "DateTime('Pacific/Kiritimati')",
+            new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Local),
+            new DateTime(2024, 7, 15, 14, 30, 0, DateTimeKind.Local));
+
         // DateTime64 surfaces as the raw Int64 count at the column's scale, so it retains the exact wire value at
         // any scale. Scale 9 (nanoseconds) is finer than a .NET tick, proving precision no DateTimeOffset can hold.
         yield return DateTime64s("DateTime64(3)", 0L, 1_700_000_000_123L, -6_000_000_000_000L);
@@ -203,6 +212,36 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<long>(name, "DateTime64(9)", new[] { 9_223_372_036_854_775_800L }),
             settings: null);
 
+        // DateTime64 from a DateTimeOffset at the scales that the cases above do not have. Scale 6 is coarser than a
+        // .NET tick, scale 7 is equal to it, and scale 8 is finer. The read-back is the raw count at the scale.
+        var wholeSeconds = new[] { DateTimeOffset.UnixEpoch, DateTimeOffset.FromUnixTimeSeconds(1_700_000_000), DateTimeOffset.FromUnixTimeSeconds(-1_000_000) };
+        var microseconds = new[] { DateTimeOffset.UnixEpoch, DateTimeOffset.FromUnixTimeSeconds(-1_000_000), DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_123).AddTicks(4_560) };
+        foreach ((string type, DateTimeOffset[] instants, long[] counts) in new[]
+        {
+            ("DateTime64(0)", wholeSeconds, new[] { 0L, 1_700_000_000L, -1_000_000L }),
+            ("DateTime64(6)", microseconds, new[] { 0L, -1_000_000_000_000L, 1_700_000_000_123_456L }),
+            ("DateTime64(7)", microseconds, new[] { 0L, -10_000_000_000_000L, 17_000_000_001_234_560L }),
+            ("DateTime64(8)", microseconds, new[] { 0L, -100_000_000_000_000L, 170_000_000_012_345_600L }),
+        })
+        {
+            yield return new InsertRoundTripCase(
+                $"{type} <- DateTimeOffset",
+                type,
+                name => new ArrayColumn<DateTimeOffset>(name, type, instants),
+                name => new ArrayColumn<long>(name, type, counts),
+                settings: null);
+        }
+
+        // A Kind=Unspecified wall clock in an hour that occurs twice is the earlier instant: 2024-11-03 01:30 in New
+        // York is 01:30 EDT, which is 05:30 UTC.
+        var repeatedWallClock = new[] { new DateTime(2024, 11, 3, 1, 30, 0, DateTimeKind.Unspecified) };
+        yield return new InsertRoundTripCase(
+            "DateTime64(3, 'America/New_York') <- DateTime [hour that occurs twice]",
+            "DateTime64(3, 'America/New_York')",
+            name => new ArrayColumn<DateTime>(name, "DateTime64(3, 'America/New_York')", repeatedWallClock),
+            name => new ArrayColumn<long>(name, "DateTime64(3, 'America/New_York')", new[] { new DateTimeOffset(2024, 11, 3, 5, 30, 0, TimeSpan.Zero).ToUnixTimeMilliseconds() }),
+            settings: null);
+
         yield return Uuids("UUID", Guid.Empty, new Guid("00112233-4455-6677-8899-aabbccddeeff"), new Guid("ffffffff-ffff-ffff-ffff-ffffffffffff"));
 
         yield return IpAddresses("IPv4", "0.0.0.0", "127.0.0.1", "192.168.1.1", "255.255.255.255");
@@ -232,12 +271,30 @@ public sealed class InsertRoundTripCase
         // round-trips the alias type name as declared.
         yield return Decimals("Decimal64(4)", 0m, 12345.6789m, -12345.6789m);
 
+        // The values at the declared precision, positive and negative: a precision below the largest of the width
+        // (Decimal(1, 0) in 32 bits, Decimal(19, 2) in 128 bits), and the alias spellings at the largest. The last
+        // Decimal(19, 2) value has scale 3; the column holds it as the mantissa 10^19 - 1.
+        yield return Decimals("Decimal(1, 0)", 9m, -9m, 0m);
+        yield return Decimals("Decimal32(0)", 999_999_999m, -999_999_999m);
+        yield return Decimals("Decimal64(0)", 999_999_999_999_999_999m, -999_999_999_999_999_999m);
+        yield return WideDecimals("Decimal(19, 2)", "99999999999999999.99", "-99999999999999999.99", "99999999999999999.990");
+        yield return WideDecimals("Decimal128(0)", "99999999999999999999999999999999999999", "-99999999999999999999999999999999999999");
+
         // Interval<Unit> surfaces its underlying Int64 count; the unit is kept in the type name.
         yield return Primitive("IntervalSecond", new[] { 0L, 1L, -5L, long.MaxValue });
         yield return Primitive("IntervalDay", new[] { 0L, 7L, -30L });
 
         // Newer/experimental server types: enable their flag on the round-trip
         yield return BFloat16s("BFloat16", BFloat16Settings, 0f, -0f, 1f, -2f, 0.5f, 100f, float.NaN, float.PositiveInfinity, float.NegativeInfinity);
+
+        // A float that BFloat16 cannot hold keeps its 16 high bits: 1.1f is 0x3F8CCCCD, so 0x3F8C0000 (1.09375f) reads
+        // back. Rounding to the nearest value gives 0x3F8D0000.
+        yield return new InsertRoundTripCase(
+            "BFloat16 <- float [narrowing]",
+            "BFloat16",
+            name => new ArrayColumn<float>(name, "BFloat16", new[] { 1.1f, -1.1f }),
+            name => new ArrayColumn<float>(name, "BFloat16", new[] { BitConverter.UInt32BitsToSingle(0x3F8C_0000), BitConverter.UInt32BitsToSingle(0xBF8C_0000) }),
+            BFloat16Settings);
         // Time surfaces as the raw Int32 seconds; Time64 as the raw Int64 count at the column's scale. The
         // inserted values are the exact wire values, returned verbatim.
         yield return TimeSeconds("Time", TimeSettings, 0, (12 * 3600) + (34 * 60) + 56, -((1 * 3600) + (2 * 60) + 3));
