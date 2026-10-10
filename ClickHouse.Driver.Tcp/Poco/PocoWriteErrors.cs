@@ -51,11 +51,24 @@ internal static class PocoWriteErrors
     /// <summary>Reports untyped values of a CLR type that the target column cannot be written from.</summary>
     /// <param name="index">The column's position in every row.</param>
     /// <param name="target">The target column.</param>
-    /// <param name="accepted">The CLR types to suggest (<see cref="ConverterDerivation.SuggestedTypes"/>).</param>
+    /// <param name="accepted">The CLR types to suggest (<see cref="ConverterDerivation.SuggestedTypes"/>). A boxed value is
+    /// never a nullable value type, so the message names the value type of each.</param>
     /// <param name="present">The CLR type of the first value that is not null.</param>
     /// <returns>The exception to throw.</returns>
     public static Exception ValuesNotWritable(int index, IColumn target, IReadOnlyList<Type> accepted, Type present)
-        => new InvalidOperationException(
+    {
+        var boxed = new List<Type>(accepted.Count);
+        foreach (Type type in accepted)
+        {
+            Type value = Nullable.GetUnderlyingType(type) ?? type;
+            if (!boxed.Contains(value))
+            {
+                boxed.Add(value);
+            }
+        }
+
+        return new InvalidOperationException(
             $"Column {index} ('{target.Name}', {target.TypeName}) was given values of type {present}, which it cannot be written from. " +
-            $"It accepts {string.Join(" or ", accepted)}, and an Array, Map or Tuple type also accepts values of the types that its element types accept.");
+            $"It accepts {string.Join(" or ", boxed)}, and an Array, Map or Tuple type also accepts values of the types that its element types accept.");
+    }
 }
