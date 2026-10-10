@@ -210,6 +210,41 @@ internal static class ConverterHarness
         });
     }
 
+    /// <summary>
+    /// Asserts that a failure is the pinned one: the name of the exception type, the parameter name of an
+    /// <see cref="ArgumentException"/> (null for another exception), and the message.
+    /// </summary>
+    public static void AssertFailure(Exception actual, string exception, string parameter, string message, string path)
+    {
+        Assert.That(actual, Is.Not.Null, $"{path}: the write did not fail.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(actual.GetType().Name, Is.EqualTo(exception), $"{path}: exception type");
+            Assert.That((actual as ArgumentException)?.ParamName, Is.EqualTo(parameter), $"{path}: parameter name");
+            Assert.That(actual.Message, Is.EqualTo(message), $"{path}: message");
+        });
+    }
+
+    /// <summary>
+    /// The cases of <paramref name="cases"/> with the pinned error of each one appended to its arguments. A case is named by
+    /// its first argument and its position in the list.
+    /// </summary>
+    public static IEnumerable<TestCaseData> WithErrors(IEnumerable<TestCaseData> cases, (string Exception, string Parameter, string Message)[] errors)
+    {
+        TestCaseData[] list = cases.ToArray();
+        if (list.Length != errors.Length)
+        {
+            throw new InvalidOperationException($"{list.Length} cases have {errors.Length} pinned errors; pin one error for each case.");
+        }
+
+        for (int i = 0; i < list.Length; i++)
+        {
+            (string exception, string parameter, string message) = errors[i];
+            yield return new TestCaseData(list[i].Arguments.Concat(new object[] { exception, parameter, message }).ToArray())
+                .SetArgDisplayNames(list[i].Arguments[0]?.ToString(), $"case {i}");
+        }
+    }
+
     /// <summary>Calls a generic method of <paramref name="owner"/> closed over <paramref name="typeArguments"/>.</summary>
     public static object InvokeGeneric(Type owner, string method, Type[] typeArguments, params object[] arguments)
     {
