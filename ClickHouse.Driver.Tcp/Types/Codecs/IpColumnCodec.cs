@@ -66,6 +66,10 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<IPAddress>;
 
     /// <inheritdoc/>
+    // The column that a query of the type reads.
+    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<IPAddress>;
+
+    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         var values = (IColumn<IPAddress>)column;
@@ -132,6 +136,10 @@ internal sealed class IPv6ColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => column is IColumn<IPAddress>;
+
+    /// <inheritdoc/>
+    // The column that a query of the type reads.
+    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<IPAddress>;
 
     /// <inheritdoc/>
     // IPAddress.Equals also compares the ScopeId, which is not encoded, and holds an IPv4 address distinct from

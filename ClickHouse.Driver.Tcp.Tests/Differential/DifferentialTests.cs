@@ -186,6 +186,22 @@ public class DifferentialTests
         Assert.That(differences, Is.Empty);
     }
 
+    // A decoded column is a column that its codec writes from its storage (decision D3): the insert gives it to the codec,
+    // with no converter tree. Its element type is the canonical CLR type of the codec.
+    [Test]
+    public void Run_EveryCase_TheCodecWritesTheDecodedColumnFromItsStorage()
+    {
+        string[] failures = DifferentialCases.All()
+            .Select(DifferentialEngine.ForCurrentRegistry)
+            .Select(report => (report.Case, Source: Baseline(report, Tier.Write, report.Case.WriteInputs[0].Label).All))
+            .Where(x => x.Source?.Kind == OutcomeKind.Bytes)
+            .Select(x => StorageFailure(x.Case, x.Source.Bytes))
+            .Where(failure => failure is not null)
+            .ToArray();
+
+        Assert.That(failures, Is.Empty);
+    }
+
     [Test]
     public void Run_EveryCase_EveryWriteOfTheDecodedColumnGivesTheValuesOfTheSourceRows()
     {
@@ -240,12 +256,33 @@ public class DifferentialTests
     // The values of the rows that the bytes of a column write hold (the state prefix and the body).
     private static object[] DecodeValues(string columnType, byte[] bytes, int rows)
     {
+        using IColumn column = Decode(columnType, bytes, rows);
+        return Enumerable.Range(0, rows).Select(column.GetValue).ToArray();
+    }
+
+    // Why the codec of the case does not write the column that it decodes from the bytes from its storage, or null.
+    private static string StorageFailure(DifferentialCase testCase, byte[] bytes)
+    {
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(testCase.ColumnType, DifferentialEngine.Context);
+        using IColumn column = Decode(testCase.ColumnType, bytes, testCase.RowCount);
+        if (!codec.WritesFromStorage(column))
+        {
+            return $"{testCase.Id}: the codec does not write the decoded {column.GetType().Name} from its storage.";
+        }
+
+        return column.ElementType == codec.ElementType
+            ? null
+            : $"{testCase.Id}: the decoded column has the element type {column.ElementType}, and the codec {codec.ElementType}.";
+    }
+
+    // The column that a query reads from the bytes of a column write (the state prefix and the body).
+    private static IColumn Decode(string columnType, byte[] bytes, int rows)
+    {
         IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(columnType, DifferentialEngine.Context);
         using var stream = new MemoryStream(bytes);
         using var reader = new ClickHouseBinaryReader(stream);
         codec.ReadStatePrefixAsync(reader, CancellationToken.None).AsTask().GetAwaiter().GetResult();
-        using IColumn column = codec.ReadColumnAsync(reader, "value", columnType, rows, CancellationToken.None).AsTask().GetAwaiter().GetResult();
-        return Enumerable.Range(0, rows).Select(column.GetValue).ToArray();
+        return codec.ReadColumnAsync(reader, "value", columnType, rows, CancellationToken.None).AsTask().GetAwaiter().GetResult();
     }
 
     [Test]

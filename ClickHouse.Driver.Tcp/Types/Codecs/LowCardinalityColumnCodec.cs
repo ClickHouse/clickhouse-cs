@@ -371,7 +371,9 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => WriteShapeFor(column) is not null;
 
     /// <inheritdoc/>
-    public bool WritesFromStorage(IColumn column) => WriteShapeFor(column) is { } writeShape && writeShape.WritesFromStorage(column);
+    // A decoded LowCardinality column whose dictionary the inner codec writes from its storage.
+    public bool WritesFromStorage(IColumn column)
+        => WriteShapeFor(column) is { } writeShape && writeShape.WritesFromStorage(column) && inner.WritesFromStorage(((ILowCardinalityColumn)column).Dictionary);
 
     /// <summary>Maps a LowCardinality CLR type to the type expected by its inner codec.</summary>
     private bool TryInnerWriteType(Type elementType, out Type innerType)
