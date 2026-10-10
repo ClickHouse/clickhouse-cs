@@ -22,7 +22,9 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 /// storage.
 /// </para>
 /// <para>
-/// A refusal of the derivation is an <see cref="ArmRefusal"/>, as in <see cref="LeafConverterRegistration"/>.
+/// A refusal of the derivation is an <see cref="ArmRefusal"/>, as in <see cref="LeafConverterRegistration"/>. The
+/// client's insert write (<see cref="ClientArms.Write"/>) and <c>ClickHouseTcpTypes.CanWrite</c> run every facet of their
+/// tiers, against the old dispatch of the tier (<see cref="LegacyColumnarWrite"/>).
 /// </para>
 /// </remarks>
 internal sealed class WriteConverterRegistration : IDifferentialRegistration
@@ -54,6 +56,8 @@ internal sealed class WriteConverterRegistration : IDifferentialRegistration
     {
         registry.Add(new CompositeWriteArm(), CompositeWriteFacets);
         registry.Add(new CanWriteArm(), CompositeCanWriteFacets);
+        registry.AddForEveryFacet(ClientArms.Write);
+        registry.AddForEveryFacet(ClientArms.CanWrite);
 
         foreach ((string caseId, string input, string reason) in D7Changes)
         {
