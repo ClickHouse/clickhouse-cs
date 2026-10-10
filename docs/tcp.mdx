@@ -590,7 +590,9 @@ insert completes before that block is released.
   are converted, and the other parts keep the bytes that the server sent. A `String` column that a
   query read, written into a `LowCardinality`, `Nullable` or `FixedString` column (also inside an
   `Array`, `Map` or `Tuple`), is written from its bytes, so a value that is not valid UTF-8 keeps
-  them; a `FixedString(N)` column takes only values of exactly N bytes.
+  them; a `FixedString(N)` column takes only values of exactly N bytes. A value that a NULL hides in
+  such a column (for example after `nullIf`) is not converted into another target type: the row gets
+  the placeholder of the target.
 - Any other column is converted from the CLR type of its values to the target type, with the
   mappings of [Type mapping: writing to ClickHouse](#type-map-writing) and the
   [write rules](#write-rules). `ClickHouseTcpTypes.CanWrite` gives the answer of this conversion. A

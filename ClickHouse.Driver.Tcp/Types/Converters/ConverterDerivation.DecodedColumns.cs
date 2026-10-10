@@ -8,7 +8,11 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// <summary>The kind of one part of a column that a query read as another type, as the insert writes it.</summary>
 internal enum DecodedPart
 {
-    /// <summary>The values keep their meaning: the codec writes the part from its storage, else the converter tree of its CLR type.</summary>
+    /// <summary>
+    /// The values keep their meaning: the codec writes the part from its storage, else the converter tree of its CLR type.
+    /// Under rows that an enclosing <c>Nullable</c> hides, a part of another type goes through the converter tree with
+    /// those rows marked (<see cref="DecodedPartPlan.SameType"/>).
+    /// </summary>
     Kept,
 
     /// <summary>
@@ -45,9 +49,11 @@ internal readonly struct DecodedPartPlan
     /// <param name="sourceHoldsNull">For <see cref="DecodedPart.Nullable"/>: whether the source is <c>Nullable</c>.</param>
     /// <param name="targetHoldsNull">For <see cref="DecodedPart.Nullable"/>: whether the target is <c>Nullable</c>.</param>
     /// <param name="refusal">For <see cref="DecodedPart.Refused"/>: why no part converts the values.</param>
-    public DecodedPartPlan(DecodedPart kind, string[] sourceParts = null, string[] targetParts = null, bool sourceHoldsNull = false, bool targetHoldsNull = false, string refusal = null)
+    /// <param name="sameType">Whether the source and the target of the part are the same type.</param>
+    public DecodedPartPlan(DecodedPart kind, string[] sourceParts = null, string[] targetParts = null, bool sourceHoldsNull = false, bool targetHoldsNull = false, string refusal = null, bool sameType = false)
     {
         Kind = kind;
+        SameType = sameType;
         SourceParts = sourceParts ?? System.Array.Empty<string>();
         TargetParts = targetParts ?? System.Array.Empty<string>();
         SourceHoldsNull = sourceHoldsNull;
@@ -75,6 +81,28 @@ internal readonly struct DecodedPartPlan
 
     /// <summary>For <see cref="DecodedPart.Refused"/>: why no part converts the values.</summary>
     public string Refusal { get; }
+
+    /// <summary>
+    /// Whether the source and the target of the part are the same type, so that a write from storage keeps every byte,
+    /// also the bytes of a value that an enclosing <c>Nullable</c> hides.
+    /// </summary>
+    public bool SameType { get; }
+}
+
+/// <summary>How the insert writes a column that a query read as another type.</summary>
+internal enum ReadColumnRoute
+{
+    /// <summary>As any other column: the codec when it writes the column from its storage, else the converter tree.</summary>
+    Column,
+
+    /// <summary>Part by part, because a write through its CLR type would change its values.</summary>
+    Parts,
+
+    /// <summary>
+    /// Part by part when every part can be written so, because a value that a <c>Nullable</c> hides must not be converted
+    /// into the target type; else as any other column.
+    /// </summary>
+    PartsUnderNull,
 }
 
 /// <summary>
@@ -99,12 +127,15 @@ internal sealed partial class ConverterDerivation
     /// <param name="source">The type that the column says it holds.</param>
     /// <param name="target">The type of the target column.</param>
     /// <param name="context">The resolution context of the target.</param>
-    /// <returns>Whether the insert writes the column part by part (<see cref="PlanDecodedPart"/>).</returns>
-    internal bool IsReadColumnWrittenByParts(IColumn column, string source, string target, in ResolveContext context)
+    /// <returns>
+    /// How the insert writes the column: part by part (<see cref="PlanDecodedPart"/>) when a part changes; also when the
+    /// source holds values under a <c>Nullable</c> and the target is another type, so that no hidden value is converted.
+    /// </returns>
+    internal ReadColumnRoute RouteOfReadColumn(IColumn column, string source, string target, in ResolveContext context)
     {
         if (!TryParse(source, out TypeNode sourceNode) || !TryParse(target, out TypeNode targetNode))
         {
-            return false;
+            return ReadColumnRoute.Column;
         }
 
         // A column that a caller built can carry any type name; one that names no type that the registry resolves is not a
@@ -116,34 +147,53 @@ internal sealed partial class ConverterDerivation
         }
         catch (Exception ex) when (ex is FormatException or NotSupportedException or ArgumentException or OverflowException)
         {
-            return false;
+            return ReadColumnRoute.Column;
         }
 
-        return sourceCodec.CanWrite(column) && (ChangesMeaning(sourceNode, targetNode) || ChangesStringShape(sourceNode, targetNode));
+        if (!sourceCodec.CanWrite(column))
+        {
+            return ReadColumnRoute.Column;
+        }
+
+        if (ChangesMeaning(sourceNode, targetNode) || ChangesStringShape(sourceNode, targetNode))
+        {
+            return ReadColumnRoute.Parts;
+        }
+
+        return HidesValues(sourceNode) && !SameType(sourceNode, targetNode) ? ReadColumnRoute.PartsUnderNull : ReadColumnRoute.Column;
     }
 
     /// <summary>How the insert writes one part of a column that a query read as <paramref name="source"/>.</summary>
     /// <param name="source">The source type of the part.</param>
     /// <param name="target">The target type of the part.</param>
+    /// <param name="hidden">
+    /// Whether an enclosing <c>Nullable</c> hides rows of the part. Then a composite of another type is taken apart too,
+    /// so that each of its parts marks those rows, and a <c>Nullable</c> of another type is taken apart to mark its own.
+    /// </param>
     /// <returns>The plan of the part.</returns>
-    internal DecodedPartPlan PlanDecodedPart(string source, string target)
+    internal DecodedPartPlan PlanDecodedPart(string source, string target, bool hidden = false)
     {
         TypeNode sourceNode = WithoutAggregateFunction(TypeParser.Parse(source));
         TypeNode targetNode = WithoutAggregateFunction(TypeParser.Parse(target));
-        if (!ChangesMeaning(sourceNode, targetNode) && !ChangesStringShape(sourceNode, targetNode))
+        bool changes = ChangesMeaning(sourceNode, targetNode) || ChangesStringShape(sourceNode, targetNode);
+        bool sameType = SameType(sourceNode, targetNode);
+        if (sameType || (!changes && !hidden && !HidesValues(sourceNode)))
         {
-            return new DecodedPartPlan(DecodedPart.Kept);
+            return new DecodedPartPlan(DecodedPart.Kept, sameType: sameType);
         }
 
         string leaf = CanonicalName(Unwrapped(sourceNode));
-        if (MeaningFamily(leaf) is not null || (IsStringLeaf(leaf) && IsStringLeaf(CanonicalName(Unwrapped(targetNode)))))
+        if (changes && (MeaningFamily(leaf) is not null || (IsStringLeaf(leaf) && IsStringLeaf(CanonicalName(Unwrapped(targetNode))))))
         {
             return new DecodedPartPlan(DecodedPart.Converted);
         }
 
+        // A Nullable on either side, when neither side is a LowCardinality: the NULL of a LowCardinality is a key of its
+        // dictionary, so it hides no value, and its converter tree writes its NULL.
         bool sourceNullable = CanonicalName(sourceNode) == "Nullable" && sourceNode.Arguments.Count == 1;
         bool targetNullable = CanonicalName(targetNode) == "Nullable" && targetNode.Arguments.Count == 1;
-        if (sourceNullable || targetNullable)
+        bool dictionary = CanonicalName(sourceNode) == "LowCardinality" || CanonicalName(targetNode) == "LowCardinality";
+        if ((sourceNullable || targetNullable) && !dictionary)
         {
             return new DecodedPartPlan(
                 DecodedPart.Nullable,
@@ -153,28 +203,71 @@ internal sealed partial class ConverterDerivation
                 targetNullable);
         }
 
-        // The meaning changes in the composite, so both types have its name.
-        switch (CanonicalName(sourceNode))
+        // A change in the composite means that both types have its name; a composite of another type that changes nothing
+        // and has another shape is written as any other column.
+        string name = CanonicalName(sourceNode);
+        int arguments = sourceNode.Arguments.Count;
+        bool sameShape = name == CanonicalName(targetNode) && arguments == targetNode.Arguments.Count;
+        switch (name)
         {
-            case "Array":
+            case "Array" when sameShape && arguments == 1:
                 return new DecodedPartPlan(DecodedPart.Array, new[] { sourceNode.Arguments[0].ToString() }, new[] { targetNode.Arguments[0].ToString() });
 
-            case "Map":
+            case "Map" when sameShape && arguments == 2:
                 return new DecodedPartPlan(
                     DecodedPart.Map,
                     new[] { sourceNode.Arguments[0].ToString(), sourceNode.Arguments[1].ToString() },
                     new[] { targetNode.Arguments[0].ToString(), targetNode.Arguments[1].ToString() });
 
-            case "Tuple":
+            case "Tuple" when sameShape:
                 return new DecodedPartPlan(
                     DecodedPart.Tuple,
                     System.Array.ConvertAll(NamedElementParser.Split(sourceNode), element => element.Type.ToString()),
                     System.Array.ConvertAll(NamedElementParser.Split(targetNode), element => element.Type.ToString()));
 
             default:
-                return new DecodedPartPlan(
-                    DecodedPart.Refused,
-                    refusal: $"The values of {sourceNode} are converted to another type only through Nullable, LowCardinality, Array, Map and Tuple, so a column read as {sourceNode} is written only into a column whose DateTime64, Time64 and Enum types are the same.");
+                return changes
+                    ? new DecodedPartPlan(
+                        DecodedPart.Refused,
+                        refusal: $"The values of {sourceNode} are converted to another type only through Nullable, LowCardinality, Array, Map and Tuple, so a column read as {sourceNode} is written only into a column whose DateTime64, Time64 and Enum types are the same.")
+                    : new DecodedPartPlan(DecodedPart.Kept);
+        }
+    }
+
+    // Whether a column of the type can hold a value that a Nullable hides: a Nullable that is not the dictionary of a
+    // LowCardinality (whose NULL is a key, with no value), also inside Tuple, Array and Map.
+    private bool HidesValues(TypeNode node)
+    {
+        node = WithoutAggregateFunction(node);
+        switch (CanonicalName(node))
+        {
+            case "Nullable":
+                return true;
+
+            case "Array" or "Map":
+                foreach (TypeNode argument in node.Arguments)
+                {
+                    if (HidesValues(argument))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+
+            case "Tuple":
+                foreach ((string _, TypeNode element) in NamedElementParser.Split(node))
+                {
+                    if (HidesValues(element))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+
+            default:
+                return false;
         }
     }
 

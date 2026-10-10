@@ -72,7 +72,10 @@ Two layers handle a column type:
   `String` or `FixedString` part into another type of a string (another width, `Nullable`, `LowCardinality`) is read
   as `byte[]` and written through the `byte[]` tree, so no byte goes through text; the offsets of an `Array` or a
   `Map`, the null map of a `Nullable` and every other part are written from their storage, so their bytes do not change
-  (`Types/Converters/ConverterDerivation.DecodedColumns.cs`).
+  (`Types/Converters/ConverterDerivation.DecodedColumns.cs`). A row that a NULL of an enclosing `Nullable` hides (also
+  the elements of an `Array` or a `Map` in that row) is marked: every part of another type writes the placeholder of its
+  target there and does not read, convert or check the hidden value; a part of the same type keeps its stored bytes. A
+  read column of another type that holds a `Nullable` is written part by part for this reason too.
 
 When you add or change a type, consider every path that touches it:
 

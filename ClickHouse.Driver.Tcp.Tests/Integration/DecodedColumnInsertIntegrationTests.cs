@@ -179,6 +179,66 @@ public class DecodedColumnInsertIntegrationTests
     }
 
     /// <summary>
+    /// A column that a query read, with a NULL row that hides a value that the target cannot hold (<c>nullIf</c> keeps the
+    /// value under the NULL): the insert stores the NULL and does not convert or check the hidden value. The source is
+    /// checked to hold the hidden value first.
+    /// </summary>
+    [TestCase(
+        "Nullable(Tuple(DateTime64(3, 'UTC'), Decimal(18, 2)))",
+        "Nullable(Tuple(DateTime64(6, 'UTC'), Decimal(9, 2)))",
+        "tuple(toDateTime64('2024-01-02 03:04:05.678', 3, 'UTC'), toDecimal64('1234567890.12', 2))",
+        "tuple(toDateTime64('2024-01-02 03:04:05.679', 3, 'UTC'), toDecimal64('1.23', 2))",
+        "('2024-01-02 03:04:05.679000',1.23)")]
+    [TestCase("Nullable(Decimal(18, 2))", "Nullable(Decimal(9, 2))", "toDecimal64('1234567890.12', 2)", "toDecimal64('1.23', 2)", "1.23")]
+    public async Task InsertAsync_ColumnReadWithAValueHiddenUnderNull_StoresTheNull(string source, string target, string hidden, string value, string expected)
+    {
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal) { ["allow_experimental_nullable_tuple_type"] = "1" };
+        string sourceTable = UniqueTableName();
+        string targetTable = UniqueTableName();
+        await using ClickHouseTcpConnection connection = await TcpServerFixture.ConnectAsync(None);
+        try
+        {
+            await ExecuteAsync(connection, $"CREATE TABLE {sourceTable} (id UInt32, value {source}) ENGINE = Memory", settings);
+            await ExecuteAsync(connection, $"CREATE TABLE {targetTable} (id UInt32, value {target}) ENGINE = Memory", settings);
+            await ExecuteAsync(connection, $"INSERT INTO {sourceTable} (id, value) SELECT 0, nullIf({hidden}, {hidden}) UNION ALL SELECT 1, {value}", settings);
+
+            var held = new List<string>();
+            await foreach (Block block in connection.QueryAsync($"SELECT toString(assumeNotNull(value)) FROM {sourceTable} WHERE id = 0", settings: settings, cancellationToken: None))
+            {
+                held.Add((string)block[0].GetValue(0));
+            }
+
+            await using (ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None))
+            {
+                await foreach (Block block in reader.QueryAsync($"SELECT id, value FROM {sourceTable} ORDER BY id", settings: settings, cancellationToken: None))
+                {
+                    await connection.InsertAsync($"INSERT INTO {targetTable} (id, value) VALUES", new[] { block[0], block[1] }, settings: settings, cancellationToken: None);
+                }
+            }
+
+            var stored = new List<string>();
+            await foreach (Block block in connection.QueryAsync($"SELECT ifNull(toString(value), 'NULL') FROM {targetTable} ORDER BY id", settings: settings, cancellationToken: None))
+            {
+                for (int row = 0; row < block.RowCount; row++)
+                {
+                    stored.Add((string)block[0].GetValue(row));
+                }
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(held, Has.Count.EqualTo(1).And.Some.Contains("1234567890.12"), "the NULL row of the source hides the value");
+                Assert.That(stored, Is.EqualTo(new[] { "NULL", expected }));
+            });
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {sourceTable}");
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {targetTable}");
+        }
+    }
+
+    /// <summary>
     /// A value that the target cannot hold (a label that it does not declare, an instant finer than its scale), and a
     /// column that no CLR type converts (a scale above 7), are refused, and nothing is stored.
     /// </summary>
