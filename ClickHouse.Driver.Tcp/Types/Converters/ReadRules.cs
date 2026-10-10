@@ -46,29 +46,30 @@ internal static class ReadRules
     public static bool IsEnumOrdinal(Type from, Type to) => to.IsEnum && Enum.GetUnderlyingType(to) == from;
 
     /// <summary>
-    /// Whether the CLR casts a <paramref name="from"/> to a <paramref name="to"/>: <see cref="Type.IsAssignableFrom"/>.
-    /// The cast keeps the value: a reference keeps its object, and a value type is boxed. This rule also accepts the
-    /// array casts of <see cref="ReinterpretsElements"/>, which keep the array and read its elements as another type.
-    /// The cast rule of the writes uses it too (<see cref="WriteRules.CastTargets"/>), so it decides those array casts in
-    /// both directions.
+    /// Whether the CLR casts a <paramref name="from"/> to a <paramref name="to"/> (<see cref="Type.IsAssignableFrom"/>)
+    /// and the cast keeps the value: a reference keeps its object, and a value type is boxed. An array cast that gives
+    /// the elements another meaning is refused (<see cref="ReinterpretsElements"/>). The cast rule of the writes uses this
+    /// rule too (<see cref="WriteRules.CastTargets"/>), so it decides those array casts in both directions.
     /// </summary>
     /// <param name="from">The source type.</param>
     /// <param name="to">The target type.</param>
     /// <returns>Whether the rule applies.</returns>
-    public static bool IsAssignable(Type from, Type to) => to.IsAssignableFrom(from);
+    public static bool IsAssignable(Type from, Type to) => to.IsAssignableFrom(from) && !ReinterpretsElements(from, to);
 
     /// <summary>
-    /// Whether <see cref="IsAssignable"/> accepts the cast only because the CLR reads the elements of an array as
-    /// another type of the same size: an integer type of the other sign, or an enum and an integer type, also in
-    /// jagged arrays and in the generic collection interfaces of an array. Such a cast keeps the array, and its
-    /// elements change their meaning: the <see cref="uint"/> 3000000000 reads as the <see cref="int"/> -1294967296.
+    /// Whether the CLR casts an array <paramref name="from"/> to <paramref name="to"/> only because it reads the
+    /// elements as another type of the same size, and that type gives each element another meaning: an integer type of
+    /// the other sign (the <see cref="uint"/> 3000000000 reads as the <see cref="int"/> -1294967296), or an enum whose
+    /// underlying type is not the other element type, also in jagged arrays and in the generic collection interfaces of
+    /// an array. An enum and its underlying type keep the integer value of each element, so an array cast between them
+    /// does not count.
     /// </summary>
     /// <param name="from">The source type.</param>
     /// <param name="to">The target type.</param>
-    /// <returns>Whether the cast reads elements as another type.</returns>
+    /// <returns>Whether the cast gives the elements another meaning.</returns>
     public static bool ReinterpretsElements(Type from, Type to)
     {
-        if (!from.IsArray || !IsAssignable(from, to))
+        if (!from.IsArray || !to.IsAssignableFrom(from))
         {
             return false;
         }
@@ -82,8 +83,13 @@ internal static class ReadRules
             return false;
         }
 
+        if (!fromElement.IsValueType)
+        {
+            return ReinterpretsElements(fromElement, toElement);
+        }
+
         // A value-type element has no reference conversion, so the CLR allows the cast only between types of one size.
-        return fromElement.IsValueType || ReinterpretsElements(fromElement, toElement);
+        return !IsEnumOrdinal(fromElement, toElement) && !IsEnumOrdinal(toElement, fromElement);
     }
 }
 

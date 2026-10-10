@@ -24,7 +24,7 @@ public class WriteRuleWriterTests
     [TestCase("Int32", typeof(IntEnum?), typeof(NonNullWriter<IntEnum>))]
     [TestCase("Variant(Int32, String)", typeof(string), typeof(AssignWriter<string, object>))]
     [TestCase("Dynamic", typeof(int?), typeof(AssignWriter<int?, object>))]
-    [TestCase("String", typeof(sbyte[]), typeof(AssignWriter<sbyte[], byte[]>))]
+    [TestCase("String", typeof(ByteEnum[]), typeof(AssignWriter<ByteEnum[], byte[]>))]
     [TestCase("Nullable(Int32)", typeof(int), typeof(LiftWriter<int>))]
     [TestCase("Nullable(Int32)", typeof(IntEnum), typeof(EnumWriter<IntEnum, int>))]
     [TestCase("LowCardinality(Nullable(Int32))", typeof(int), typeof(LiftWriter<int>))]
@@ -38,6 +38,7 @@ public class WriteRuleWriterTests
     [TestCase("Int32", typeof(object), "'Int32' cannot be written from System.Object. It is written from: System.Int32.")]
     [TestCase("Int64", typeof(int), "'Int64' cannot be written from System.Int32. It is written from: System.Int64.")]
     [TestCase("Int32", typeof(LongEnum), "'Int32' cannot be written from ClickHouse.Driver.Tcp.Tests.Types.Converters.WriteRulesTests+LongEnum. It is written from: System.Int32.")]
+    [TestCase("String", typeof(sbyte[]), "'String' cannot be written from System.SByte[]. It is written from: System.String, System.Byte[].")]
     [TestCase("Array(Nullable(Int32))", typeof(int[]), "'Nullable(Int32)' cannot be written from System.Int32, which cannot hold NULL. It is written from a nullable type. It is inside the column type 'Array(Nullable(Int32))'.")]
     public void Derive_SourceThatNoRuleWrites_GivesTheRefusalOfTheColumnTypesOwnWrites(string type, Type source, string refusal)
     {
@@ -103,11 +104,11 @@ public class WriteRuleWriterTests
     [Test]
     public async Task Write_CastOfReferencesFromSegments_GivesTheBytesOfTheTargetType()
     {
-        var bytes = new[] { new sbyte[][] { new sbyte[] { -1, 2 } }, new sbyte[][] { new sbyte[] { 3 } } };
+        var bytes = new[] { new ByteEnum[][] { new[] { (ByteEnum)255, (ByteEnum)2 } }, new ByteEnum[][] { new[] { (ByteEnum)3 } } };
         var expected = new[] { new byte[][] { new byte[] { 255, 2 } }, new byte[][] { new byte[] { 3 } } };
 
         byte[] old = await ConverterHarness.WriteSegmentsAsync(Derivation.Writer<byte[]>("String", ConverterHarness.Context), expected);
-        byte[] actual = await ConverterHarness.WriteSegmentsAsync(Derivation.Writer<sbyte[]>("String", ConverterHarness.Context), bytes);
+        byte[] actual = await ConverterHarness.WriteSegmentsAsync(Derivation.Writer<ByteEnum[]>("String", ConverterHarness.Context), bytes);
 
         Assert.That(actual, Is.EqualTo(old));
     }
