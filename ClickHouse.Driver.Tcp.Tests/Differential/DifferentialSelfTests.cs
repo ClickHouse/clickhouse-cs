@@ -587,12 +587,12 @@ public class DifferentialSelfTests
     /// <summary>The opposite of the client's answer.</summary>
     private sealed class NegatingAnswerArm : AnswerArm
     {
-        private readonly Type target;
+        public NegatingAnswerArm(Tier tier)
+            : base($"Negating {tier}", tier)
+        {
+        }
 
-        public NegatingAnswerArm(Tier tier, Type target = null)
-            : base($"Negating {tier}", tier) => this.target = target;
-
-        public override bool Covers(Facet facet) => facet.Case.Id == UInt64Case && (target is null || facet.Target == target);
+        public override bool Covers(Facet facet) => facet.Case.Id == UInt64Case;
 
         public override bool Answer(string columnType, Type elementType)
             => !(Tier == Tier.CanRead ? ClientArms.CanRead : ClientArms.CanWrite).Answer(columnType, elementType);

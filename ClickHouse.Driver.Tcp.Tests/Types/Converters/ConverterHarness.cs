@@ -200,8 +200,8 @@ internal static class ConverterHarness
     /// <summary>Asserts that two failures are the same to a caller: type, message and parameter name.</summary>
     public static void AssertSameFailure(Exception expected, Exception actual, string path)
     {
-        Assert.That(expected, Is.Not.Null, $"{path}: the current path must fail for this case.");
-        Assert.That(actual, Is.Not.Null, $"{path}: the converter did not fail, the current path threw {expected?.GetType()}: {expected?.Message}");
+        Assert.That(expected, Is.Not.Null, $"{path}: the path compared with must fail for this case.");
+        Assert.That(actual, Is.Not.Null, $"{path}: the converter did not fail, the path compared with threw {expected?.GetType()}: {expected?.Message}");
         Assert.Multiple(() =>
         {
             Assert.That(actual.GetType(), Is.EqualTo(expected.GetType()), $"{path}: exception type");

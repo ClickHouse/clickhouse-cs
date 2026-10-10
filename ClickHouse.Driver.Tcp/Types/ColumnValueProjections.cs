@@ -9,8 +9,8 @@ namespace ClickHouse.Driver.Tcp.Types;
 /// <summary>
 /// The read-side conversions shared by the leaf readers of the converter layer (<c>LeafReadConversions</c>) and by
 /// the columns' own <c>GetDateTimeOffset</c>/<c>GetTimeSpan</c>, so a raw wire count has one calendar reading whichever
-/// surface asks. Static, taking scale and timezone as plain arguments, so an emitted read can inline a call with them
-/// as constants instead of paying a delegate hop.
+/// surface asks. Static, taking scale and timezone as plain arguments, so an emitted read calls one method with them
+/// as constants and no delegate.
 /// </summary>
 internal static class ColumnValueProjections
 {
