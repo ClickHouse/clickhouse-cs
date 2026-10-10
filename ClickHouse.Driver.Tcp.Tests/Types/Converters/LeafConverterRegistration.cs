@@ -63,11 +63,6 @@ internal sealed class LeafConverterRegistration : IDifferentialRegistration
 
     private static string Canonical(string name) => ColumnCodecRegistry.Default.TryCanonicalName(name, out string canonical) ? canonical : name;
 
-    private static bool IsFixedStringFromText(Facet facet)
-        => facet.Input.ElementType == typeof(string)
-            && IsLeafType(facet.Case.ColumnType)
-            && Canonical(TypeParser.Parse(facet.Case.ColumnType).Name) == "FixedString";
-
     private static ColumnReader<T> Reader<T>(Block block)
     {
         Derivation derivation = ConverterDerivation.Default.Derive(block[0].TypeName, block.Context, typeof(T), ConversionDirection.Read);
