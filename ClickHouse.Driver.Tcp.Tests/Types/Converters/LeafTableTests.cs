@@ -8,10 +8,10 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// Pins the leaf table to the leaf codecs: each leaf reads as exactly the CLR types that its codec offers and writes
-/// from exactly the CLR types that its codec writes, so the derivation answers every (type, CLR type) question as
-/// the current <see cref="LegacyColumnProjection.Offers"/> and <see cref="IColumnCodec.CanWriteElementType"/> do. The one
-/// pair that the table adds is <c>FixedString</c> from <see cref="string"/> (<see cref="Additions"/>).
+/// Pins the leaf table: the counts of its pairs, every registered name as a leaf or a composite, the derivation of a leaf
+/// reads as exactly the CLR types of the leaf's read pairs, and each leaf writes from exactly the CLR types that its codec
+/// writes (<see cref="IColumnCodec.CanWriteElementType"/>). The one write pair that the table adds is
+/// <c>FixedString</c> from <see cref="string"/> (<see cref="Additions"/>).
 /// </summary>
 [TestFixture]
 public class LeafTableTests
@@ -99,14 +99,6 @@ public class LeafTableTests
     }
 
     [TestCaseSource(nameof(SampleTypes))]
-    public void ReadTypes_SampleType_AreTheReadableTypesOfItsCodec(string type)
-    {
-        IColumnCodec codec = ConverterHarness.Codec(type);
-
-        Assert.That(LeafOf(type).ReadTypes(codec), Is.EquivalentTo(codec.ReadableElementTypes));
-    }
-
-    [TestCaseSource(nameof(SampleTypes))]
     public void WriteTypes_SampleType_AreTheWritableTypesOfItsCodec(string type)
     {
         IColumnCodec codec = ConverterHarness.Codec(type);
@@ -119,22 +111,25 @@ public class LeafTableTests
     }
 
     /// <summary>
-    /// The derivation succeeds for exactly the CLR types that the current read and write accept, and for the
-    /// <see cref="Additions"/>. The reads are the leaf's own readings (<see cref="ConverterDerivation.DeriveNode"/>), without
-    /// the read rules of D6, which apply to every column type (<see cref="ReadRulesTests"/>).
+    /// The derivation reads as exactly the CLR types of the leaf's read pairs, and writes from exactly the CLR types that
+    /// the codec writes and the <see cref="Additions"/>. These are the leaf's own readings and writes
+    /// (<see cref="ConverterDerivation.DeriveNode"/>), without the rules of D6, which apply to every column type
+    /// (<see cref="ReadRulesTests"/>, <see cref="WriteRulesTests"/>).
     /// </summary>
     [TestCaseSource(nameof(SampleTypes))]
     public void Derive_EveryCandidateType_AgreesWithTheCurrentAnswers(string type)
     {
         IColumnCodec codec = ConverterHarness.Codec(type);
-        string leaf = LeafOf(type).Name;
+        Leaf leafOfType = LeafOf(type);
+        string leaf = leafOfType.Name;
+        Type[] readTypes = leafOfType.ReadTypes(codec).ToArray();
         TypeNode root = TypeParser.Parse(type);
         var disagreements = new List<string>();
         foreach (Type candidate in Candidates)
         {
             bool reads = ConverterDerivation.Default.DeriveNode(root, root, ConverterHarness.Context, candidate, ConversionDirection.Read).Succeeded;
             bool writes = ConverterDerivation.Default.DeriveNode(root, root, ConverterHarness.Context, candidate, ConversionDirection.Write).Succeeded;
-            if (reads != LegacyColumnProjection.Offers(codec, candidate))
+            if (reads != readTypes.Contains(candidate))
             {
                 disagreements.Add($"read as {candidate}: derived {reads}");
             }

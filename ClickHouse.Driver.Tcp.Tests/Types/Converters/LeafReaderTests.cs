@@ -8,9 +8,9 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
 /// The read tests of the leaves that the differential tests (<see cref="LeafConverterRegistration"/>) do not run: the
-/// pairs that no differential case reaches, compared here with the old read
-/// (<see cref="Differential.LegacyColumnarRead"/>) through <see cref="BoundReader{T}.Fill"/> and a compiled
-/// <see cref="ColumnReader.Emit"/>; zero rows; columns that a caller built; the surface messages.
+/// pairs that no differential case reaches, through <see cref="BoundReader{T}.Fill"/> and a compiled
+/// <see cref="ColumnReader.Emit"/> against <see cref="Block.ReadAs{T}(string)"/>, which gives the column itself for an
+/// identity pair; zero rows; columns that a caller built; the surface messages.
 /// </summary>
 [TestFixture]
 public class LeafReaderTests
@@ -22,23 +22,23 @@ public class LeafReaderTests
     public static IEnumerable<TestCaseData> ReadPairsNotInTheCaseList() => Pairs(onlyNotInTheCaseList: true);
 
     [TestCaseSource(nameof(ReadPairsNotInTheCaseList))]
-    public Task Read_LeafPairNotInTheCaseList_GivesTheCurrentValuesThroughFillAndEmit(string type, Type clrType)
-        => (Task)ConverterHarness.InvokeGeneric(typeof(LeafReaderTests), nameof(AssertReadsLikeTheCurrentPathAsync), new[] { clrType }, type);
+    public Task Read_LeafPairNotInTheCaseList_GivesTheValuesOfReadAsThroughFillAndEmit(string type, Type clrType)
+        => (Task)ConverterHarness.InvokeGeneric(typeof(LeafReaderTests), nameof(AssertReadsLikeReadAsAsync), new[] { clrType }, type);
 
     [TestCaseSource(nameof(ReadPairs))]
     public Task Read_ZeroRows_GivesNoValues(string type, Type clrType)
         => (Task)ConverterHarness.InvokeGeneric(typeof(LeafReaderTests), nameof(AssertReadsNoRowsAsync), new[] { clrType }, type);
 
     /// <summary>
-    /// A column that a caller built can carry a <c>FixedString</c> type name without the decoded storage. The current
-    /// read gives its text through the indexer, and so does the leaf.
+    /// A column that a caller built can carry a <c>FixedString</c> type name without the decoded storage. The leaf reads
+    /// its text through the indexer, with the zero padding.
     /// </summary>
     [Test]
     public void Read_FixedStringAsTextFromACallerBuiltColumn_ReadsThroughTheIndexer()
     {
         var column = new ArrayColumn<byte[]>("c", "FixedString(2)", new[] { "ab"u8.ToArray(), new byte[] { 0x63, 0 } });
         ColumnReader<string> reader = Derivation.Reader<string>("FixedString(2)", ConverterHarness.Context);
-        string[] expected = ConverterHarness.ReadOld<string>(column, 0, 2);
+        string[] expected = { "ab", "c\0" };
 
         Assert.Multiple(() =>
         {
@@ -86,15 +86,15 @@ public class LeafReaderTests
         Assert.Throws<ArgumentOutOfRangeException>(() => bound.Fill(2, new int[2]));
     }
 
-    private static async Task AssertReadsLikeTheCurrentPathAsync<T>(string type)
+    private static async Task AssertReadsLikeReadAsAsync<T>(string type)
     {
         using IColumn column = await LeafSamples.DecodedAsync(type, typeof(T));
         ColumnReader<T> reader = Derivation.Reader<T>(type, ConverterHarness.Context);
         int rows = column.RowCount;
         Assert.That(rows, Is.GreaterThanOrEqualTo(3), "a sample needs a window that starts after row 0 and ends before the last row");
 
-        T[] all = ConverterHarness.ReadOld<T>(column, 0, rows);
-        T[] window = ConverterHarness.ReadOld<T>(column, 1, rows - 2);
+        T[] all = ConverterHarness.ReadAs<T>(column, 0, rows);
+        T[] window = ConverterHarness.ReadAs<T>(column, 1, rows - 2);
         Assert.Multiple(() =>
         {
             ConverterHarness.AssertSameValues(all, ConverterHarness.ReadFill(reader, column, 0, rows), "Fill");
