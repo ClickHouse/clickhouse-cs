@@ -70,6 +70,9 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
     /// <summary>The reverse map, from ordinal to label.</summary>
     public IReadOnlyDictionary<T, string> OrdinalToLabel { get; }
 
+    /// <summary>The declared members, in declaration order, and the messages for an unknown ordinal or label.</summary>
+    internal EnumMemberTable Members => members;
+
     /// <summary>
     /// A label is a reading as well as the ordinal. Diagnostics only; <see cref="TryProjectRead"/> is the
     /// authority.

@@ -1,0 +1,446 @@
+using System;
+using System.Buffers;
+using System.Collections.Generic;
+using System.Text;
+using ClickHouse.Driver.Tcp.Protocol;
+
+namespace ClickHouse.Driver.Tcp.Types.Converters;
+
+/// <summary>
+/// A write leaf whose canonical value is a run of bytes: <c>String</c>, <c>FixedString(N)</c> and <c>JSON</c>. A
+/// LowCardinality writer can intern and write its dictionary with <see cref="ToCanonical"/> and <see cref="Encode"/>.
+/// </summary>
+/// <typeparam name="T">The CLR type that the leaf writes.</typeparam>
+internal abstract class BytesLeafWriter<T> : ColumnWriter<T>
+{
+    /// <summary>
+    /// The canonical bytes that the leaf writes at a position that has no value (for example under a NULL). They are
+    /// the same for every CLR type that the leaf writes. A leaf of a parametric width keeps no buffer of that width:
+    /// it gives the bytes in <paramref name="scratch"/>, so a cached tree stays small.
+    /// </summary>
+    /// <param name="scratch">A pooled or empty array, which the leaf can replace with a larger one (see <see cref="ToCanonical"/>).</param>
+    /// <returns>The placeholder bytes, valid until the next use of <paramref name="scratch"/>.</returns>
+    public abstract ReadOnlySpan<byte> GetPlaceholder(ref byte[] scratch);
+
+    /// <summary>Writes the canonical placeholder as one value.</summary>
+    /// <param name="writer">The writer to encode into.</param>
+    public abstract void WritePlaceholder(ClickHouseBinaryWriter writer);
+
+    /// <summary>
+    /// Whether two values that are equal by <see cref="EqualityComparer{T}.Default"/> always have equal canonical
+    /// bytes. When true, a LowCardinality writer can look a value up by its CLR value first, and convert it only when
+    /// the lookup fails. The converse is not necessary: two values that are not equal and have the same bytes still
+    /// get one dictionary entry, because the writer interns the bytes.
+    /// </summary>
+    public virtual bool ClrEqualityImpliesCanonicalEquality => false;
+
+    /// <summary>The canonical bytes of one value.</summary>
+    /// <param name="value">The value.</param>
+    /// <param name="position">The zero-based position of the value in the write, for error messages.</param>
+    /// <param name="scratch">
+    /// A buffer that the leaf can use: an array from <see cref="ArrayPool{T}.Shared"/>, or an empty array. The leaf
+    /// replaces it with a larger one when necessary and returns the old one to the pool. The caller returns the last
+    /// one.
+    /// </param>
+    /// <returns>The bytes. They can be in <paramref name="scratch"/> or in the value, so they are valid only until the next call.</returns>
+    /// <exception cref="ArgumentException">The value cannot be stored in the ClickHouse type.</exception>
+    public abstract ReadOnlySpan<byte> ToCanonical(T value, int position, ref byte[] scratch);
+
+    /// <summary>Writes canonical bytes as one value, for example one entry of a LowCardinality dictionary.</summary>
+    /// <param name="writer">The writer to encode into.</param>
+    /// <param name="canonical">The canonical bytes.</param>
+    public abstract void Encode(ClickHouseBinaryWriter writer, ReadOnlySpan<byte> canonical);
+
+    /// <summary>Makes <paramref name="scratch"/> at least <paramref name="length"/> bytes long.</summary>
+    /// <param name="scratch">A pooled or empty array, which is replaced when it is too short.</param>
+    /// <param name="length">The length that is necessary.</param>
+    protected static void EnsureScratch(ref byte[] scratch, int length) => LeafBytes.EnsureScratch(ref scratch, length);
+}
+
+/// <summary><c>String</c> or <c>JSON</c> from text. The canonical bytes are the UTF-8 encoding of the text.</summary>
+internal sealed class TextStringWriter : BytesLeafWriter<string>
+{
+    /// <summary><c>String</c> from text. Its placeholder is the empty string.</summary>
+    public static readonly TextStringWriter String = new(Array.Empty<byte>(), jsonPrefix: false);
+
+    /// <summary>
+    /// <c>JSON</c> from text, in the String serialization. Its prefix is the serialization version, and its
+    /// placeholder is an empty object, because the server parses the value under a NULL too.
+    /// </summary>
+    public static readonly TextStringWriter Json = new("{}"u8.ToArray(), jsonPrefix: true);
+
+    // The serialization version of JSON as text, which is the only JSON serialization that this client writes.
+    private const ulong JsonStringVersion = 1;
+
+    private readonly byte[] placeholder;
+    private readonly bool jsonPrefix;
+
+    private TextStringWriter(byte[] placeholder, bool jsonPrefix)
+    {
+        this.placeholder = placeholder;
+        this.jsonPrefix = jsonPrefix;
+    }
+
+    /// <inheritdoc/>
+    public override bool HasPrefix => jsonPrefix;
+
+    /// <inheritdoc/>
+    public override ReadOnlySpan<byte> GetPlaceholder(ref byte[] scratch) => placeholder;
+
+    /// <inheritdoc/>
+    public override void WritePlaceholder(ClickHouseBinaryWriter writer) => writer.WriteString(placeholder);
+
+    /// <inheritdoc/>
+    // Equal strings have equal UTF-8. Two strings that are not equal can have the same UTF-8: each lone surrogate
+    // encodes as EF BF BD.
+    public override bool ClrEqualityImpliesCanonicalEquality => true;
+
+    /// <inheritdoc/>
+    public override void WritePrefix(ClickHouseBinaryWriter writer, ValueSource<string> values, IColumnWriteState state)
+    {
+        if (jsonPrefix)
+        {
+            writer.WriteUInt64(JsonStringVersion);
+        }
+    }
+
+    /// <inheritdoc/>
+    public override ReadOnlySpan<byte> ToCanonical(string value, int position, ref byte[] scratch)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        EnsureScratch(ref scratch, Encoding.UTF8.GetMaxByteCount(value.Length));
+        return scratch.AsSpan(0, Encoding.UTF8.GetBytes(value, scratch));
+    }
+
+    /// <inheritdoc/>
+    public override void Encode(ClickHouseBinaryWriter writer, ReadOnlySpan<byte> canonical) => writer.WriteString(canonical);
+
+    /// <inheritdoc/>
+    // The writer encodes each string into its own buffer, so a value is not copied to a canonical form first.
+    public override void Write(ClickHouseBinaryWriter writer, ValueSource<string> values, IColumnWriteState state)
+    {
+        ReadOnlySpan<byte> absent = values.Absent;
+        bool marked = values.HasAbsent;
+        int position = 0;
+        for (int r = 0; r < values.RunCount; r++)
+        {
+            foreach (string value in values.Run(r))
+            {
+                if (marked && absent[position] != 0)
+                {
+                    writer.WriteString(placeholder);
+                }
+                else
+                {
+                    writer.WriteString(value);
+                }
+
+                position++;
+            }
+        }
+    }
+}
+
+/// <summary><c>String</c> from raw bytes. The bytes are the canonical value and are written with no change.</summary>
+internal sealed class BytesStringWriter : BytesLeafWriter<byte[]>
+{
+    /// <summary>The shared instance. The leaf has no state.</summary>
+    public static readonly BytesStringWriter Instance = new();
+
+    private BytesStringWriter()
+    {
+    }
+
+    /// <inheritdoc/>
+    public override ReadOnlySpan<byte> GetPlaceholder(ref byte[] scratch) => ReadOnlySpan<byte>.Empty;
+
+    /// <inheritdoc/>
+    public override void WritePlaceholder(ClickHouseBinaryWriter writer) => writer.WriteString(ReadOnlySpan<byte>.Empty);
+
+    /// <inheritdoc/>
+    public override ReadOnlySpan<byte> ToCanonical(byte[] value, int position, ref byte[] scratch)
+        => value ?? throw NullValue(position);
+
+    /// <inheritdoc/>
+    public override void Encode(ClickHouseBinaryWriter writer, ReadOnlySpan<byte> canonical) => writer.WriteString(canonical);
+
+    /// <inheritdoc/>
+    public override void Write(ClickHouseBinaryWriter writer, ValueSource<byte[]> values, IColumnWriteState state)
+    {
+        ReadOnlySpan<byte> absent = values.Absent;
+        bool marked = values.HasAbsent;
+        int position = 0;
+        for (int r = 0; r < values.RunCount; r++)
+        {
+            foreach (byte[] value in values.Run(r))
+            {
+                if (marked && absent[position] != 0)
+                {
+                    writer.WriteString(ReadOnlySpan<byte>.Empty);
+                }
+                else
+                {
+                    writer.WriteString(value ?? throw NullValue(values.FirstRow + position));
+                }
+
+                position++;
+            }
+        }
+    }
+
+    // The parameter name is the one that the String codec reports for the same value.
+#pragma warning disable CA2208 // Instantiate argument exceptions correctly
+    private static ArgumentException NullValue(int row)
+        => new($"A String column cannot hold a null value (at row {row}); wrap the type in Nullable to write nulls.", "column");
+#pragma warning restore CA2208
+}
+
+/// <summary>
+/// <c>FixedString(N)</c> from raw bytes. Each value must be exactly <c>N</c> bytes: the writer does not pad or cut a
+/// value, because that would change the data without a signal.
+/// </summary>
+internal sealed class FixedStringBytesWriter : BytesLeafWriter<byte[]>
+{
+    private readonly int size;
+    private readonly string typeName;
+
+    /// <summary>Initializes the leaf for one width.</summary>
+    /// <param name="size">The <c>N</c> of <c>FixedString(N)</c>.</param>
+    /// <param name="typeName">The ClickHouse type, for the messages.</param>
+    public FixedStringBytesWriter(int size, string typeName)
+    {
+        this.size = size;
+        this.typeName = typeName;
+    }
+
+    /// <inheritdoc/>
+    public override ReadOnlySpan<byte> GetPlaceholder(ref byte[] scratch) => LeafBytes.Zeros(size, ref scratch);
+
+    /// <inheritdoc/>
+    public override void WritePlaceholder(ClickHouseBinaryWriter writer) => LeafBytes.WriteZeros(writer, size);
+
+    /// <inheritdoc/>
+    public override ReadOnlySpan<byte> ToCanonical(byte[] value, int position, ref byte[] scratch)
+        => Checked(value, position, "row");
+
+    /// <inheritdoc/>
+    public override void Encode(ClickHouseBinaryWriter writer, ReadOnlySpan<byte> canonical) => writer.WriteBytes(canonical);
+
+    /// <inheritdoc/>
+    public override void Write(ClickHouseBinaryWriter writer, ValueSource<byte[]> values, IColumnWriteState state)
+    {
+        ReadOnlySpan<byte> absent = values.Absent;
+        bool marked = values.HasAbsent;
+        int position = 0;
+        for (int r = 0; r < values.RunCount; r++)
+        {
+            ReadOnlySpan<byte[]> run = values.Run(r);
+            for (int i = 0; i < run.Length; i++)
+            {
+                if (marked && absent[position] != 0)
+                {
+                    LeafBytes.WriteZeros(writer, size);
+                }
+                else if (values.IsSegmented && !marked)
+                {
+                    // A segment is the array of one row, so a message names the element of that array. Under marks
+                    // the values come from a Nullable child, and a message names the flat position, as for a column.
+                    writer.WriteBytes(Checked(run[i], i, "element"));
+                }
+                else
+                {
+                    writer.WriteBytes(Checked(run[i], values.FirstRow + position, "row"));
+                }
+
+                position++;
+            }
+        }
+    }
+
+    private byte[] Checked(byte[] value, int position, string positionNoun)
+    {
+        if (value is null)
+        {
+            throw new ArgumentException(
+                $"A {typeName} column cannot hold a null value (at {positionNoun} {position}); wrap the type in Nullable to write nulls.",
+                nameof(value));
+        }
+
+        if (value.Length != size)
+        {
+            throw new ArgumentException(
+                $"A {typeName} value at {positionNoun} {position} is {value.Length} bytes; every value must be exactly {size} bytes. Resize it to {size} bytes before writing it — the write path will not pad or truncate, since doing so would silently alter the data.",
+                nameof(value));
+        }
+
+        return value;
+    }
+}
+
+/// <summary>
+/// <c>FixedString(N)</c> from text: the UTF-8 bytes of the text, then zero bytes up to <c>N</c>. A value of more than
+/// <c>N</c> bytes is refused.
+/// </summary>
+/// <remarks>
+/// Text is padded and raw bytes (<see cref="FixedStringBytesWriter"/>) are not. A caller who gives text gives
+/// characters, and the number of UTF-8 bytes is not under the caller's control, so a short text is padded. A caller
+/// who gives bytes controls each byte, so a wrong length there is an error. The HTTP client pads text in the same way.
+/// </remarks>
+internal sealed class FixedStringTextWriter : BytesLeafWriter<string>
+{
+    private readonly int size;
+    private readonly string typeName;
+
+    /// <summary>Initializes the leaf for one width.</summary>
+    /// <param name="size">The <c>N</c> of <c>FixedString(N)</c>.</param>
+    /// <param name="typeName">The ClickHouse type, for the messages.</param>
+    public FixedStringTextWriter(int size, string typeName)
+    {
+        this.size = size;
+        this.typeName = typeName;
+    }
+
+    /// <inheritdoc/>
+    public override ReadOnlySpan<byte> GetPlaceholder(ref byte[] scratch) => LeafBytes.Zeros(size, ref scratch);
+
+    /// <inheritdoc/>
+    public override void WritePlaceholder(ClickHouseBinaryWriter writer) => LeafBytes.WriteZeros(writer, size);
+
+    /// <inheritdoc/>
+    // Equal strings have equal UTF-8, so they have equal padded bytes too.
+    public override bool ClrEqualityImpliesCanonicalEquality => true;
+
+    /// <inheritdoc/>
+    public override ReadOnlySpan<byte> ToCanonical(string value, int position, ref byte[] scratch)
+    {
+        EnsureScratch(ref scratch, size);
+        Span<byte> padded = scratch.AsSpan(0, size);
+        Pad(value, padded, position, "row");
+        return padded;
+    }
+
+    /// <inheritdoc/>
+    public override void Encode(ClickHouseBinaryWriter writer, ReadOnlySpan<byte> canonical) => writer.WriteBytes(canonical);
+
+    /// <inheritdoc/>
+    // The N-byte buffer is rented at the first value that is not marked, so a write of no values or of marked
+    // positions only rents nothing.
+    public override void Write(ClickHouseBinaryWriter writer, ValueSource<string> values, IColumnWriteState state)
+    {
+        ReadOnlySpan<byte> absent = values.Absent;
+        bool marked = values.HasAbsent;
+        byte[] scratch = Array.Empty<byte>();
+        try
+        {
+            int position = 0;
+            for (int r = 0; r < values.RunCount; r++)
+            {
+                ReadOnlySpan<string> run = values.Run(r);
+                for (int i = 0; i < run.Length; i++)
+                {
+                    if (marked && absent[position] != 0)
+                    {
+                        LeafBytes.WriteZeros(writer, size);
+                    }
+                    else
+                    {
+                        LeafBytes.EnsureScratch(ref scratch, size);
+                        Span<byte> padded = scratch.AsSpan(0, size);
+
+                        // The positions are named as for raw bytes (see FixedStringBytesWriter).
+                        if (values.IsSegmented && !marked)
+                        {
+                            Pad(run[i], padded, i, "element");
+                        }
+                        else
+                        {
+                            Pad(run[i], padded, values.FirstRow + position, "row");
+                        }
+
+                        writer.WriteBytes(padded);
+                    }
+
+                    position++;
+                }
+            }
+        }
+        finally
+        {
+            if (scratch.Length != 0)
+            {
+                ArrayPool<byte>.Shared.Return(scratch);
+            }
+        }
+    }
+
+    // Encodes the value into the N bytes of destination, with zero bytes after it.
+    private void Pad(string value, Span<byte> destination, int position, string positionNoun)
+    {
+        if (value is null)
+        {
+            throw new ArgumentException(
+                $"A {typeName} column cannot hold a null value (at {positionNoun} {position}); wrap the type in Nullable to write nulls.",
+                nameof(value));
+        }
+
+        if (!Encoding.UTF8.TryGetBytes(value, destination, out int written))
+        {
+            throw new ArgumentException(
+                $"A {typeName} value at {positionNoun} {position} is {Encoding.UTF8.GetByteCount(value)} bytes in UTF-8; a text value can have at most {size} bytes. Shorten it to {size} bytes or less before writing it; the write path pads a shorter text with zero bytes, but does not truncate.",
+                nameof(value));
+        }
+
+        destination.Slice(written).Clear();
+    }
+}
+
+/// <summary>
+/// Buffers for the byte-run leaves: the placeholder of <c>FixedString(N)</c> (N zero bytes) and the pooled scratch. A
+/// cached tree keeps only N, so a wide type costs no memory until a write needs the bytes.
+/// </summary>
+internal static class LeafBytes
+{
+    // Zero bytes to write from, in chunks of this size. Nothing writes to this array.
+    private static readonly byte[] Chunk = new byte[4096];
+
+    /// <summary>Writes <paramref name="count"/> zero bytes, in chunks of a fixed size.</summary>
+    /// <param name="writer">The writer to encode into.</param>
+    /// <param name="count">The number of zero bytes.</param>
+    public static void WriteZeros(ClickHouseBinaryWriter writer, int count)
+    {
+        for (int left = count; left > 0; left -= Chunk.Length)
+        {
+            writer.WriteBytes(Chunk.AsSpan(0, Math.Min(left, Chunk.Length)));
+        }
+    }
+
+    /// <summary>Gives <paramref name="count"/> zero bytes in <paramref name="scratch"/>.</summary>
+    /// <param name="count">The number of zero bytes.</param>
+    /// <param name="scratch">A pooled or empty array, which is replaced when it is too short.</param>
+    /// <returns>The zero bytes, valid until the next use of <paramref name="scratch"/>.</returns>
+    public static ReadOnlySpan<byte> Zeros(int count, ref byte[] scratch)
+    {
+        EnsureScratch(ref scratch, count);
+        Span<byte> zeros = scratch.AsSpan(0, count);
+        zeros.Clear();
+        return zeros;
+    }
+
+    /// <summary>Makes <paramref name="scratch"/> at least <paramref name="length"/> bytes long.</summary>
+    /// <param name="scratch">A pooled or empty array, which is replaced when it is too short. The old one goes back to the pool.</param>
+    /// <param name="length">The length that is necessary.</param>
+    public static void EnsureScratch(ref byte[] scratch, int length)
+    {
+        if (scratch.Length >= length)
+        {
+            return;
+        }
+
+        byte[] old = scratch;
+        scratch = ArrayPool<byte>.Shared.Rent(length);
+        if (old.Length != 0)
+        {
+            ArrayPool<byte>.Shared.Return(old);
+        }
+    }
+}
