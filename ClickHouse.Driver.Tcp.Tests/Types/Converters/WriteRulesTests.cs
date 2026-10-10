@@ -56,6 +56,82 @@ public class WriteRulesTests
     // The client's POCO insert in each gather tier.
     private static readonly WriteArm[] PocoArms = { ClientArms.PocoWrite, new RowWriteArms.ClientPocoArm("Client.PocoWrite: Delegate", PocoGatherTier.Delegate) };
 
+    /// <summary>
+    /// The CLR types of <see cref="Sources"/> that each column type of <see cref="ColumnTypes"/> is written from: its own
+    /// writes and the write rules of D6. A change of the rules or of the leaf table changes this table; the failure message
+    /// prints the table that the derivation gives.
+    /// </summary>
+    private static readonly Dictionary<string, string> AcceptedSources = new()
+    {
+        ["Int8"] = "sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["UInt8"] = "byte, ByteEnum",
+        ["Int16"] = "short",
+        ["Int32"] = "int, int?, IntEnum, IntEnum?",
+        ["UInt32"] = "uint, uint?, UIntEnum, UIntEnum?",
+        ["Int64"] = "long, long?, LongEnum",
+        ["Bool"] = "bool",
+        ["Float64"] = "double",
+        ["Enum8('a' = 1, 'b' = 2, 'c' = 3)"] = "string, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["Enum16('a' = 1, 'b' = 2, 'c' = 3)"] = "string, short",
+        ["String"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["FixedString(2)"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["Date"] = "DateOnly?",
+        ["DateTime('UTC')"] = "uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
+        ["DateTime64(3, 'UTC')"] = "long, long?, LongEnum, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
+        ["Time"] = "int, int?, IntEnum, IntEnum?, TimeSpan, TimeSpan?",
+        ["UUID"] = "Guid?",
+        ["IPv4"] = "IPAddress, Address",
+        ["Nullable(Int8)"] = "sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["Nullable(Int32)"] = "int, int?, IntEnum, IntEnum?",
+        ["Nullable(UInt32)"] = "uint, uint?, UIntEnum, UIntEnum?",
+        ["Nullable(String)"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["Nullable(Enum8('a' = 1, 'b' = 2, 'c' = 3))"] = "string, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["Nullable(DateTime('UTC'))"] = "uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
+        ["Nullable(Tuple(Int32, String))"] = "(int, string), (int, string)?",
+        ["Nullable(Tuple(DateTime('UTC'), String))"] = "(DateTime, string), (DateTime, string)?",
+        ["LowCardinality(String)"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["LowCardinality(Int32)"] = "int, int?, IntEnum, IntEnum?",
+        ["LowCardinality(Nullable(String))"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["LowCardinality(Nullable(Int32))"] = "int, int?, IntEnum, IntEnum?",
+        ["LowCardinality(DateTime('UTC'))"] = "uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
+        ["LowCardinality(Nullable(DateTime('UTC')))"] = "uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
+        ["LowCardinality(FixedString(2))"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["Array(Int8)"] = "byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["Array(UInt8)"] = "byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["Array(Int32)"] = "int[], uint[], IntEnum[], UIntEnum[]",
+        ["Array(UInt32)"] = "int[], uint[], IntEnum[], UIntEnum[]",
+        ["Array(String)"] = "string[]",
+        ["Array(Array(Int32))"] = "int[][], uint[][]",
+        ["Array(Nullable(Int32))"] = "int?[]",
+        ["Array(DateTime('UTC'))"] = "int[], uint[], IntEnum[], UIntEnum[]",
+        ["Array(IPv4)"] = "Address[]",
+        ["Map(String, Int32)"] = "KeyValuePair<string, int>[]",
+        ["Tuple(Int32, String)"] = "(int, string), (int, string)?",
+        ["Tuple(DateTime('UTC'), String)"] = "(DateTime, string), (DateTime, string)?",
+        ["Variant(Int32, String)"] =
+            "object, string, byte[], sbyte[], SByteEnum[], ByteEnum[], int, int?, uint, uint?, sbyte," +
+            " sbyte?, byte, short, long, long?, double, bool, SByteEnum, SByteEnum?, ByteEnum, IntEnum," +
+            " IntEnum?, UIntEnum, UIntEnum?, LongEnum, int[], uint[], IntEnum[], UIntEnum[], int[][]," +
+            " uint[][], object[], string[], int?[], DateTime, DateTime?, DateTimeOffset," +
+            " DateTimeOffset?, TimeSpan, TimeSpan?, DateOnly?, Guid?, IPAddress, Address, Address[]," +
+            " (int, string), (int, string)?, (DateTime, string), (DateTime, string)?," +
+            " KeyValuePair<string, int>[], KeyValuePair<string, DateTime>[], (double, double), (double," +
+            " double)?",
+        ["Dynamic"] =
+            "object, string, byte[], sbyte[], SByteEnum[], ByteEnum[], int, int?, uint, uint?, sbyte," +
+            " sbyte?, byte, short, long, long?, double, bool, SByteEnum, SByteEnum?, ByteEnum, IntEnum," +
+            " IntEnum?, UIntEnum, UIntEnum?, LongEnum, int[], uint[], IntEnum[], UIntEnum[], int[][]," +
+            " uint[][], object[], string[], int?[], DateTime, DateTime?, DateTimeOffset," +
+            " DateTimeOffset?, TimeSpan, TimeSpan?, DateOnly?, Guid?, IPAddress, Address, Address[]," +
+            " (int, string), (int, string)?, (DateTime, string), (DateTime, string)?," +
+            " KeyValuePair<string, int>[], KeyValuePair<string, DateTime>[], (double, double), (double," +
+            " double)?",
+        ["Point"] = "(double, double), (double, double)?",
+        ["SimpleAggregateFunction(anyLast, Nullable(Int32))"] = "int, int?, IntEnum, IntEnum?",
+        ["SimpleAggregateFunction(sum, Int32)"] = "int, int?, IntEnum, IntEnum?",
+        ["Nested(a Int32)"] = "",
+    };
+
     internal enum SByteEnum : sbyte
     {
         A = 1,
@@ -82,6 +158,16 @@ public class WriteRulesTests
     }
 
     private static IEnumerable<string> Types() => ColumnTypes;
+
+    [Test]
+    public void Derive_EachColumnType_IsWrittenFromTheListedSources()
+    {
+        Dictionary<string, string> actual = ColumnTypes.ToDictionary(
+            type => type,
+            type => string.Join(", ", Sources.Where(source => ConverterDerivation.Default.Derive(type, ConverterHarness.Context, source, ConversionDirection.Write).Succeeded).Select(TypeNames.Of)));
+
+        Assert.That(actual, Is.EquivalentTo(AcceptedSources), "The table is:" + Environment.NewLine + string.Join(Environment.NewLine, actual.Select(entry => $"[\"{entry.Key}\"] = \"{entry.Value}\",")));
+    }
 
     /// <summary>
     /// For each source, the gather with no compiled code writes the bytes of the compiled gather, or fails with the same

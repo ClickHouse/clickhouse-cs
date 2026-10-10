@@ -45,6 +45,61 @@ public class ReadRulesTests
         typeof((double, double)?),
     };
 
+    /// <summary>
+    /// The CLR types of <see cref="Targets"/> that each column type of <see cref="ColumnTypes"/> reads as: its own readings
+    /// and the read rules of D6. A change of the rules or of the leaf table changes this table; the failure message prints
+    /// the table that the derivation gives.
+    /// </summary>
+    private static readonly Dictionary<string, string> AcceptedTargets = new()
+    {
+        ["Int8"] = "object, ValueType, IComparable, IFormattable, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["Int32"] = "object, ValueType, IComparable, IFormattable, int, int?, IntEnum, IntEnum?",
+        ["UInt32"] = "object, ValueType, IComparable, IFormattable, uint, uint?, UIntEnum, UIntEnum?",
+        ["Int64"] = "object, ValueType, IComparable, IFormattable, long, long?",
+        ["Enum8('a' = 1, 'b' = 2)"] = "object, ValueType, IComparable, IFormattable, string, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["String"] = "object, IComparable, IEnumerable, string, byte[]",
+        ["FixedString(4)"] = "object, IEnumerable, IReadOnlyList<SByteEnum>, string, byte[], SByteEnum[], sbyte[]",
+        ["Date"] = "object, ValueType, IComparable, IFormattable, DateOnly?",
+        ["DateTime('UTC')"] =
+            "object, ValueType, IComparable, IFormattable, uint, uint?, UIntEnum, UIntEnum?, DateTime," +
+            " DateTime?, DateTimeOffset, DateTimeOffset?",
+        ["UUID"] = "object, ValueType, IComparable, IFormattable, Guid?",
+        ["Nullable(Int8)"] = "object, ValueType, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["Nullable(Int32)"] = "object, ValueType, int, int?, IntEnum, IntEnum?",
+        ["Nullable(UInt32)"] = "object, ValueType, uint, uint?, UIntEnum, UIntEnum?",
+        ["Nullable(String)"] = "object, IComparable, IEnumerable, string, byte[]",
+        ["Nullable(Enum8('a' = 1, 'b' = 2))"] = "object, ValueType, string, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["Nullable(DateTime('UTC'))"] =
+            "object, ValueType, uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset," +
+            " DateTimeOffset?",
+        ["Nullable(Tuple(String, UInt8))"] = "object, ValueType, (string, byte)?",
+        ["LowCardinality(String)"] = "object, IComparable, IEnumerable, string, byte[]",
+        ["LowCardinality(Int32)"] = "object, ValueType, IComparable, IFormattable, int, int?, IntEnum, IntEnum?",
+        ["LowCardinality(Nullable(String))"] = "object, IComparable, IEnumerable, string, byte[]",
+        ["LowCardinality(Nullable(Int8))"] = "object, ValueType, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["LowCardinality(Nullable(DateTime('UTC')))"] =
+            "object, ValueType, uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset," +
+            " DateTimeOffset?",
+        ["Array(Int8)"] = "object, IEnumerable, IReadOnlyList<SByteEnum>, byte[], SByteEnum[], sbyte[]",
+        ["Array(Int32)"] =
+            "object, IEnumerable, IEnumerable<int>, IReadOnlyList<int>, IntEnum[], UIntEnum[], int[]," +
+            " uint[]",
+        ["Array(UInt32)"] =
+            "object, IEnumerable, IEnumerable<int>, IReadOnlyList<int>, IntEnum[], UIntEnum[], int[]," +
+            " uint[]",
+        ["Array(String)"] = "object, IEnumerable, IEnumerable<string>, object[], string[]",
+        ["Array(Array(UInt32))"] = "object, IEnumerable, int[][], uint[][], object[]",
+        ["Array(Nullable(Int32))"] = "object, IEnumerable, int?[]",
+        ["Array(LowCardinality(String))"] = "object, IEnumerable, IEnumerable<string>, object[], string[]",
+        ["Map(String, Int32)"] = "object, IEnumerable, KeyValuePair<string, int>[], KeyValuePair<byte[], int>[]",
+        ["Tuple(Int32, String)"] = "object, ValueType, IComparable, (int, string), (int, string)?",
+        ["Tuple(String, UInt8)"] = "object, ValueType, IComparable, (byte[], byte), (string, byte)?",
+        ["Variant(String, UInt64)"] = "object",
+        ["Dynamic"] = "object",
+        ["Point"] = "object, ValueType, IComparable, (double, double)?",
+        ["SimpleAggregateFunction(anyLast, Nullable(Int32))"] = "object, ValueType, int, int?, IntEnum, IntEnum?",
+    };
+
     internal enum SByteEnum : sbyte
     {
         A = 1,
@@ -66,6 +121,16 @@ public class ReadRulesTests
     }
 
     private static IEnumerable<string> Types() => ColumnTypes;
+
+    [Test]
+    public void Derive_EachColumnType_ReadsAsTheListedTargets()
+    {
+        Dictionary<string, string> actual = ColumnTypes.ToDictionary(
+            type => type,
+            type => string.Join(", ", Targets.Where(target => ConverterDerivation.Default.Derive(type, DifferentialEngine.Context, target, ConversionDirection.Read).Succeeded).Select(TypeNames.Of)));
+
+        Assert.That(actual, Is.EquivalentTo(AcceptedTargets), "The table is:" + Environment.NewLine + string.Join(Environment.NewLine, actual.Select(entry => $"[\"{entry.Key}\"] = \"{entry.Value}\",")));
+    }
 
     [TestCaseSource(nameof(Types))]
     public void Derive_EachTarget_GivesTheOutcomeOfFillThroughEmitAndPocoMapping(string columnType)

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
+using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
@@ -9,7 +11,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 /// The differential tests: for every case of <see cref="DifferentialCases"/>, each candidate arm of
 /// <see cref="DifferentialRegistry.Current"/> must give the outcome of the client's entry point of its tier (the
 /// baseline), or the outcome that is declared for the facet. The converter arms run their trees through
-/// <c>Fill</c> and through <c>Emit</c>, so the two paths cannot drift apart. No server is necessary. See
+/// <c>Fill</c> and through <c>Emit</c>, so the two paths must give the same outcomes. No server is necessary. See
 /// <see cref="DifferentialEngine"/>.
 /// </summary>
 [TestFixture]
@@ -114,10 +116,22 @@ public class DifferentialTests
     [Test]
     public void Current_FirstCandidateOfEachFacet_IsTheClientsEntryPoint()
     {
+        var client = new Dictionary<Tier, Arm>
+        {
+            [Tier.ReadAs] = ClientArms.ReadAs,
+            [Tier.Poco] = ClientArms.Poco,
+            [Tier.CanRead] = ClientArms.CanRead,
+            [Tier.Write] = ClientArms.Write,
+            [Tier.CanWrite] = ClientArms.CanWrite,
+            [Tier.PocoWrite] = ClientArms.PocoWrite,
+            [Tier.PocoCanWrite] = ClientArms.PocoCanWrite,
+            [Tier.UntypedWrite] = ClientArms.UntypedWrite,
+            [Tier.UntypedCanWrite] = ClientArms.UntypedCanWrite,
+        };
         string[] others = DifferentialCases.All()
             .SelectMany(c => c.Facets())
             .Select(f => (Facet: f, Arm: DifferentialRegistry.Current.CandidatesFor(f).FirstOrDefault()))
-            .Where(x => x.Arm is null || !x.Arm.Name.StartsWith("Client.", StringComparison.Ordinal))
+            .Where(x => !ReferenceEquals(x.Arm, client[x.Facet.Tier]))
             .Select(x => $"{x.Facet}: {x.Arm?.Name ?? "no candidate"}")
             .ToArray();
 
@@ -169,6 +183,39 @@ public class DifferentialTests
     }
 
     [Test]
+    public void Run_EveryCase_TheRowAnswersAreWhetherTheRowInsertsAcceptTheColumn()
+    {
+        string[] disagreements = new[] { (Answer: Tier.PocoCanWrite, Write: Tier.PocoWrite), (Answer: Tier.UntypedCanWrite, Write: Tier.UntypedWrite) }
+            .SelectMany(pair => Facets(pair.Answer)
+                .Select(x => (x.Result, Write: Baseline(x.Report, pair.Write, x.Result.Facet.Input.Label)))
+                .Where(x => x.Write.All.Kind != OutcomeKind.Unavailable && x.Result.Baseline.All.Answer != (x.Write.All.Kind != OutcomeKind.Refused))
+                .Select(x => $"{x.Result.Facet}: {x.Result.Baseline.All}; {pair.Write}: {x.Write.All}"))
+            .ToArray();
+
+        Assert.That(disagreements, Is.Empty);
+    }
+
+    // A column read back as another CLR type holds the same values, so it writes the bytes of the source column, except
+    // where the CLR type holds less: the 100-nanosecond ticks of DateTime, DateTimeOffset, TimeSpan and TimeOnly cannot
+    // hold the counts of a DateTime64 or a Time64 of a scale above 7.
+    [Test]
+    public void Run_EveryCase_AReadBackColumnWritesTheBytesOfTheSourceColumn()
+    {
+        string[] differences = Facets(Tier.Write)
+            .Where(x => x.Result.Facet.Input.Kind == WriteInputKind.ReadBack && !HoldsCountsFinerThanTicks(TypeParser.Parse(x.Report.Case.ColumnType)))
+            .Select(x => (x.Result, Source: Baseline(x.Report, Tier.Write, x.Report.Case.WriteInputs[0].Label)))
+            .SelectMany(x => new[] { Rows.All, Rows.Tail }
+                .Select(rows => (Rows: rows, ReadBack: x.Result.Baseline.For(rows), Source: x.Source.For(rows)))
+                .Where(r => r.ReadBack?.Kind == OutcomeKind.Bytes)
+                .Select(r => (r.Rows, Difference: Outcome.Difference(r.Source, r.ReadBack)))
+                .Where(r => r.Difference is not null)
+                .Select(r => $"{x.Result.Facet} {r.Rows}: {r.Difference}"))
+            .ToArray();
+
+        Assert.That(differences, Is.Empty);
+    }
+
+    [Test]
     public void Run_EveryCase_PocoMappingReadsWhatReadAsReads()
     {
         string[] differences = Facets(Tier.Poco)
@@ -203,6 +250,10 @@ public class DifferentialTests
 
         Assert.That(differences, Is.Empty);
     }
+
+    private static bool HoldsCountsFinerThanTicks(TypeNode node)
+        => (node.Name is "DateTime64" or "Time64") && node.Arguments.Count > 0 && int.Parse(node.Arguments[0].Name, CultureInfo.InvariantCulture) > 7
+            || node.Arguments.Any(HoldsCountsFinerThanTicks);
 
     // The facets of a tier in every case, with the report of their case.
     private static IEnumerable<(CaseReport Report, FacetResult Result)> Facets(Tier tier)
