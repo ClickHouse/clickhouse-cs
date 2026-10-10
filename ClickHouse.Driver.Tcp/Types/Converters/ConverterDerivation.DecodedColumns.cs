@@ -13,7 +13,9 @@ internal enum DecodedPart
 
     /// <summary>
     /// A <c>DateTime64</c>, <c>Time64</c> or <c>Enum</c> whose values mean other values, also in <c>Nullable</c>,
-    /// <c>LowCardinality</c> and <c>SimpleAggregateFunction</c>: converted through the CLR type of their meaning.
+    /// <c>LowCardinality</c> and <c>SimpleAggregateFunction</c>: converted through the CLR type of their meaning. Also a
+    /// <c>String</c> or <c>FixedString</c> written into another type of a string (another width, <c>Nullable</c> or
+    /// <c>LowCardinality</c>): converted through the bytes of the values, so no byte is read as text.
     /// </summary>
     Converted,
 
@@ -76,25 +78,29 @@ internal readonly struct DecodedPartPlan
 }
 
 /// <summary>
-/// The write of a column that a query read as one type into a column of another type, where the canonical values of the
-/// two types mean other values: the count of a <c>DateTime64</c> or a <c>Time64</c> is a count at the scale of its type,
-/// and the ordinal of an <c>Enum</c> means the label that its type declares for it. The insert converts only the parts
-/// whose values mean other values, through the meaning of their values: a time as <see cref="DateTimeOffset"/>, a
-/// duration as <see cref="TimeSpan"/>, a label as <see cref="string"/>. It writes every other part from its storage, so
-/// their bytes do not change.
+/// The write of a column that a query read as one type into a column of another type, where a write through the CLR type
+/// of the column would change its values. The canonical values of the two types can mean other values: the count of a
+/// <c>DateTime64</c> or a <c>Time64</c> is a count at the scale of its type, and the ordinal of an <c>Enum</c> means the
+/// label that its type declares for it. Or a <c>String</c> goes into another type of a string, and its CLR type
+/// <see cref="string"/> reads bytes that are not UTF-8 as U+FFFD. The insert converts only those parts: through the
+/// meaning of their values (a time as <see cref="DateTimeOffset"/>, a duration as <see cref="TimeSpan"/>, a label as
+/// <see cref="string"/>), or through their bytes (<c>byte[]</c>). It writes every other part from its storage,
+/// so their bytes do not change.
 /// </summary>
 internal sealed partial class ConverterDerivation
 {
     /// <summary>
-    /// Whether <paramref name="column"/> is the column that a query of <paramref name="source"/> reads, and its canonical
-    /// values mean other values in <paramref name="target"/>.
+    /// Whether <paramref name="column"/> is the column that a query of <paramref name="source"/> reads, and a write through
+    /// its CLR type would change its values in <paramref name="target"/>: a part whose canonical values mean other values
+    /// (<see cref="ChangesMeaning(string, string)"/>), or a <c>String</c> or <c>FixedString</c> part written into another
+    /// type of a string.
     /// </summary>
     /// <param name="column">The column to write.</param>
     /// <param name="source">The type that the column says it holds.</param>
     /// <param name="target">The type of the target column.</param>
     /// <param name="context">The resolution context of the target.</param>
     /// <returns>Whether the insert writes the column part by part (<see cref="PlanDecodedPart"/>).</returns>
-    internal bool IsReadColumnOfAnotherMeaning(IColumn column, string source, string target, in ResolveContext context)
+    internal bool IsReadColumnWrittenByParts(IColumn column, string source, string target, in ResolveContext context)
     {
         if (!TryParse(source, out TypeNode sourceNode) || !TryParse(target, out TypeNode targetNode))
         {
@@ -113,7 +119,7 @@ internal sealed partial class ConverterDerivation
             return false;
         }
 
-        return sourceCodec.CanWrite(column) && ChangesMeaning(sourceNode, targetNode);
+        return sourceCodec.CanWrite(column) && (ChangesMeaning(sourceNode, targetNode) || ChangesStringShape(sourceNode, targetNode));
     }
 
     /// <summary>How the insert writes one part of a column that a query read as <paramref name="source"/>.</summary>
@@ -124,12 +130,13 @@ internal sealed partial class ConverterDerivation
     {
         TypeNode sourceNode = WithoutAggregateFunction(TypeParser.Parse(source));
         TypeNode targetNode = WithoutAggregateFunction(TypeParser.Parse(target));
-        if (!ChangesMeaning(sourceNode, targetNode))
+        if (!ChangesMeaning(sourceNode, targetNode) && !ChangesStringShape(sourceNode, targetNode))
         {
             return new DecodedPartPlan(DecodedPart.Kept);
         }
 
-        if (MeaningFamily(CanonicalName(Unwrapped(sourceNode))) is not null)
+        string leaf = CanonicalName(Unwrapped(sourceNode));
+        if (MeaningFamily(leaf) is not null || (IsStringLeaf(leaf) && IsStringLeaf(CanonicalName(Unwrapped(targetNode)))))
         {
             return new DecodedPartPlan(DecodedPart.Converted);
         }
@@ -173,7 +180,7 @@ internal sealed partial class ConverterDerivation
 
     /// <summary>
     /// The conversion of a part of kind <see cref="DecodedPart.Converted"/>: a reader of the source type and a writer of the
-    /// target type, over the CLR type that holds the meaning of the values.
+    /// target type, over the CLR type that holds the meaning of the values, or their bytes for a string.
     /// </summary>
     /// <param name="source">The source type of the part.</param>
     /// <param name="target">The target type of the part.</param>
@@ -328,8 +335,85 @@ internal sealed partial class ConverterDerivation
         return false;
     }
 
-    // The CLR type that holds the meaning of the values of a part of kind Converted: a time, a duration or a label, through
-    // Nullable, LowCardinality and SimpleAggregateFunction. Null, with the reason, when no CLR type holds the values
+    // Whether a String or a FixedString of the source goes, at the same place, into another type of a string: another
+    // width, or other Nullable and LowCardinality wrappers. The CLR type of a String column is string, whose text does not
+    // keep bytes that are not UTF-8, so the write reads the bytes of such a part. A Variant and a Nested are written only
+    // from their own layout, so they have no such place.
+    private bool ChangesStringShape(TypeNode source, TypeNode target)
+    {
+        TypeNode sourceLeaf = Unwrapped(source);
+        TypeNode targetLeaf = Unwrapped(target);
+        string sourceName = CanonicalName(sourceLeaf);
+        string targetName = CanonicalName(targetLeaf);
+        if (IsStringLeaf(sourceName) && IsStringLeaf(targetName))
+        {
+            return !SameType(source, target);
+        }
+
+        if (sourceName != targetName)
+        {
+            return false;
+        }
+
+        switch (sourceName)
+        {
+            case "Array" when sourceLeaf.Arguments.Count == 1 && targetLeaf.Arguments.Count == 1:
+                return ChangesStringShape(sourceLeaf.Arguments[0], targetLeaf.Arguments[0]);
+
+            case "Map" when sourceLeaf.Arguments.Count == 2 && targetLeaf.Arguments.Count == 2:
+                return ChangesStringShape(sourceLeaf.Arguments[0], targetLeaf.Arguments[0]) || ChangesStringShape(sourceLeaf.Arguments[1], targetLeaf.Arguments[1]);
+
+            case "Tuple":
+            {
+                (string Name, TypeNode Type)[] sourceElements = NamedElementParser.Split(sourceLeaf);
+                (string Name, TypeNode Type)[] targetElements = NamedElementParser.Split(targetLeaf);
+                if (sourceElements.Length != targetElements.Length)
+                {
+                    return false;
+                }
+
+                for (int i = 0; i < sourceElements.Length; i++)
+                {
+                    if (ChangesStringShape(sourceElements[i].Type, targetElements[i].Type))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool IsStringLeaf(string name) => name is "String" or "FixedString";
+
+    // Whether two types are the same type: the same names (under any alias), arguments and wrappers. A
+    // SimpleAggregateFunction is the type of its values.
+    private bool SameType(TypeNode left, TypeNode right)
+    {
+        left = WithoutAggregateFunction(left);
+        right = WithoutAggregateFunction(right);
+        if (CanonicalName(left) != CanonicalName(right) || left.Arguments.Count != right.Arguments.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < left.Arguments.Count; i++)
+        {
+            if (!SameType(left.Arguments[i], right.Arguments[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // The CLR type that holds the meaning of the values of a part of kind Converted: a time, a duration, a label or the
+    // bytes of a string, through Nullable, LowCardinality and SimpleAggregateFunction. Null, with the reason, when no CLR type holds the values
     // without a loss.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     private Type MeaningType(TypeNode node, out string reason)
@@ -356,6 +440,10 @@ internal sealed partial class ConverterDerivation
             case "Enum8" or "Enum16" or "Enum":
                 return typeof(string);
 
+            // The bytes of a string, which the text of its CLR type string would not keep.
+            case "String" or "FixedString":
+                return typeof(byte[]);
+
             case "Nullable" when node.Arguments.Count == 1:
             {
                 Type inner = MeaningType(node.Arguments[0], out reason);
@@ -369,7 +457,7 @@ internal sealed partial class ConverterDerivation
                 return MeaningType(node.Arguments[1], out reason);
 
             default:
-                throw new InvalidOperationException($"{node} is not a DateTime64, a Time64 or an Enum in Nullable, LowCardinality or SimpleAggregateFunction.");
+                throw new InvalidOperationException($"{node} is not a DateTime64, a Time64, an Enum, a String or a FixedString in Nullable, LowCardinality or SimpleAggregateFunction.");
         }
     }
 
