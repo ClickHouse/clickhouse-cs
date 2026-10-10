@@ -14,10 +14,10 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// The write rules of D6 (<see cref="WriteRules"/>): the derivation accepts every CLR type that the POCO write plan
-/// accepted, and the writes give the same bytes and the same failures, for a matrix of column types and CLR source types
-/// that the differential case list does not have (enums, casts, nullable sources and targets, the array casts that read
-/// elements as another type). The columnar insert and the untyped rows take the same rules.
+/// The write rules of D6 (<see cref="WriteRules"/>), for a matrix of column types and CLR source types that the
+/// differential case list does not have (enums, casts, nullable sources and targets, the array casts that read elements
+/// as another type): the two gather tiers of the POCO write plan give the same outcome, and the columnar insert, the POCO
+/// write plan, the untyped rows and <c>ClickHouseTcpTypes.CanWrite</c> accept the same CLR types.
 /// </summary>
 [TestFixture]
 public class WriteRulesTests
@@ -51,50 +51,86 @@ public class WriteRulesTests
         typeof(KeyValuePair<string, int>[]), typeof(KeyValuePair<string, DateTime>[]), typeof((double, double)), typeof((double, double)?),
     };
 
-    /// <summary>
-    /// The CLR types that the derivation writes a column type from and the old POCO write plan refused (SPEC D7, the
-    /// coordinator's ruling on the D6 write rules).
-    /// </summary>
-    internal static readonly (string ColumnType, Type Source, string Reason)[] Additions =
-    {
-        ("FixedString(2)", typeof(string), FixedStringFromText),
-        ("LowCardinality(FixedString(2))", typeof(string), FixedStringFromText),
-        ("LowCardinality(String)", typeof(byte[]), Issue792),
-        ("LowCardinality(String)", typeof(sbyte[]), Issue792Cast),
-        ("LowCardinality(String)", typeof(SByteEnum[]), Issue792Cast),
-        ("LowCardinality(String)", typeof(ByteEnum[]), Issue792Cast),
-        ("LowCardinality(Nullable(String))", typeof(byte[]), Issue792),
-        ("LowCardinality(Nullable(String))", typeof(sbyte[]), Issue792Cast),
-        ("LowCardinality(Nullable(String))", typeof(SByteEnum[]), Issue792Cast),
-        ("LowCardinality(Nullable(String))", typeof(ByteEnum[]), Issue792Cast),
-        ("LowCardinality(DateTime('UTC'))", typeof(DateTime?), NullableRules),
-        ("LowCardinality(DateTime('UTC'))", typeof(DateTimeOffset?), NullableRules),
-        ("LowCardinality(Nullable(DateTime('UTC')))", typeof(DateTime), NullableRules),
-        ("LowCardinality(Nullable(DateTime('UTC')))", typeof(DateTimeOffset), NullableRules),
-        ("Nullable(Tuple(DateTime('UTC'), String))", typeof((DateTime, string)), NullableRules),
-        ("Tuple(DateTime('UTC'), String)", typeof((DateTime, string)?), NullableRules),
-    };
-
-    /// <summary>
-    /// The writes that the old row inserts accepted and then failed, and that the converter layer writes (D7): a Variant
-    /// value whose CLR type is the canonical type of no alternative goes to the alternative that is written from it.
-    /// </summary>
-    internal static readonly (string ColumnType, Type Source, string Reason)[] OutcomeChanges =
-    {
-        ("Variant(Int32, String)", typeof(byte[]), VariantPlacement),
-    };
-
-    private const string VariantPlacement = "A Variant value of no alternative's canonical type goes to the alternative that is written from it (D7).";
-
-    private const string FixedStringFromText = "FixedString(N) is written from string (D7).";
-    private const string Issue792 = "LowCardinality(String) is written from byte[] (ClickHouse/integrations#792).";
-    private const string Issue792Cast = "The cast rule writes an array that the CLR reads as byte[] through LowCardinality(String) from byte[].";
-    private const string NullableRules = "The nullable rules apply to every CLR type that the type is written from, not only to the codec's preferred types.";
-
     private static readonly MethodInfo RunMethod = typeof(WriteRulesTests).GetMethod(nameof(Run), BindingFlags.NonPublic | BindingFlags.Static);
 
     // The client's POCO insert in each gather tier.
     private static readonly WriteArm[] PocoArms = { ClientArms.PocoWrite, new RowWriteArms.ClientPocoArm("Client.PocoWrite: Delegate", PocoGatherTier.Delegate) };
+
+    /// <summary>
+    /// The CLR types of <see cref="Sources"/> that each column type of <see cref="ColumnTypes"/> is written from: its own
+    /// writes and the write rules of D6. A change of the rules or of the leaf table changes this table; the failure message
+    /// prints the table that the derivation gives.
+    /// </summary>
+    private static readonly Dictionary<string, string> AcceptedSources = new()
+    {
+        ["Int8"] = "sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["UInt8"] = "byte, ByteEnum",
+        ["Int16"] = "short",
+        ["Int32"] = "int, int?, IntEnum, IntEnum?",
+        ["UInt32"] = "uint, uint?, UIntEnum, UIntEnum?",
+        ["Int64"] = "long, long?, LongEnum",
+        ["Bool"] = "bool",
+        ["Float64"] = "double",
+        ["Enum8('a' = 1, 'b' = 2, 'c' = 3)"] = "string, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["Enum16('a' = 1, 'b' = 2, 'c' = 3)"] = "string, short",
+        ["String"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["FixedString(2)"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["Date"] = "DateOnly?",
+        ["DateTime('UTC')"] = "uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
+        ["DateTime64(3, 'UTC')"] = "long, long?, LongEnum, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
+        ["Time"] = "int, int?, IntEnum, IntEnum?, TimeSpan, TimeSpan?",
+        ["UUID"] = "Guid?",
+        ["IPv4"] = "IPAddress, Address",
+        ["Nullable(Int8)"] = "sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["Nullable(Int32)"] = "int, int?, IntEnum, IntEnum?",
+        ["Nullable(UInt32)"] = "uint, uint?, UIntEnum, UIntEnum?",
+        ["Nullable(String)"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["Nullable(Enum8('a' = 1, 'b' = 2, 'c' = 3))"] = "string, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["Nullable(DateTime('UTC'))"] = "uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
+        ["Nullable(Tuple(Int32, String))"] = "(int, string), (int, string)?",
+        ["Nullable(Tuple(DateTime('UTC'), String))"] = "(DateTime, string), (DateTime, string)?",
+        ["LowCardinality(String)"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["LowCardinality(Int32)"] = "int, int?, IntEnum, IntEnum?",
+        ["LowCardinality(Nullable(String))"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["LowCardinality(Nullable(Int32))"] = "int, int?, IntEnum, IntEnum?",
+        ["LowCardinality(DateTime('UTC'))"] = "uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
+        ["LowCardinality(Nullable(DateTime('UTC')))"] = "uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
+        ["LowCardinality(FixedString(2))"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["Array(Int8)"] = "byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["Array(UInt8)"] = "byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["Array(Int32)"] = "int[], uint[], IntEnum[], UIntEnum[]",
+        ["Array(UInt32)"] = "int[], uint[], IntEnum[], UIntEnum[]",
+        ["Array(String)"] = "string[]",
+        ["Array(Array(Int32))"] = "int[][], uint[][]",
+        ["Array(Nullable(Int32))"] = "int?[]",
+        ["Array(DateTime('UTC'))"] = "int[], uint[], IntEnum[], UIntEnum[]",
+        ["Array(IPv4)"] = "Address[]",
+        ["Map(String, Int32)"] = "KeyValuePair<string, int>[]",
+        ["Tuple(Int32, String)"] = "(int, string), (int, string)?",
+        ["Tuple(DateTime('UTC'), String)"] = "(DateTime, string), (DateTime, string)?",
+        ["Variant(Int32, String)"] =
+            "object, string, byte[], sbyte[], SByteEnum[], ByteEnum[], int, int?, uint, uint?, sbyte," +
+            " sbyte?, byte, short, long, long?, double, bool, SByteEnum, SByteEnum?, ByteEnum, IntEnum," +
+            " IntEnum?, UIntEnum, UIntEnum?, LongEnum, int[], uint[], IntEnum[], UIntEnum[], int[][]," +
+            " uint[][], object[], string[], int?[], DateTime, DateTime?, DateTimeOffset," +
+            " DateTimeOffset?, TimeSpan, TimeSpan?, DateOnly?, Guid?, IPAddress, Address, Address[]," +
+            " (int, string), (int, string)?, (DateTime, string), (DateTime, string)?," +
+            " KeyValuePair<string, int>[], KeyValuePair<string, DateTime>[], (double, double), (double," +
+            " double)?",
+        ["Dynamic"] =
+            "object, string, byte[], sbyte[], SByteEnum[], ByteEnum[], int, int?, uint, uint?, sbyte," +
+            " sbyte?, byte, short, long, long?, double, bool, SByteEnum, SByteEnum?, ByteEnum, IntEnum," +
+            " IntEnum?, UIntEnum, UIntEnum?, LongEnum, int[], uint[], IntEnum[], UIntEnum[], int[][]," +
+            " uint[][], object[], string[], int?[], DateTime, DateTime?, DateTimeOffset," +
+            " DateTimeOffset?, TimeSpan, TimeSpan?, DateOnly?, Guid?, IPAddress, Address, Address[]," +
+            " (int, string), (int, string)?, (DateTime, string), (DateTime, string)?," +
+            " KeyValuePair<string, int>[], KeyValuePair<string, DateTime>[], (double, double), (double," +
+            " double)?",
+        ["Point"] = "(double, double), (double, double)?",
+        ["SimpleAggregateFunction(anyLast, Nullable(Int32))"] = "int, int?, IntEnum, IntEnum?",
+        ["SimpleAggregateFunction(sum, Int32)"] = "int, int?, IntEnum, IntEnum?",
+        ["Nested(a Int32)"] = "",
+    };
 
     internal enum SByteEnum : sbyte
     {
@@ -123,63 +159,37 @@ public class WriteRulesTests
 
     private static IEnumerable<string> Types() => ColumnTypes;
 
-    [TestCaseSource(nameof(Types))]
-    public void Derive_EachSource_AcceptsWhatThePocoWritePlanAcceptedAndTheListedAdditions(string columnType)
-    {
-        IColumnCodec codec = ConverterHarness.Codec(columnType);
-        var differences = new List<string>();
-        foreach (Type source in Sources)
-        {
-            bool old = LegacyPocoWriteConversion.TryChooseWriteType(codec, source, out _);
-            bool derived = ConverterDerivation.Default.Derive(columnType, ConverterHarness.Context, source, ConversionDirection.Write).Succeeded;
-            bool added = Additions.Any(addition => addition.ColumnType == columnType && addition.Source == source);
-            if (derived != (old || added) || (old && added))
-            {
-                differences.Add($"{TypeNames.Of(source)}: derived {derived}, old {old}, listed as an addition {added}");
-            }
-        }
-
-        Assert.That(differences, Is.Empty, string.Join(Environment.NewLine, differences));
-    }
-
     [Test]
-    public void Additions_EveryEntry_IsATypeAndSourceOfTheMatrix()
+    public void Derive_EachColumnType_IsWrittenFromTheListedSources()
     {
-        foreach ((string type, Type source, _) in Additions)
-        {
-            Assert.That(ColumnTypes, Does.Contain(type));
-            Assert.That(Sources, Does.Contain(source));
-        }
+        Dictionary<string, string> actual = ColumnTypes.ToDictionary(
+            type => type,
+            type => string.Join(", ", Sources.Where(source => ConverterDerivation.Default.Derive(type, ConverterHarness.Context, source, ConversionDirection.Write).Succeeded).Select(TypeNames.Of)));
+
+        Assert.That(actual, Is.EquivalentTo(AcceptedSources), "The table is:" + Environment.NewLine + string.Join(Environment.NewLine, actual.Select(entry => $"[\"{entry.Key}\"] = \"{entry.Value}\",")));
     }
 
     /// <summary>
-    /// For each source that the old POCO write plan accepted, the plan of today writes the same bytes, or fails with the
-    /// same exception and text (a NULL that the column cannot hold, a value that the column type refuses), in both gather
-    /// tiers, for all rows and from row 1, with and without a NULL at row 1.
+    /// For each source, the gather with no compiled code writes the bytes of the compiled gather, or fails with the same
+    /// exception and text (a NULL that the column cannot hold, a value that the column type refuses), or refuses alike,
+    /// for all rows and from row 1, with and without a NULL at row 1.
     /// </summary>
     [TestCaseSource(nameof(Types))]
-    public void PocoWrite_EachSourceThatTheOldPlanAccepted_GivesTheOldOutcome(string columnType)
+    public void PocoWrite_EachSource_GivesTheSameOutcomeInBothGatherTiers(string columnType)
     {
-        IColumnCodec codec = ConverterHarness.Codec(columnType);
         var differences = new List<string>();
-        foreach (Type source in Sources.Where(source => LegacyPocoWriteConversion.TryChooseWriteType(codec, source, out _)))
+        foreach (Type source in Sources)
         {
             foreach (bool withNull in new[] { false, true })
             {
                 foreach (int start in new[] { 0, 1 })
                 {
                     Array values = Samples(source, withNull);
-                    Outcome old = WriteOutcome(ReferenceArms.PocoWrite, source, values, columnType, start);
-                    foreach (WriteArm arm in PocoArms)
+                    Outcome compiled = WriteOutcome(PocoArms[0], source, values, columnType, start);
+                    Outcome viaDelegates = WriteOutcome(PocoArms[1], source, values, columnType, start);
+                    if (Differential.Outcome.Difference(compiled, viaDelegates) is string difference)
                     {
-                        Outcome now = WriteOutcome(arm, source, values, columnType, start);
-                        string difference = IsOutcomeChange(columnType, source)
-                            ? old.Kind == OutcomeKind.Failed && now.Kind == OutcomeKind.Bytes ? null : "a listed change, which the old plan fails and the plan of today writes"
-                            : Differential.Outcome.Difference(old, now);
-                        if (difference is not null)
-                        {
-                            differences.Add($"{arm.Name}: {TypeNames.Of(source)}{(withNull ? " with a NULL" : string.Empty)} from row {start}: {now}; old {old}: {difference}");
-                        }
+                        differences.Add($"{TypeNames.Of(source)}{(withNull ? " with a NULL" : string.Empty)} from row {start}: {PocoArms[1].Name} {viaDelegates}; {PocoArms[0].Name} {compiled}: {difference}");
                     }
                 }
             }
@@ -254,12 +264,11 @@ public class WriteRulesTests
     }
 
     /// <summary>
-    /// For the boxed values of each source, the untyped insert of today gives the outcome of the old one wherever the old
-    /// one accepted the values, and accepts the values exactly when <c>ClickHouseTcpTypes.CanWrite</c> says true for the
-    /// CLR type of the values.
+    /// For the boxed values of each source, the untyped insert accepts the values exactly when
+    /// <c>ClickHouseTcpTypes.CanWrite</c> says true for the CLR type of the values.
     /// </summary>
     [TestCaseSource(nameof(Types))]
-    public void UntypedWrite_EachSource_GivesTheOldOutcomeAndTheAnswerOfCanWrite(string columnType)
+    public void UntypedWrite_EachSource_AcceptsTheValuesExactlyWhenCanWriteSaysTrue(string columnType)
     {
         var differences = new List<string>();
         foreach (Type source in Sources)
@@ -272,16 +281,7 @@ public class WriteRulesTests
                 bool canWrite = ClickHouseTcpTypes.CanWrite(columnType, present);
                 foreach (int start in new[] { 0, 1 })
                 {
-                    Outcome old = WriteOutcome(ReferenceArms.UntypedWrite, source, values, columnType, start);
                     Outcome now = WriteOutcome(ClientArms.UntypedWrite, source, values, columnType, start);
-                    string difference = IsOutcomeChange(columnType, source)
-                        ? old.Kind == OutcomeKind.Failed && now.Kind == OutcomeKind.Bytes ? null : "a listed change, which the old insert fails and the insert of today writes"
-                        : old.Kind != OutcomeKind.Refused ? Differential.Outcome.Difference(old, now) : null;
-                    if (difference is not null)
-                    {
-                        differences.Add($"{TypeNames.Of(source)}{(withNull ? " with a NULL" : string.Empty)} from row {start}: {now}; old {old}: {difference}");
-                    }
-
                     if (now.Kind == OutcomeKind.Refused == canWrite)
                     {
                         differences.Add($"{TypeNames.Of(source)}: CanWrite({TypeNames.Of(present)}) {canWrite}, untyped {now}");
@@ -321,12 +321,12 @@ public class WriteRulesTests
 
     /// <summary>
     /// An untyped column whose first value is written through a cast takes later values of the type that it is written
-    /// as, also of the source type: the untyped insert of today writes them as the old one did.
+    /// as, also of the source type, and writes the bytes of the columnar insert of the values as that type.
     /// </summary>
-    [TestCase("IPv4")]
-    [TestCase("Array(Int32)")]
-    [TestCase("String")]
-    public void UntypedWrite_FirstValueWrittenThroughACast_TakesLaterValuesOfTheTypeThatItIsWrittenAs(string columnType)
+    [TestCase("IPv4", typeof(IPAddress))]
+    [TestCase("Array(Int32)", typeof(int[]))]
+    [TestCase("String", typeof(byte[]))]
+    public void UntypedWrite_FirstValueWrittenThroughACast_TakesLaterValuesOfTheTypeThatItIsWrittenAs(string columnType, Type writtenAs)
     {
         object[] values = columnType switch
         {
@@ -335,35 +335,33 @@ public class WriteRulesTests
             _ => new object[] { new sbyte[] { -1 }, new byte[] { 0x41, 0x42 }, new sbyte[] { 1 } },
         };
 
-        Outcome old = WriteOutcome(ReferenceArms.UntypedWrite, typeof(object), values, columnType, start: 0);
-        Outcome now = WriteOutcome(ClientArms.UntypedWrite, typeof(object), values, columnType, start: 0);
+        // The CLR cast puts each value into an array of the type that the column is written as.
+        Array typed = Array.CreateInstance(writtenAs, values.Length);
+        Array.Copy(values, typed, values.Length);
+        Outcome columnar = WriteOutcome(ClientArms.Write, writtenAs, typed, columnType, start: 0);
+        Outcome untyped = WriteOutcome(ClientArms.UntypedWrite, typeof(object), values, columnType, start: 0);
 
         Assert.Multiple(() =>
         {
-            Assert.That(now.Kind, Is.EqualTo(OutcomeKind.Bytes), now.ToString());
-            Assert.That(Differential.Outcome.Difference(old, now), Is.Null, $"today {now}; old {old}");
+            Assert.That(untyped.Kind, Is.EqualTo(OutcomeKind.Bytes), untyped.ToString());
+            Assert.That(Differential.Outcome.Difference(columnar, untyped), Is.Null, $"untyped {untyped}; columnar {columnar}");
         });
     }
 
-    /// <summary>The reinterpretation keeps the bits of each element, as the old POCO write plan wrote them.</summary>
+    /// <summary>The reinterpretation keeps the bits of each element.</summary>
     [Test]
     public void PocoWrite_UInt32ArrayIntoAnInt32Array_WritesTheBitsOfEachElement()
     {
         Array values = new[] { new[] { 3_000_000_000u }, Array.Empty<uint>(), new[] { 7u } };
 
-        Outcome old = WriteOutcome(ReferenceArms.PocoWrite, typeof(uint[]), values, "Array(Int32)", start: 0);
         Outcome now = WriteOutcome(ClientArms.PocoWrite, typeof(uint[]), values, "Array(Int32)", start: 0);
 
         Assert.Multiple(() =>
         {
             Assert.That(now.Kind, Is.EqualTo(OutcomeKind.Bytes), now.ToString());
-            Assert.That(Differential.Outcome.Difference(old, now), Is.Null);
             Assert.That(now.Bytes[^8..], Is.EqualTo(new byte[] { 0x00, 0x5E, 0xD0, 0xB2, 7, 0, 0, 0 }), "3000000000 is the Int32 -1294967296");
         });
     }
-
-    private static bool IsOutcomeChange(string columnType, Type source)
-        => OutcomeChanges.Any(change => change.ColumnType == columnType && change.Source == source);
 
     // The values of a source type: three values that most column types of the matrix take, with a NULL at row 1 when
     // asked and the type holds one.

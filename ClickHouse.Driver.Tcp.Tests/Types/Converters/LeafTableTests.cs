@@ -2,16 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using ClickHouse.Driver.Tcp.Tests.Differential;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// Pins the leaf table to the leaf codecs: each leaf reads as exactly the CLR types that its codec offers and writes
-/// from exactly the CLR types that its codec writes, so the derivation answers every (type, CLR type) question as
-/// the current <see cref="LegacyColumnProjection.Offers"/> and <see cref="IColumnCodec.CanWriteElementType"/> do. The one
-/// pair that the table adds is <c>FixedString</c> from <see cref="string"/> (<see cref="Additions"/>).
+/// Pins the leaf table: the counts of its pairs, every registered name as a leaf or a composite, the read pairs of each
+/// leaf, and each leaf writes from exactly the CLR types that its codec writes
+/// (<see cref="IColumnCodec.CanWriteElementType"/>). The one write pair that the table adds is <c>FixedString</c> from
+/// <see cref="string"/> (<see cref="Additions"/>).
 /// </summary>
 [TestFixture]
 public class LeafTableTests
@@ -98,13 +99,70 @@ public class LeafTableTests
         });
     }
 
-    [TestCaseSource(nameof(SampleTypes))]
-    public void ReadTypes_SampleType_AreTheReadableTypesOfItsCodec(string type)
-    {
-        IColumnCodec codec = ConverterHarness.Codec(type);
-
-        Assert.That(LeafOf(type).ReadTypes(codec), Is.EquivalentTo(codec.ReadableElementTypes));
-    }
+    /// <summary>
+    /// The read pairs of the leaf of each sample type, in table order: the type that the decoded column stores, then the
+    /// conversions. They are the readings that the client offers for each leaf.
+    /// </summary>
+    [TestCase("UInt8", "byte")]
+    [TestCase("Int8", "sbyte")]
+    [TestCase("UInt16", "ushort")]
+    [TestCase("Int16", "short")]
+    [TestCase("UInt32", "uint")]
+    [TestCase("Int32", "int")]
+    [TestCase("UInt64", "ulong")]
+    [TestCase("Int64", "long")]
+    [TestCase("UInt128", "UInt128")]
+    [TestCase("Int128", "Int128")]
+    [TestCase("UInt256", "UInt256")]
+    [TestCase("Int256", "Int256")]
+    [TestCase("Bool", "bool")]
+    [TestCase("Float32", "float")]
+    [TestCase("Float64", "double")]
+    [TestCase("BFloat16", "float")]
+    [TestCase("String", "string, byte[]")]
+    [TestCase("FixedString(4)", "byte[], string")]
+    [TestCase("JSON", "string")]
+    [TestCase("Date", "DateOnly")]
+    [TestCase("Date32", "DateOnly")]
+    [TestCase("UUID", "Guid")]
+    [TestCase("IPv4", "IPAddress")]
+    [TestCase("IPv6", "IPAddress")]
+    [TestCase("Nothing", "object")]
+    [TestCase("Time", "int, TimeSpan, TimeOnly")]
+    [TestCase("Time64(0)", "long, TimeSpan, TimeOnly")]
+    [TestCase("Time64(3)", "long, TimeSpan, TimeOnly")]
+    [TestCase("Time64(9)", "long, TimeSpan, TimeOnly")]
+    [TestCase("DateTime", "uint, DateTimeOffset, DateTime")]
+    [TestCase("DateTime('UTC')", "uint, DateTimeOffset, DateTime")]
+    [TestCase("DateTime('Asia/Kolkata')", "uint, DateTimeOffset, DateTime")]
+    [TestCase("DateTime64(0, 'Europe/Berlin')", "long, DateTimeOffset, DateTime")]
+    [TestCase("DateTime64(3)", "long, DateTimeOffset, DateTime")]
+    [TestCase("DateTime64(9, 'UTC')", "long, DateTimeOffset, DateTime")]
+    [TestCase("Enum8('a' = -1, 'b' = 127, 'c' = 5)", "sbyte, string")]
+    [TestCase("Enum16('x' = -32768, 'y' = 32767)", "short, string")]
+    [TestCase("Enum('p' = 1, 'q' = 2)", "sbyte, string")]
+    [TestCase("Enum('big' = 1000, 'small' = -1)", "short, string")]
+    [TestCase("Decimal(9, 2)", "decimal")]
+    [TestCase("Decimal(18, 4)", "decimal")]
+    [TestCase("Decimal(38, 10)", "ClickHouseTcpDecimal")]
+    [TestCase("Decimal(76, 20)", "ClickHouseTcpDecimal")]
+    [TestCase("Decimal32(3)", "decimal")]
+    [TestCase("Decimal64(6)", "decimal")]
+    [TestCase("Decimal128(10)", "ClickHouseTcpDecimal")]
+    [TestCase("Decimal256(20)", "ClickHouseTcpDecimal")]
+    [TestCase("IntervalNanosecond", "long")]
+    [TestCase("IntervalMicrosecond", "long")]
+    [TestCase("IntervalMillisecond", "long")]
+    [TestCase("IntervalSecond", "long")]
+    [TestCase("IntervalMinute", "long")]
+    [TestCase("IntervalHour", "long")]
+    [TestCase("IntervalDay", "long")]
+    [TestCase("IntervalWeek", "long")]
+    [TestCase("IntervalMonth", "long")]
+    [TestCase("IntervalQuarter", "long")]
+    [TestCase("IntervalYear", "long")]
+    public void ReadTypes_SampleType_AreTheListedTypes(string type, string readTypes)
+        => Assert.That(string.Join(", ", LeafOf(type).ReadTypes(ConverterHarness.Codec(type)).Select(TypeNames.Of)), Is.EqualTo(readTypes));
 
     [TestCaseSource(nameof(SampleTypes))]
     public void WriteTypes_SampleType_AreTheWritableTypesOfItsCodec(string type)
@@ -119,12 +177,12 @@ public class LeafTableTests
     }
 
     /// <summary>
-    /// The derivation succeeds for exactly the CLR types that the current read and write accept, and for the
-    /// <see cref="Additions"/>. The reads are the leaf's own readings (<see cref="ConverterDerivation.DeriveNode"/>), without
-    /// the read rules of D6, which apply to every column type (<see cref="ReadRulesTests"/>).
+    /// The derivation writes from exactly the CLR types that the codec writes and the <see cref="Additions"/>. These are
+    /// the leaf's own writes (<see cref="ConverterDerivation.DeriveNode"/>), without the rules of D6, which apply to every
+    /// column type (<see cref="WriteRulesTests"/>).
     /// </summary>
     [TestCaseSource(nameof(SampleTypes))]
-    public void Derive_EveryCandidateType_AgreesWithTheCurrentAnswers(string type)
+    public void Derive_EveryCandidateType_WritesFromWhatTheCodecWrites(string type)
     {
         IColumnCodec codec = ConverterHarness.Codec(type);
         string leaf = LeafOf(type).Name;
@@ -132,13 +190,7 @@ public class LeafTableTests
         var disagreements = new List<string>();
         foreach (Type candidate in Candidates)
         {
-            bool reads = ConverterDerivation.Default.DeriveNode(root, root, ConverterHarness.Context, candidate, ConversionDirection.Read).Succeeded;
             bool writes = ConverterDerivation.Default.DeriveNode(root, root, ConverterHarness.Context, candidate, ConversionDirection.Write).Succeeded;
-            if (reads != LegacyColumnProjection.Offers(codec, candidate))
-            {
-                disagreements.Add($"read as {candidate}: derived {reads}");
-            }
-
             bool added = Additions.Contains((leaf, candidate));
             if (writes != (codec.CanWriteElementType(candidate) || added))
             {

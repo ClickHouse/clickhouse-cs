@@ -173,24 +173,14 @@ public class FixedStringColumnCodecTests
     }
 
     [Test]
-    public void ReadableElementTypes_OffersTheBytesAndTheirText()
-    {
-        // Diagnostics only, so it has to agree with what the projections actually build; the bytes lead, being the
-        // type's own reading.
-        IColumnCodec codec = Codec(4);
-
-        Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(byte[]), typeof(string) }));
-    }
-
-    [Test]
-    public void RowText_ColumnHoldingNoBytes_SaysWhichColumnCannotBeDecoded()
+    public void ReadAs_StringOfAColumnHoldingNoBytes_SaysWhichColumnCannotBeRead()
     {
         // Caller-built columns can carry the type name without exposing FixedString byte storage.
         using var notBytes = new ArrayColumn<int>("c", "FixedString(4)", new[] { 1 });
 
-        var thrown = Assert.Throws<InvalidOperationException>(() => FixedStringColumnCodec.RowText(notBytes, 0));
+        var thrown = Assert.Throws<InvalidOperationException>(() => ColumnCodecRegistry.Default.Projections.ReadAs<string>(notBytes, ResolveContext.ForWrite));
 
-        Assert.That(thrown.Message, Does.Contain("'c'").And.Contain("FixedString(4)").And.Contain("read as a string"));
+        Assert.That(thrown.Message, Does.Contain("'c'").And.Contain("FixedString(4)").And.Contain("does not expose IColumn<Byte[]>"));
     }
 
     private static IColumnCodec Codec(int size) => ColumnCodecRegistry.Default.Resolve($"FixedString({size})", ResolveContext.ForWrite);

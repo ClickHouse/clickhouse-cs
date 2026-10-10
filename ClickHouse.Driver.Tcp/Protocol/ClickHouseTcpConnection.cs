@@ -11,6 +11,7 @@ using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Tcp.Compression;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Types;
+using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Protocol;
 
@@ -1028,7 +1029,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 : InsertColumnWrite.ThroughCodec(codec);
             if (write is null)
             {
-                error = DescribeUnwritableColumn(slot, codec);
+                error = DescribeUnwritableColumn(slot, schema.Codecs.Converters.SuggestedTypes(slot.TypeName, schema.Context, ConversionDirection.Write));
                 return null;
             }
 
@@ -1040,9 +1041,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
     /// <summary>Composes the message for a column whose CLR element type the target type cannot be written from.</summary>
     /// <param name="slot">The plan slot: the target's name and type, and the column the caller supplied.</param>
-    /// <param name="codec">The target type's codec, for the element types it accepts.</param>
+    /// <param name="accepted">The CLR types to suggest (<see cref="ConverterDerivation.SuggestedTypes"/>).</param>
     /// <returns>The message.</returns>
-    private static string DescribeUnwritableColumn(InsertColumn slot, IColumnCodec codec)
+    internal static string DescribeUnwritableColumn(InsertColumn slot, IReadOnlyList<Type> accepted)
     {
         // The caller wrote the element type, not the column class holding it, so that is what the message names.
         // A column implementing IColumn<> zero or several times has no single element type; fall back to the class
@@ -1057,20 +1058,10 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             present = slot.Values.GetType().ToString();
         }
 
-        IReadOnlyList<Type> writable = codec.WritableElementTypes;
-        var offered = new List<string>(writable.Count);
-        for (int i = 0; i < writable.Count; i++)
-        {
-            if (codec.CanWriteElementType(writable[i]))
-            {
-                offered.Add(writable[i].ToString());
-            }
-        }
-
-        // Empty means the type is written only from a column shape this codec builds itself.
-        string remedy = offered.Count == 0
+        // Empty means the type is written only from a column of its own layout, such as one that a query read.
+        string remedy = accepted.Count == 0
             ? $"No column built from a CLR element type can fill a '{slot.TypeName}' column; re-insert one read back from a query of the same type."
-            : $"It accepts {string.Join(" or ", offered)}, and — for a composite type — a column whose elements are any type its element codecs accept.";
+            : $"It accepts {string.Join(" or ", accepted)}, and an Array, Map or Tuple type also accepts a column whose elements are of the types that its element types accept.";
 
         return $"Column '{slot.Name}' ({slot.TypeName}) was given a column of element type {present}, which it cannot be written from. " + remedy;
     }

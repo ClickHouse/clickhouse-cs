@@ -1,7 +1,7 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Reflection;
 using ClickHouse.Driver.Tcp.Tests.Types;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -10,8 +10,8 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
 /// <summary>
-/// The case list of the differential tests: every case of <c>InsertRoundTripCase</c>, of
-/// <c>CompositeLiftMatrixTests</c> and of <c>ColumnReadProjectionTests</c>, with each value and error scenario of
+/// The case list of the differential tests: every case of <c>InsertRoundTripCase</c> and of
+/// <c>CompositeLiftMatrixTests</c>, a table of column types with read targets, and each value and error scenario of
 /// <c>ColumnReadProjectionTests</c>.
 /// </summary>
 public static class DifferentialCases
@@ -22,11 +22,76 @@ public static class DifferentialCases
     /// <summary>The number of cases from <c>CompositeLiftMatrixTests.Cases()</c>.</summary>
     public const int CompositeLiftMatrixCount = 22;
 
-    /// <summary>The number of column types that <c>ColumnReadProjectionTests</c> reads.</summary>
+    /// <summary>The number of column types of the read targets table (<see cref="CaseSource.ColumnReadProjection"/>).</summary>
     public const int ColumnReadProjectionCount = 56;
 
     /// <summary>The number of <c>ColumnReadScenario</c> values of the tests of <c>ColumnReadProjectionTests</c>.</summary>
     public const int ColumnReadScenarioCount = 39;
+
+    /// <summary>
+    /// The column types that the read tests of the client read, each with the CLR types that a case reads it as: the
+    /// canonical type first, then the types that the column type converts to, then types that it is refused as or that
+    /// a read rule of D6 gives. Each type is a case of <see cref="CaseSource.ColumnReadProjection"/>, with sample values.
+    /// </summary>
+    private static readonly (string Type, Type[] Targets)[] ColumnReadProjectionTargets =
+    {
+        ("UInt8", new[] { typeof(byte) }),
+        ("Int32", new[] { typeof(int) }),
+        ("UInt64", new[] { typeof(ulong), typeof(DateTime), typeof(ulong?) }),
+        ("Int128", new[] { typeof(Int128) }),
+        ("Float32", new[] { typeof(float) }),
+        ("Float64", new[] { typeof(double) }),
+        ("Bool", new[] { typeof(bool) }),
+        ("String", new[] { typeof(string), typeof(byte[]) }),
+        ("FixedString(4)", new[] { typeof(byte[]), typeof(string) }),
+        ("Date", new[] { typeof(DateOnly), typeof(DateOnly?) }),
+        ("Date32", new[] { typeof(DateOnly) }),
+        ("DateTime", new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime) }),
+        ("DateTime('Europe/Berlin')", new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime) }),
+        ("DateTime64(3)", new[] { typeof(long), typeof(DateTimeOffset), typeof(DateTime) }),
+        ("DateTime64(9, 'UTC')", new[] { typeof(long), typeof(DateTimeOffset), typeof(DateTime) }),
+        ("Time", new[] { typeof(int), typeof(TimeSpan), typeof(TimeOnly), typeof(DateTime), typeof(TimeSpan?) }),
+        ("Time64(3)", new[] { typeof(long), typeof(TimeSpan), typeof(TimeOnly), typeof(DateTime), typeof(TimeSpan?) }),
+        ("UUID", new[] { typeof(Guid), typeof(Guid?) }),
+        ("IPv4", new[] { typeof(IPAddress) }),
+        ("IPv6", new[] { typeof(IPAddress) }),
+        ("Decimal(9, 2)", new[] { typeof(decimal) }),
+        ("Decimal(38, 10)", new[] { typeof(ClickHouseTcpDecimal) }),
+        ("Enum8('a' = 1)", new[] { typeof(sbyte), typeof(string), typeof(int) }),
+        ("Nullable(Int32)", new[] { typeof(int?), typeof(long?) }),
+        ("Nullable(String)", new[] { typeof(string), typeof(byte[]), typeof(byte[][]) }),
+        ("Nullable(DateTime)", new[] { typeof(uint?), typeof(DateTimeOffset?), typeof(DateTime?) }),
+        ("Nullable(Time64(3))", new[] { typeof(long?), typeof(TimeSpan?), typeof(TimeOnly?), typeof(TimeSpan) }),
+        ("LowCardinality(String)", new[] { typeof(string), typeof(byte[]), typeof(Guid) }),
+        ("LowCardinality(UInt32)", new[] { typeof(uint) }),
+        ("LowCardinality(Nullable(DateTime))", new[] { typeof(uint?), typeof(DateTimeOffset?), typeof(DateTime?) }),
+        ("Array(Int32)", new[] { typeof(int[]) }),
+        ("Map(String, Int32)", new[] { typeof(KeyValuePair<string, int>[]) }),
+        ("Tuple(Int32, String)", new[] { typeof((int, string)) }),
+        ("Variant(Int32, String)", new[] { typeof(object) }),
+        ("Dynamic", new[] { typeof(object) }),
+        ("Nullable(DateTime('UTC'))", new[] { typeof(uint?), typeof(DateTimeOffset?), typeof(DateTime?), typeof(DateTime), typeof(TimeSpan?), typeof(uint) }),
+        ("Nullable(DateTime64(3, 'UTC'))", new[] { typeof(long?), typeof(DateTimeOffset?), typeof(DateTime?) }),
+        ("Nullable(Time)", new[] { typeof(int?), typeof(TimeSpan?), typeof(TimeOnly?) }),
+        ("Nullable(UUID)", new[] { typeof(Guid?) }),
+        ("LowCardinality(DateTime('UTC'))", new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime) }),
+        ("LowCardinality(Nullable(String))", new[] { typeof(string), typeof(byte[]) }),
+        ("LowCardinality(Nullable(DateTime('UTC')))", new[] { typeof(uint?), typeof(DateTimeOffset?), typeof(DateTime?), typeof(DateTime), typeof(DateTimeOffset), typeof(TimeSpan?) }),
+        ("Enum8('a' = 1, 'b' = 2)", new[] { typeof(sbyte), typeof(string) }),
+        ("Array(DateTime('UTC'))", new[] { typeof(uint[]), typeof(DateTime[]) }),
+        ("Tuple(DateTime('UTC'), Time)", new[] { typeof((uint, int)), typeof((DateTime, TimeSpan)) }),
+        ("Map(String, DateTime('UTC'))", new[] { typeof(KeyValuePair<string, uint>[]), typeof(KeyValuePair<string, DateTime>[]) }),
+        ("Array(String)", new[] { typeof(string[]), typeof(Guid[]), typeof(byte[]), typeof(byte[][]), typeof(string) }),
+        ("Array(Array(String))", new[] { typeof(string[][]), typeof(byte[][][]) }),
+        ("Map(String, String)", new[] { typeof(KeyValuePair<string, string>[]), typeof(KeyValuePair<byte[], byte[]>[]), typeof(string) }),
+        ("Map(UInt8, String)", new[] { typeof(KeyValuePair<byte, string>[]), typeof(KeyValuePair<byte, byte[]>[]), typeof(KeyValuePair<long, byte[]>[]) }),
+        ("Tuple(String)", new[] { typeof(ValueTuple<string>), typeof(ValueTuple<byte[]>) }),
+        ("Tuple(UInt8, String)", new[] { typeof((byte, string)), typeof((byte, byte[])), typeof((long, byte[])), typeof(string) }),
+        ("LowCardinality(FixedString(4))", new[] { typeof(byte[]), typeof(string) }),
+        ("JSON", new[] { typeof(string), typeof(byte[]) }),
+        ("DateTime('UTC')", new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime), typeof(DateTime?), typeof(DateTimeOffset?), typeof(TimeSpan) }),
+        ("DateTime64(3, 'UTC')", new[] { typeof(long), typeof(DateTimeOffset), typeof(DateTime), typeof(DateTime?), typeof(TimeSpan) }),
+    };
 
     private static readonly Lazy<IReadOnlyList<DifferentialCase>> Cases = new(Build);
 
@@ -84,7 +149,7 @@ public static class DifferentialCases
     }
 
     // The read targets are the canonical and the lifted type. The write inputs are sample values of the canonical
-    // type, and the values that the reference reads as the lifted type.
+    // type, and the values that the baseline reads as the lifted type.
     private static IEnumerable<(string, Func<string, DifferentialCase>)> FromCompositeLiftMatrix()
     {
         foreach (CompositeLiftMatrixTests.Case lift in CompositeLiftMatrixTests.Cases())
@@ -93,23 +158,11 @@ public static class DifferentialCases
         }
     }
 
-    // One case for each column type: the canonical type, each readable element type, and each target that a test
-    // of ColumnReadProjectionTests reads the type as. The types are the two type lists, the types of the tests that
-    // take only a type, and the types of the (type, target) tests.
+    // One case for each column type of ColumnReadProjectionTargets, with its read targets.
     private static IEnumerable<(string, Func<string, DifferentialCase>)> FromColumnReadProjection()
     {
-        List<(string Type, Type Target)> pairs = ColumnReadProjectionPairs().ToList();
-        IEnumerable<string> types = ColumnReadProjectionTests.RegisteredTypes
-            .Concat(ColumnReadProjectionTests.WrappedTypes)
-            .Concat(TestArguments(typeof(string)).Select(arguments => (string)arguments[0]))
-            .Concat(pairs.Select(p => p.Type))
-            .Distinct(StringComparer.Ordinal);
-
-        foreach (string type in types)
+        foreach ((string type, Type[] targets) in ColumnReadProjectionTargets)
         {
-            IColumnCodec codec = Codec(type);
-            IEnumerable<Type> asked = pairs.Where(p => p.Type == type).Select(p => p.Target).OrderBy(TypeNames.Of, StringComparer.Ordinal);
-            List<Type> targets = new[] { codec.ElementType }.Concat(codec.ReadableElementTypes).Concat(asked).Distinct().ToList();
             yield return (type, id => TypeOnlyCase(id, CaseSource.ColumnReadProjection, type, targets));
         }
     }
@@ -118,9 +171,8 @@ public static class DifferentialCases
     // the outcome of the ReadAs facet of its target.
     private static IEnumerable<(string, Func<string, DifferentialCase>)> FromColumnReadScenarios()
     {
-        foreach (object[] arguments in TestArguments(typeof(ColumnReadScenario)))
+        foreach (ColumnReadScenario scenario in Scenarios())
         {
-            var scenario = (ColumnReadScenario)arguments[0];
             Type canonical = Codec(scenario.ColumnType).ElementType;
             if (scenario.Values.GetType().GetElementType() != canonical)
             {
@@ -153,44 +205,25 @@ public static class DifferentialCases
         }
     }
 
-    // The (column type, target) arguments of each test method of ColumnReadProjectionTests whose first two
-    // parameters are a string and a Type.
-    private static IEnumerable<(string Type, Type Target)> ColumnReadProjectionPairs()
-        => TestArguments(typeof(string), typeof(Type)).Select(arguments => ((string)arguments[0], (Type)arguments[1]));
-
-    // The arguments of each test of ColumnReadProjectionTests whose parameters start with the given types, from its
-    // [TestCase] attributes and its TestCaseSource. A parameter list of one string takes only methods with that one
-    // parameter: those tests take a column type.
-    private static IEnumerable<object[]> TestArguments(params Type[] leading)
+    // The scenarios of the tests of ColumnReadProjectionTests that take one ColumnReadScenario, from their
+    // TestCaseSource, in the order of the test names.
+    private static IEnumerable<ColumnReadScenario> Scenarios()
     {
         const BindingFlags Static = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
         IEnumerable<MethodInfo> methods = typeof(ColumnReadProjectionTests)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)
-            .Where(m => m.GetParameters() is var parameters
-                && parameters.Length >= leading.Length
-                && (leading.Length > 1 || parameters.Length == 1)
-                && leading.Select((type, i) => parameters[i].ParameterType == type).All(match => match))
+            .Where(m => m.GetParameters() is { Length: 1 } parameters && parameters[0].ParameterType == typeof(ColumnReadScenario))
             .OrderBy(m => m.Name, StringComparer.Ordinal);
 
         foreach (MethodInfo method in methods)
         {
-            foreach (TestCaseAttribute testCase in method.GetCustomAttributes<TestCaseAttribute>())
-            {
-                yield return testCase.Arguments;
-            }
-
             foreach (TestCaseSourceAttribute source in method.GetCustomAttributes<TestCaseSourceAttribute>())
             {
                 MethodInfo sourceMethod = typeof(ColumnReadProjectionTests).GetMethod(source.SourceName, Static)
                     ?? throw new InvalidOperationException($"ColumnReadProjectionTests has no static method '{source.SourceName}'.");
-                foreach (object row in (IEnumerable)sourceMethod.Invoke(null, null))
+                foreach (ColumnReadScenario scenario in (IEnumerable<ColumnReadScenario>)sourceMethod.Invoke(null, null))
                 {
-                    yield return row switch
-                    {
-                        TestCaseData data => data.Arguments,
-                        object[] array => array,
-                        _ => new[] { row },
-                    };
+                    yield return scenario;
                 }
             }
         }

@@ -40,22 +40,6 @@ internal sealed class PocoWritePlan<T>
     /// read, two target columns map to one property, or a property cannot be written as its target's type.</exception>
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     public static PocoWritePlan<T> Build(PocoTypeDescriptor<T> descriptor, Block schema, PocoGatherTier? forcedTier = null)
-        => Build(descriptor, schema, (column, codec, member) => PocoColumnBuilderFactory.Create<T>(column, codec, member, schema.Codecs.Converters, schema.Context, forcedTier));
-
-    /// <summary>
-    /// Builds the same plan with the builders of the reference path (<see cref="LegacyPocoColumnBuilderFactory"/>), which
-    /// convert each property value in the gather and write the columns through their codecs. Only the differential tests
-    /// call it.
-    /// </summary>
-    /// <param name="descriptor">The POCO type's mapping.</param>
-    /// <param name="schema">The server's sample block, naming and typing the target columns.</param>
-    /// <returns>The plan.</returns>
-    /// <exception cref="InvalidOperationException">As for <see cref="Build(PocoTypeDescriptor{T}, Block, PocoGatherTier?)"/>.</exception>
-    public static PocoWritePlan<T> BuildLegacy(PocoTypeDescriptor<T> descriptor, Block schema)
-        => Build(descriptor, schema, LegacyPocoColumnBuilderFactory.Create<T>);
-
-    // The validation of the mapping, with the builder of each column from create.
-    private static PocoWritePlan<T> Build(PocoTypeDescriptor<T> descriptor, Block schema, Func<IColumn, IColumnCodec, PocoMember, PocoColumnBuilder<T>> create)
     {
         var builders = new PocoColumnBuilder<T>[schema.ColumnCount];
         var claimedBy = new Dictionary<string, string>(schema.ColumnCount, StringComparer.Ordinal);
@@ -90,7 +74,7 @@ internal sealed class PocoWritePlan<T>
 
             // Resolve through the sample context so timezone-less values use this operation's session zone.
             IColumnCodec codec = schema.Codecs.Resolve(column.TypeName, schema.Context);
-            builders[i] = create(column, codec, member);
+            builders[i] = PocoColumnBuilderFactory.Create<T>(column, codec, member, schema.Codecs.Converters, schema.Context, forcedTier);
         }
 
         return new PocoWritePlan<T>(builders);

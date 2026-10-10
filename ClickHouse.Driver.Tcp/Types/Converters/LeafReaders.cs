@@ -109,8 +109,8 @@ internal sealed class StringLeafReader<T, TConv> : ColumnReader<T>
         return Expression.Call(ReadAtMethod, bytes, offsets, row);
     }
 
-    // The column's bytes and offsets. A byte[] reading of a column without them fails with the message of the String
-    // codec's own byte[] reading (StringColumnCodec.RowBytes), which says where such a column comes from.
+    // The column's bytes and offsets. A byte[] reading of a column without them fails with a message that says where such
+    // a column comes from (StringColumnCodec.NoWireBytes).
     private static IStringColumn Text(IColumn column)
         => column as IStringColumn
             ?? (typeof(T) == typeof(byte[]) ? throw StringColumnCodec.NoWireBytes(column) : ColumnSurface.Of<IStringColumn>(column));

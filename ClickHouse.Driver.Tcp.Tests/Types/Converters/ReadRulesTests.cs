@@ -12,9 +12,10 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// The read rules of D6 (<see cref="ReadRules"/>): the derivation accepts exactly the readings that POCO mapping
-/// accepts, with the same values, for a matrix of column types and CLR targets that the differential case list does not
-/// have (enums, casts, nullable targets, the array casts that read elements as another type).
+/// The read rules of D6 (<see cref="ReadRules"/>), for a matrix of column types and CLR targets that the differential
+/// case list does not have (enums, casts, nullable targets, the array casts that read elements as another type): the
+/// derivation gives the same outcome through <c>Fill</c> and through <c>Emit</c>, and POCO mapping accepts exactly the
+/// readings that the derivation accepts, with the same values.
 /// </summary>
 [TestFixture]
 public class ReadRulesTests
@@ -44,6 +45,61 @@ public class ReadRulesTests
         typeof((double, double)?),
     };
 
+    /// <summary>
+    /// The CLR types of <see cref="Targets"/> that each column type of <see cref="ColumnTypes"/> reads as: its own readings
+    /// and the read rules of D6. A change of the rules or of the leaf table changes this table; the failure message prints
+    /// the table that the derivation gives.
+    /// </summary>
+    private static readonly Dictionary<string, string> AcceptedTargets = new()
+    {
+        ["Int8"] = "object, ValueType, IComparable, IFormattable, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["Int32"] = "object, ValueType, IComparable, IFormattable, int, int?, IntEnum, IntEnum?",
+        ["UInt32"] = "object, ValueType, IComparable, IFormattable, uint, uint?, UIntEnum, UIntEnum?",
+        ["Int64"] = "object, ValueType, IComparable, IFormattable, long, long?",
+        ["Enum8('a' = 1, 'b' = 2)"] = "object, ValueType, IComparable, IFormattable, string, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["String"] = "object, IComparable, IEnumerable, string, byte[]",
+        ["FixedString(4)"] = "object, IEnumerable, IReadOnlyList<SByteEnum>, string, byte[], SByteEnum[], sbyte[]",
+        ["Date"] = "object, ValueType, IComparable, IFormattable, DateOnly?",
+        ["DateTime('UTC')"] =
+            "object, ValueType, IComparable, IFormattable, uint, uint?, UIntEnum, UIntEnum?, DateTime," +
+            " DateTime?, DateTimeOffset, DateTimeOffset?",
+        ["UUID"] = "object, ValueType, IComparable, IFormattable, Guid?",
+        ["Nullable(Int8)"] = "object, ValueType, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["Nullable(Int32)"] = "object, ValueType, int, int?, IntEnum, IntEnum?",
+        ["Nullable(UInt32)"] = "object, ValueType, uint, uint?, UIntEnum, UIntEnum?",
+        ["Nullable(String)"] = "object, IComparable, IEnumerable, string, byte[]",
+        ["Nullable(Enum8('a' = 1, 'b' = 2))"] = "object, ValueType, string, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["Nullable(DateTime('UTC'))"] =
+            "object, ValueType, uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset," +
+            " DateTimeOffset?",
+        ["Nullable(Tuple(String, UInt8))"] = "object, ValueType, (string, byte)?",
+        ["LowCardinality(String)"] = "object, IComparable, IEnumerable, string, byte[]",
+        ["LowCardinality(Int32)"] = "object, ValueType, IComparable, IFormattable, int, int?, IntEnum, IntEnum?",
+        ["LowCardinality(Nullable(String))"] = "object, IComparable, IEnumerable, string, byte[]",
+        ["LowCardinality(Nullable(Int8))"] = "object, ValueType, sbyte, sbyte?, SByteEnum, SByteEnum?",
+        ["LowCardinality(Nullable(DateTime('UTC')))"] =
+            "object, ValueType, uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset," +
+            " DateTimeOffset?",
+        ["Array(Int8)"] = "object, IEnumerable, IReadOnlyList<SByteEnum>, byte[], SByteEnum[], sbyte[]",
+        ["Array(Int32)"] =
+            "object, IEnumerable, IEnumerable<int>, IReadOnlyList<int>, IntEnum[], UIntEnum[], int[]," +
+            " uint[]",
+        ["Array(UInt32)"] =
+            "object, IEnumerable, IEnumerable<int>, IReadOnlyList<int>, IntEnum[], UIntEnum[], int[]," +
+            " uint[]",
+        ["Array(String)"] = "object, IEnumerable, IEnumerable<string>, object[], string[]",
+        ["Array(Array(UInt32))"] = "object, IEnumerable, int[][], uint[][], object[]",
+        ["Array(Nullable(Int32))"] = "object, IEnumerable, int?[]",
+        ["Array(LowCardinality(String))"] = "object, IEnumerable, IEnumerable<string>, object[], string[]",
+        ["Map(String, Int32)"] = "object, IEnumerable, KeyValuePair<string, int>[], KeyValuePair<byte[], int>[]",
+        ["Tuple(Int32, String)"] = "object, ValueType, IComparable, (int, string), (int, string)?",
+        ["Tuple(String, UInt8)"] = "object, ValueType, IComparable, (byte[], byte), (string, byte)?",
+        ["Variant(String, UInt64)"] = "object",
+        ["Dynamic"] = "object",
+        ["Point"] = "object, ValueType, IComparable, (double, double)?",
+        ["SimpleAggregateFunction(anyLast, Nullable(Int32))"] = "object, ValueType, int, int?, IntEnum, IntEnum?",
+    };
+
     internal enum SByteEnum : sbyte
     {
         A = 1,
@@ -66,8 +122,18 @@ public class ReadRulesTests
 
     private static IEnumerable<string> Types() => ColumnTypes;
 
+    [Test]
+    public void Derive_EachColumnType_ReadsAsTheListedTargets()
+    {
+        Dictionary<string, string> actual = ColumnTypes.ToDictionary(
+            type => type,
+            type => string.Join(", ", Targets.Where(target => ConverterDerivation.Default.Derive(type, DifferentialEngine.Context, target, ConversionDirection.Read).Succeeded).Select(TypeNames.Of)));
+
+        Assert.That(actual, Is.EquivalentTo(AcceptedTargets), "The table is:" + Environment.NewLine + string.Join(Environment.NewLine, actual.Select(entry => $"[\"{entry.Key}\"] = \"{entry.Value}\",")));
+    }
+
     [TestCaseSource(nameof(Types))]
-    public void Derive_EachTarget_AcceptsWhatPocoMappingAcceptsWithTheSameValues(string columnType)
+    public void Derive_EachTarget_GivesTheOutcomeOfFillThroughEmitAndPocoMapping(string columnType)
     {
         var differences = new List<string>();
         using Block block = DecodeSample(columnType);
@@ -198,15 +264,14 @@ public class ReadRulesTests
         return values;
     }
 
-    // The difference between the derivation and the reference POCO plan of the differential tests, for one target, or
-    // null.
+    // The difference between the Fill of the derivation and its Emit or the client's POCO plan, for one target, or null.
     private static string Compare<T>(Block block)
     {
         Derivation derivation = ConverterDerivation.Default.Derive(block[0].TypeName, block.Context, typeof(T), ConversionDirection.Read);
         RowReader<T> poco;
         try
         {
-            poco = ReferenceArms.Poco.Bind<T>(block);
+            poco = ClientArms.Poco.Bind<T>(block);
         }
         catch (InvalidOperationException) when (!derivation.Succeeded)
         {
@@ -222,10 +287,10 @@ public class ReadRulesTests
             return $"POCO mapping accepts, and the derivation refuses: {derivation.Refusal}";
         }
 
-        (T[] Values, Exception Failure) expected = Run(() => poco(0, block.RowCount));
         (T[] Values, Exception Failure) fill = Run(() => Fill<T>(block));
         (T[] Values, Exception Failure) emit = Run(() => ConverterHarness.ReadEmit((ColumnReader<T>)derivation.Converter, block[0], 0, block.RowCount));
-        return Difference(expected, fill, "Fill") ?? Difference(expected, emit, "Emit");
+        (T[] Values, Exception Failure) mapped = Run(() => poco(0, block.RowCount));
+        return Difference(fill, emit, "Emit") ?? Difference(fill, mapped, "POCO mapping");
     }
 
     private static (T[] Values, Exception Failure) Run<T>(Func<T[]> read)
@@ -240,26 +305,27 @@ public class ReadRulesTests
         }
     }
 
-    // A NULL fails POCO mapping with its own message, which names the row of the result; the reader names the row.
-    private static string Difference<T>((T[] Values, Exception Failure) expected, (T[] Values, Exception Failure) actual, string path)
+    // The difference of an outcome from the outcome of Fill. A NULL fails POCO mapping with its own message, which names
+    // the row of the result; the reader names the row.
+    private static string Difference<T>((T[] Values, Exception Failure) fill, (T[] Values, Exception Failure) actual, string path)
     {
-        if (expected.Failure is not null || actual.Failure is not null)
+        if (fill.Failure is not null || actual.Failure is not null)
         {
-            if (expected.Failure is InvalidOperationException poco && actual.Failure is NullValueException nullValue)
+            if (fill.Failure is NullValueException nullValue && actual.Failure is InvalidOperationException poco and not NullValueException)
             {
                 return poco.Message.Contains($"is NULL at row {nullValue.Row} of the result", StringComparison.Ordinal)
                     ? null
-                    : $"{path}: POCO mapping fails with \"{poco.Message}\", and the reader finds NULL at row {nullValue.Row}.";
+                    : $"{path} fails with \"{poco.Message}\", and Fill finds NULL at row {nullValue.Row}.";
             }
 
-            return expected.Failure?.GetType() == actual.Failure?.GetType() && expected.Failure?.Message == actual.Failure?.Message
+            return fill.Failure?.GetType() == actual.Failure?.GetType() && fill.Failure?.Message == actual.Failure?.Message
                 ? null
-                : $"{path}: POCO mapping gives {Describe(expected)}, and the reader gives {Describe(actual)}.";
+                : $"{path} gives {Describe(actual)}, and Fill gives {Describe(fill)}.";
         }
 
-        for (int i = 0; i < expected.Values.Length; i++)
+        for (int i = 0; i < fill.Values.Length; i++)
         {
-            string difference = ValueComparer.Difference(expected.Values[i], actual.Values[i]);
+            string difference = ValueComparer.Difference(fill.Values[i], actual.Values[i]);
             if (difference is not null)
             {
                 return $"{path}: row {i}: {difference}";

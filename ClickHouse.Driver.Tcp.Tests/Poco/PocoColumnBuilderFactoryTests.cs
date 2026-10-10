@@ -10,8 +10,8 @@ using static ClickHouse.Driver.Tcp.Tests.Poco.PocoWritePlanTests;
 namespace ClickHouse.Driver.Tcp.Tests.Poco;
 
 /// <summary>
-/// The gather tiers of <see cref="PocoColumnBuilderFactory"/>: which tier a runtime gets, that the tiers and the old plan
-/// give the same first failure in row order, also the failure of a property getter, and that the row inserts write
+/// The gather tiers of <see cref="PocoColumnBuilderFactory"/>: which tier a runtime gets, that the tiers give the same
+/// first failure in row order, also the failure of a property getter, and that the row inserts write
 /// through the converter trees (a LowCardinality dictionary of distinct encoded values). <see cref="PocoWritePlanTests"/>
 /// and <see cref="PocoWritePlanDelegateTests"/> gather through each tier.
 /// </summary>
@@ -55,24 +55,27 @@ public class PocoColumnBuilderFactoryTests
     /// of <c>Other</c> at row 0 when <c>Number</c> comes first, the NULL when <c>Other</c> comes first, and in one column
     /// the NULL of <c>Mixed</c> at row 1 before its getter fails at row 3.
     /// </summary>
-    [TestCase("Number", "Int32", "Other", "Int32")]
-    [TestCase("Other", "Int32", "Number", "Int32")]
-    [TestCase("Mixed", "Int32", "Number", "Int32")]
-    public void Gather_AGetterThatThrowsAndANull_GiveTheFailureOfTheOldPlanInEveryTier(string first, string firstType, string second, string secondType)
+    [TestCase("Number", "Int32", "Other", "Int32", "The getter fails at row 2.")]
+    [TestCase("Other", "Int32", "Number", "Int32", "'Other'", "row 0")]
+    [TestCase("Mixed", "Int32", "Number", "Int32", "'Mixed'", "row 1")]
+    public void Gather_AGetterThatThrowsAndANull_GiveTheFirstFailureInEveryTier(string first, string firstType, string second, string secondType, params string[] expected)
     {
         Block schema = SchemaOf(Target(first, firstType), Target(second, secondType));
         ThrowingRow[] rows = Enumerable.Range(0, 4).Select(i => new ThrowingRow(i)).ToArray();
 
-        Exception old = Gather(PocoWritePlan<ThrowingRow>.BuildLegacy(PocoTypeDescriptor<ThrowingRow>.Build(), schema), rows);
+        Exception compiled = Gather(PocoWritePlan<ThrowingRow>.Build(PocoTypeDescriptor<ThrowingRow>.Build(), schema, PocoGatherTier.Compiled), rows);
+        Exception viaDelegates = Gather(PocoWritePlan<ThrowingRow>.Build(PocoTypeDescriptor<ThrowingRow>.Build(), schema, PocoGatherTier.Delegate), rows);
 
         Assert.Multiple(() =>
         {
-            foreach (PocoGatherTier tier in Enum.GetValues<PocoGatherTier>())
+            Assert.That(compiled, Is.TypeOf<InvalidOperationException>());
+            foreach (string part in expected)
             {
-                Exception now = Gather(PocoWritePlan<ThrowingRow>.Build(PocoTypeDescriptor<ThrowingRow>.Build(), schema, tier), rows);
-                Assert.That(now?.GetType(), Is.EqualTo(old?.GetType()), $"{tier}: exception type");
-                Assert.That(now?.Message, Is.EqualTo(old?.Message), $"{tier}: message");
+                Assert.That(compiled?.Message, Does.Contain(part));
             }
+
+            Assert.That(viaDelegates?.GetType(), Is.EqualTo(compiled?.GetType()), "Delegate: exception type");
+            Assert.That(viaDelegates?.Message, Is.EqualTo(compiled?.Message), "Delegate: message");
         });
     }
 
@@ -90,7 +93,7 @@ public class PocoColumnBuilderFactoryTests
                 using PocoInsertSource<DerivedRow> source = PocoWritePlan<DerivedRow>.Build(PocoTypeDescriptor<DerivedRow>.Build(), schema, tier).CreateSource(buffer, rows.Length);
                 source.Gather(0, rows.Length);
 
-                Assert.That(Insert(schema, source), Is.EqualTo(LegacyInsert(schema, rows)), tier.ToString());
+                Assert.That(Insert(schema, source), Is.EqualTo(new byte[] { 1, (byte)'a', 1, (byte)'b' }), tier.ToString());
             }
         });
     }
@@ -98,7 +101,6 @@ public class PocoColumnBuilderFactoryTests
     /// <summary>
     /// The row inserts write a LowCardinality dictionary through the converter tree, which keeps each distinct encoded
     /// value once (D7): two lone surrogates encode to the same UTF-8 bytes (<c>EF BF BD</c>), so they share one entry.
-    /// The old plan wrote two entries for them.
     /// </summary>
     [Test]
     public void Insert_TwoLoneSurrogatesIntoALowCardinalityColumn_ShareOneDictionaryEntry()
@@ -117,7 +119,6 @@ public class PocoColumnBuilderFactoryTests
         {
             Assert.That(DictionarySize(Insert(schema, poco)), Is.EqualTo(2), "InsertRowsAsync<T>: the placeholder and one entry");
             Assert.That(DictionarySize(Insert(schema, untyped)), Is.EqualTo(2), "InsertRowsAsync(object[]): the placeholder and one entry");
-            Assert.That(DictionarySize(LegacyInsert(schema, rows)), Is.EqualTo(3), "the old plan: the placeholder and two entries");
         });
     }
 
