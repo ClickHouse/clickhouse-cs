@@ -776,7 +776,7 @@ public sealed class InsertRoundTripCase
                 new[] { (3, "c") },
             }));
 
-        // Map(K, V): byte-identical to Array(Tuple(K, V)) — offsets + a keys stream + a values stream. Each row
+        // Map(K, V): byte-identical to Array(Tuple(K, V)): offsets, a keys stream and a values stream. Each row
         // surfaces as a KeyValuePair<K, V>[] (not a Dictionary), so pair order round-trips; empty-map rows and an
         // all-empty column ride along. Keys within a row are kept unique here because the server rejects duplicate
         // keys on insert; WireBytePinTests pins the bytes of duplicate keys in a row.
@@ -1560,8 +1560,8 @@ public sealed class InsertRoundTripCase
             Array.Empty<KeyValuePair<string, string>>(),
             Pairs<string, string>(("c", "{\"b\":\"hi\"}")));
 
-        // Variant(JSON, UInt64): JSON as a variant alternative. Variant is the trickiest prefix carrier — it writes
-        // every alternative's prefix from that alternative's own row slice, zero-length ones included — so this is
+        // Variant(JSON, UInt64): JSON as a variant alternative. Variant is the trickiest prefix carrier: it writes
+        // every alternative's prefix from that alternative's own row slice, zero-length ones included, so this is
         // where a JSON version word is most easily lost or duplicated. The alternatives arrive canonicalized and
         // "JSON" sorts before "UInt64", so JSON is discriminator 0. UInt64 is chosen as the second alternative on
         // purpose: pairing JSON with String would make the two indistinguishable to the write of a caller's column,
@@ -1856,7 +1856,7 @@ public sealed class InsertRoundTripCase
     }
 
     // One row per Geometry alternative, in declared discriminator order, plus a NULL. Each alternative column holds
-    // only the rows that selected it — one each here — so every child is a single-row column, in the form that a query
+    // only the rows that selected it (one each here), so every child is a single-row column, in the form that a query
     // reads it.
     private static IColumn BuildGeometryColumn(string name)
     {

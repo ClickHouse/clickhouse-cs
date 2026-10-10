@@ -55,7 +55,7 @@ public sealed class NestedArrayShape
         yield return Shape<byte[][][][][]>(6, "Array(Array(Array(Array(Array(UInt8)))))", Depth6Rows);
         yield return Shape<byte[][][][][][]>(7, "Array(Array(Array(Array(Array(Array(UInt8))))))", Depth7Rows);
 
-        // Two other leaf kinds under the same skeleton, at depth 3 — enough to put more than one Array level above
+        // Two other leaf kinds under the same skeleton, at depth 3: enough to put more than one Array level above
         // the leaf, which is all that distinguishes them. Deeper adds another level of segments but no new branch, so the
         // ladder above carries the depth and these carry the leaf.
         //

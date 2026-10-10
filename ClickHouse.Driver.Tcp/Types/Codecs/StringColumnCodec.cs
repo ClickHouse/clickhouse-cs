@@ -98,7 +98,7 @@ internal sealed class StringColumnCodec : IColumnCodec
     /// <inheritdoc/>
     // A column this client decoded holds the bytes the wire carried, so the write gives those again rather than the
     // UTF-8 of its decoded text: a byte string UTF-8 cannot spell decodes to U+FFFD, and encoding that again would
-    // store the replacement character instead of the original bytes.
+    // store the replacement character, not the original bytes.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
         var decoded = (StringColumn)column;

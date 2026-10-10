@@ -98,12 +98,12 @@ internal static class LowCardinalityWire
 /// A codec for the ClickHouse <c>LowCardinality(T)</c> column. Its serialization-state prefix is a single fixed
 /// version marker (an <c>Int64</c> = 1), written once per non-empty block; the dictionary and keys live in the
 /// column body. The body is a metadata word (the key-width code plus the block-local dictionary flags), the
-/// dictionary size, the dictionary values encoded with the inner codec, the key count, and the keys themselves —
+/// dictionary size, the dictionary values encoded with the inner codec, the key count, and the keys themselves,
 /// each key <c>1 &lt;&lt; code</c> bytes indexing the dictionary. The decoded column surfaces each row as the
 /// inner CLR value (<c>dict[keys[row]]</c>).
 ///
 /// <para>
-/// Each Native block ships a self-contained, block-local dictionary — there is no cross-block dictionary state,
+/// Each Native block ships a self-contained, block-local dictionary. There is no cross-block dictionary state,
 /// so the codec keeps none. Cached <see cref="ILowCardinalityShape"/> instances handle typed columns. The codec writes
 /// a decoded column only (<see cref="CanWrite"/>), with its dictionary and keys; the converter layer interns every
 /// other column into a dictionary.

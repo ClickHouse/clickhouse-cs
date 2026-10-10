@@ -1,7 +1,7 @@
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
 /// <summary>
-/// The geo type aliases. Each names a structure the client already encodes, so none needs a codec of its own —
+/// The geo type aliases. Each names a structure the client already encodes, so none needs a codec of its own,
 /// only a registration that resolves its structure and keeps its own name:
 ///
 /// <list type="table">
