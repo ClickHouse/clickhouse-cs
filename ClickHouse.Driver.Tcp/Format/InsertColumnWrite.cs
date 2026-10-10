@@ -16,10 +16,17 @@ namespace ClickHouse.Driver.Tcp.Format;
 /// CLR type (<see cref="ConverterDerivation"/>), over a value source of its rows (decision D2).
 /// </summary>
 /// <remarks>
+/// <para>
 /// The converter write reads the values of the column from its span when the column has one
 /// (<see cref="ISpanColumn{T}"/>), from its stored values (<see cref="IStoredValuesColumn"/>), or else through its indexer
 /// into a pooled buffer: <see cref="IColumn{T}.Values"/> of a view can throw or compute every row of the column. The
 /// buffer lives in the write state, so the prefix and the body read the same values.
+/// </para>
+/// <para>
+/// A dense array (<see cref="ClickHouseTcpColumn.CreateArray{TElement}"/>) that the codec does not write from its storage
+/// is written as its offsets, then its inner column through the element writer of the tree of the array. So the rows
+/// are not copied into arrays of their own.
+/// </para>
 /// </remarks>
 internal abstract class InsertColumnWrite
 {
@@ -59,7 +66,8 @@ internal abstract class InsertColumnWrite
     /// <summary>
     /// The write of <paramref name="values"/> as <paramref name="typeName"/>: through the codec when it writes the column
     /// from its storage, else through the converter tree of the column's CLR type. A column of no single CLR type (it
-    /// implements <see cref="IColumn{T}"/> more than once) goes to the codec when the codec accepts it.
+    /// implements <see cref="IColumn{T}"/> zero times or more than once) is written as the first of the suggested CLR
+    /// types of the type (<see cref="ConverterDerivation.SuggestedTypes"/>) that it implements.
     /// </summary>
     /// <param name="codec">The codec of the target type, resolved with <paramref name="context"/>.</param>
     /// <param name="values">The column that the caller gives.</param>
@@ -82,9 +90,7 @@ internal abstract class InsertColumnWrite
         }
         catch (InvalidOperationException)
         {
-            // A column that implements IColumn<> zero or several times has no single CLR type to derive a tree for, so
-            // the codec decides whether it writes the column.
-            return codec.CanWrite(values) ? ThroughCodec(codec) : null;
+            return ForSuggestedType(values, typeName, in context, derivation);
         }
 
         Derivation derived = derivation.Derive(typeName, in context, elementType, ConversionDirection.Write);
@@ -94,7 +100,54 @@ internal abstract class InsertColumnWrite
         }
 
         var tree = (ColumnWriter)derived.Converter;
-        return ConverterWrites.GetValue(tree, static writer => Factories.GetOrAdd(writer.ValueType, BuildFactory)(writer));
+        if (values is IDenseArrayColumn dense && TryGetElements(tree, out ColumnWriter elements))
+        {
+            return DenseArrayWrite(elements, dense.Inner);
+        }
+
+        return TreeWrite(tree);
+    }
+
+    // A column that implements IColumn<> zero or several times has no single CLR type to derive a tree for.
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private static InsertColumnWrite ForSuggestedType(IColumn values, string typeName, in ResolveContext context, ConverterDerivation derivation)
+    {
+        foreach (Type candidate in derivation.SuggestedTypes(typeName, in context, ConversionDirection.Write))
+        {
+            if (typeof(IColumn<>).MakeGenericType(candidate).IsInstanceOfType(values))
+            {
+                Derivation derived = derivation.Derive(typeName, in context, candidate, ConversionDirection.Write);
+                if (derived.Succeeded)
+                {
+                    return TreeWrite((ColumnWriter)derived.Converter);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    // The write of a column of the CLR type of the tree.
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private static InsertColumnWrite TreeWrite(ColumnWriter tree)
+        => ConverterWrites.GetValue(tree, static writer => Factories.GetOrAdd(writer.ValueType, BuildFactory)(writer));
+
+    // The write of the inner column of a dense array: a dense array again when the elements are arrays, else the
+    // converter write of the element writer.
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private static DenseArray DenseArrayWrite(ColumnWriter elements, IColumn inner)
+    {
+        InsertColumnWrite innerWrite = inner is IDenseArrayColumn dense && TryGetElements(elements, out ColumnWriter nested)
+            ? DenseArrayWrite(nested, dense.Inner)
+            : TreeWrite(elements);
+        return new DenseArray(innerWrite);
+    }
+
+    // The element writer of an Array writer.
+    private static bool TryGetElements(ColumnWriter tree, out ColumnWriter elements)
+    {
+        elements = (tree as IArrayWriter)?.Elements;
+        return elements is not null;
     }
 
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
@@ -120,6 +173,66 @@ internal abstract class InsertColumnWrite
 
         public override void Write(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state)
             => codec.WriteColumn(writer, values, start, length, state);
+    }
+
+    // The offsets of the rows, then the elements of the rows through the write of the inner column. The prefix is the
+    // prefix of the elements.
+    private sealed class DenseArray : InsertColumnWrite
+    {
+        private readonly InsertColumnWrite elements;
+
+        public DenseArray(InsertColumnWrite elements) => this.elements = elements;
+
+        public override IColumnWriteState Begin(IColumn values, int start, int length)
+        {
+            var dense = (IDenseArrayColumn)values;
+            ReadOnlySpan<int> offsets = dense.Offsets;
+            int first = offsets[start];
+            int count = offsets[start + length] - first;
+            return new State(first, count, elements.Begin(dense.Inner, first, count));
+        }
+
+        public override void WritePrefix(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state)
+        {
+            var own = (State)state;
+            elements.WritePrefix(writer, ((IDenseArrayColumn)values).Inner, own.First, own.Count, own.Elements);
+        }
+
+        public override void Write(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state)
+        {
+            var own = (State)state;
+            var dense = (IDenseArrayColumn)values;
+            ReadOnlySpan<int> offsets = dense.Offsets;
+            for (int i = 0; i < length; i++)
+            {
+                writer.WriteUInt64((ulong)(offsets[start + i + 1] - own.First));
+            }
+
+            elements.Write(writer, dense.Inner, own.First, own.Count, own.Elements);
+        }
+
+        // The range of the elements of the rows, and the state of their write.
+        private sealed class State : IColumnWriteState
+        {
+            public State(int first, int count, IColumnWriteState elements)
+            {
+                First = first;
+                Count = count;
+                Elements = elements;
+            }
+
+            public int First { get; }
+
+            public int Count { get; }
+
+            public IColumnWriteState Elements { get; private set; }
+
+            public void Dispose()
+            {
+                Elements?.Dispose();
+                Elements = null;
+            }
+        }
     }
 
     private sealed class ConverterWrite<T> : InsertColumnWrite
