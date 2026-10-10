@@ -56,14 +56,19 @@ Two layers handle a column type:
 - **The wire layer** (`Types/Codecs/`, one `IColumnCodec` for each ClickHouse type). `ReadColumnAsync` decodes a
   column into the class that a query of the type gives. `CanWrite` is true only for a column that the codec writes
   from its storage: that class, or a dense composite column (for example `ClickHouseTcpColumn.CreateArray` over a
-  decoded column) whose child columns the child codecs write from their storage. `BeginWrite`, `WriteStatePrefix` and
-  `WriteColumn` write such a column with no conversion, so the bytes are the bytes that the server sent. `ElementType`
-  is the canonical CLR type. `ClaimsValue` breaks a tie between `Variant` alternatives.
+  decoded column) whose child columns the child codecs write from their storage. A parameter that gives a stored value
+  its meaning must be the same (the scale of a `DateTime64` or a `Time64`, the members of an `Enum`, the width of a
+  `FixedString`, the layout of a `QBit`); a parameter that does not (a timezone) need not be. `BeginWrite`,
+  `WriteStatePrefix` and `WriteColumn` write such a column with no conversion, so the bytes are the bytes that the
+  server sent. `ElementType` is the canonical CLR type. `ClaimsValue` breaks a tie between `Variant` alternatives.
 - **The converter layer** (`Types/Converters/`) gives every other reading and write.
   `ConverterDerivation.Derive(type, context, clrType, direction)` gives a cached tree of readers (`ColumnReader<T>`) or
   writers (`ColumnWriter<T>`), or a refusal with a reason. Every tier uses it: `Block.ReadAs<T>`, `QueryAsync<T>`,
   `InsertAsync` (through `Format/InsertColumnWrite.For`, which gives a storage column to the codec), `InsertRowsAsync<T>`,
-  `InsertRowsAsync` with `object[]` rows, and `ClickHouseTcpTypes.CanRead`/`CanWrite`.
+  `InsertRowsAsync` with `object[]` rows, and `ClickHouseTcpTypes.CanRead`/`CanWrite`. A column that a query read as
+  a type whose values mean other values in the target (another scale, other enum members) is converted through the
+  meaning of its values: read as `DateTimeOffset`, `TimeSpan` or the label, then written
+  (`Types/Converters/ConverterDerivation.DecodedColumns.cs`).
 
 When you add or change a type, consider every path that touches it:
 

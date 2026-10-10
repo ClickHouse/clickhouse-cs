@@ -123,8 +123,9 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // The column that a query of the type reads.
-    public bool CanWrite(IColumn column) => column is EnumColumn<T>;
+    // The column that a query of the type reads. A stored ordinal means its label only in a type that declares the same
+    // members, so a column of another enum type goes to the converter layer, which writes it by label.
+    public bool CanWrite(IColumn column) => column is EnumColumn<T> stored && stored.MemberTable.HasTheSameMembers(members);
 
     /// <inheritdoc/>
     // The stored ordinals are the wire bytes, so the slice is one copy.
