@@ -14,8 +14,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 /// <summary>
 /// Runs a derived converter and another path on the same input, so a test can compare them: reads through
 /// <see cref="Block.ReadAs{T}(string)"/>, <see cref="BoundReader{T}.Fill"/> and a compiled
-/// <see cref="ColumnReader.Emit"/>; writes through <see cref="IColumnCodec.WriteColumn(ClickHouseBinaryWriter, IColumn, int, int, IColumnWriteState)"/>
-/// and <see cref="ColumnWriter{T}.Write"/>.
+/// <see cref="ColumnReader.Emit"/>; writes through <see cref="ColumnWriter{T}.Write"/>, and reads the bytes back through
+/// the codec of the type.
 /// </summary>
 internal static class ConverterHarness
 {
@@ -26,18 +26,12 @@ internal static class ConverterHarness
 
     public static IColumnCodec Codec(string type) => ColumnCodecRegistry.Default.Resolve(type, Context);
 
-    /// <summary>Writes <paramref name="source"/> through the codec of <paramref name="type"/> and decodes it again.</summary>
+    /// <summary>Writes <paramref name="source"/> as an insert of <paramref name="type"/> writes it, and decodes it again.</summary>
     public static async Task<IColumn> DecodeAsync(string type, IColumn source)
     {
         IColumnCodec codec = Codec(type);
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteFull(w, source));
-        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
-        if (source.RowCount > 0)
-        {
-            await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
-        }
-
-        return await codec.ReadColumnAsync(reader, source.Name, type, source.RowCount, CodecTestHarness.None);
+        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteFull(w, source, Context));
+        return await ReadBackAsync(type, bytes, source.RowCount, source.Name);
     }
 
     /// <summary>
@@ -120,32 +114,7 @@ internal static class ConverterHarness
         return values;
     }
 
-    /// <summary>The current write of rows [start, start + length) of a column of <paramref name="values"/>.</summary>
-    public static Task<byte[]> WriteOldAsync<T>(string type, T[] values, int start, int length)
-        => WriteOldAsync(type, new ArrayColumn<T>("c", type, values), start, length);
-
-    public static Task<byte[]> WriteOldAsync(string type, IColumn column, int start, int length)
-    {
-        IColumnCodec codec = Codec(type);
-        return CodecTestHarness.WriteAsync(w =>
-        {
-            IColumnWriteState state = codec.BeginWrite(column, start, length);
-            try
-            {
-                codec.WriteStatePrefix(w, column, start, length, state);
-                codec.WriteColumn(w, column, start, length, state);
-            }
-            finally
-            {
-                state?.Dispose();
-            }
-        });
-    }
-
-    /// <summary>
-    /// The derived write of rows [start, start + length) of <paramref name="values"/>, from one span, for a column with
-    /// the name of the column of <see cref="WriteOldAsync{T}(string, T[], int, int)"/>.
-    /// </summary>
+    /// <summary>The derived write of rows [start, start + length) of <paramref name="values"/>, from one span, for a column named <c>c</c>.</summary>
     public static Task<byte[]> WriteNewAsync<T>(ColumnWriter<T> writer, T[] values, int start, int length)
         => CodecTestHarness.WriteAsync(w => WriteAll(writer, w, ValueSource<T>.Of(values.AsSpan(start, length), start, "c")));
 

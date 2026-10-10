@@ -62,11 +62,7 @@ public class BlockWriterTests
         // Two columns of five rows; write the middle three [1, 4) straight from their spans (no slicing).
         var id = PrimitiveColumn<int>.FromValues("id", "Int32", new[] { 10, 20, 30, 40, 50 });
         var name = new ArrayColumn<string>("name", "String", new[] { "a", "bb", "ccc", "dddd", "eeeee" });
-        InsertColumn[] columns =
-        {
-            new("id", "Int32", ColumnCodecRegistry.Default.Resolve("Int32", ResolveContext.ForWrite), id),
-            new("name", "String", ColumnCodecRegistry.Default.Resolve("String", ResolveContext.ForWrite), name),
-        };
+        InsertColumn[] columns = { Planned("Int32", id), Planned("String", name) };
 
         byte[] bytes = await WriteAsync(w => BlockWriter.WriteDataBlockAsync(
             w, Negotiated, columns, start: 1, rowCount: 3, BlockWriter.DefaultFlushThresholdBytes, None));
@@ -185,6 +181,13 @@ public class BlockWriterTests
 
         Assert.ThrowsAsync<ArgumentException>(async () => await BlockWriter.WriteDataBlockAsync(
             writer, Negotiated, columns, rowCount: 2, ColumnCodecRegistry.Default, BlockWriter.DefaultFlushThresholdBytes, None));
+    }
+
+    // A column of the insert plan: the codec of the type, and the write that an insert plans for the column.
+    private static InsertColumn Planned(string type, IColumn column)
+    {
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(type, ResolveContext.ForWrite);
+        return new InsertColumn(column.Name, type, codec, column, Utilities.CodecTestHarness.InsertWrite(codec, column, type, ResolveContext.ForWrite));
     }
 
     private static async Task<byte[]> WriteAsync(Func<ClickHouseBinaryWriter, ValueTask> write)

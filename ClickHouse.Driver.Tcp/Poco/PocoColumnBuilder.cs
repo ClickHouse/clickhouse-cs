@@ -124,7 +124,6 @@ internal static class PocoColumnBuilderFactory
     /// <summary>Makes the builder for one property and target column.</summary>
     /// <typeparam name="T">The row type.</typeparam>
     /// <param name="column">The target column from the server's sample block, for its name and type.</param>
-    /// <param name="codec">The target type's codec, resolved as the write path resolves it.</param>
     /// <param name="member">The property the column is filled from; must be gettable.</param>
     /// <param name="derivation">The converter derivation of the codec registry of the sample block.</param>
     /// <param name="context">The resolution context of the sample block.</param>
@@ -134,7 +133,6 @@ internal static class PocoColumnBuilderFactory
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     public static PocoColumnBuilder<T> Create<T>(
         IColumn column,
-        IColumnCodec codec,
         PocoMember member,
         ConverterDerivation derivation,
         in ResolveContext context,

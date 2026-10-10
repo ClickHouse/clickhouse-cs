@@ -68,8 +68,8 @@ internal readonly struct ReferenceDictionaryValue<T> : IDictionaryValue<T, T>
 /// </para>
 /// <para>
 /// A body of zero values is empty: no dictionary and no keys. The interner is made only for a body with values. The
-/// position that a refused value gives to the leaf is the dictionary slot that the value would take, as the leaf
-/// codec names a value of the dictionary that it writes.
+/// position that a refused value gives to the leaf is the dictionary slot that the value would take, so a refusal names
+/// that slot.
 /// </para>
 /// </remarks>
 /// <typeparam name="TSource">The CLR type of a source value.</typeparam>

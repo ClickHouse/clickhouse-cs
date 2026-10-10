@@ -82,26 +82,15 @@ public class ArrayColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_AcceptsOnlyMatchingArrayColumn()
+    public async Task CanWrite_NestedInnerWithoutDenseNamedFieldColumn_ReturnsFalse()
     {
-        IColumnCodec codec = Resolve("Array(UInt32)");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWrite(new ArrayColumn<uint[]>("c", "Array(UInt32)", new[] { new uint[] { 1 } })), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<int[]>("c", "Array(Int32)", new[] { new[] { 1 } })), Is.False);
-            Assert.That(codec.CanWrite(PrimitiveColumn<uint>.FromValues("c", "UInt32", new uint[] { 1 })), Is.False);
-        });
-    }
-
-    [Test]
-    public void CanWrite_NestedInnerWithoutDenseNamedFieldColumn_ReturnsFalse()
-    {
+        // The converter layer writes no Nested column. Thus an insert writes the array only through the codec, and
+        // only when the Nested inner column is the NestedColumn that a query reads.
         const string type = "Array(Nested(a UInt8))";
         const string nestedType = "Nested(a UInt8)";
         IColumnCodec codec = Resolve(type);
-
-        // Flattening the ergonomic rows would leave only object[][] values, not Nested's named field columns.
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(Array.Empty<byte>());
+        using IColumn decoded = await codec.ReadColumnAsync(reader, "c", type, 0, CodecTestHarness.None);
         var ergonomic = new ArrayColumn<object[][][]>("c", type, Array.Empty<object[][][]>());
         var wrongDense = new ArrayValueColumn<object[][]>(
             "c",
@@ -113,8 +102,9 @@ public class ArrayColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(ergonomic), Is.False, "the row-oriented projection has lost the named fields");
-            Assert.That(codec.CanWrite(wrongDense), Is.False, "a dense outer column still needs a real NestedColumn inner");
+            Assert.That(codec.CanWrite(decoded), Is.True, "the column that a query of the type reads");
+            Assert.That(codec.CanWrite(ergonomic), Is.False, "a column of row arrays has no named field columns");
+            Assert.That(codec.CanWrite(wrongDense), Is.False, "the Nested inner column is not a NestedColumn");
         });
     }
 
@@ -129,10 +119,6 @@ public class ArrayColumnCodecTests
             Assert.That(Resolve("Array(Array(UInt8))").ElementType, Is.EqualTo(typeof(byte[][])));
         });
     }
-
-    [Test]
-    public void NullPlaceholder_IsEmptyInnerArray()
-        => Assert.That(Resolve("Array(UInt32)").NullPlaceholder, Is.EqualTo(Array.Empty<uint>()));
 
     [Test]
     public async Task ReadColumn_NonMonotonicOffsets_ThrowsProtocol()
@@ -161,36 +147,13 @@ public class ArrayColumnCodecTests
             await codec.ReadColumnAsync(reader, "c", "Array(UInt32)", 1, CodecTestHarness.None));
     }
 
-    /// <summary>Null Array(T) rows are rejected for canonical and lifted element types.</summary>
-    [TestCase("Array(UInt32)", false)]
-    [TestCase("Array(DateTime('UTC'))", true)]
-    public async Task WriteColumn_ErgonomicColumnWithANullRow_ThrowsNamingTheRowAndTheRemedy(string type, bool lifted)
-    {
-        IColumnCodec codec = Resolve(type);
-        IColumn column = lifted
-            ? new ArrayColumn<DateTime[]>("c", type, new[] { Array.Empty<DateTime>(), null })
-            : new ArrayColumn<uint[]>("c", type, new[] { new uint[] { 1 }, null });
-
-        ArgumentException thrown = null;
-        await CodecTestHarness.WriteAsync(writer =>
-            thrown = Assert.Throws<ArgumentException>(() => codec.WriteColumn(writer, column, 0, 2)));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(thrown.Message, Does.Contain("null value at row 1").And.Contain("Array(Nullable(T))"));
-            Assert.That(thrown.ParamName, Is.EqualTo("column"), "the argument at fault, not an internal local's name.");
-        });
-    }
-
-    // The state-aware overloads take the state this codec's own BeginWrite returned, and nothing else. They used to
-    // treat null as "the caller has none to share" and rebuild one, which meant a caller that lost or never opened
-    // the state still got correct bytes, so the mistake could not be seen. Only the state-free overloads build
-    // their own state now.
+    // The write members take only the state that BeginWrite of the same codec returned. They do not make a state
+    // when they get null, so a write with no state fails and does not give bytes.
     [Test]
     public async Task WriteColumn_StateAwareOverloadGivenNoState_ThrowsArgument()
     {
         IColumnCodec codec = Resolve("Array(UInt32)");
-        var column = new ArrayColumn<uint[]>("c", "Array(UInt32)", new[] { new uint[] { 1, 2 } });
+        using IColumn column = DecodedColumns.Of("c", "Array(UInt32)", new[] { new uint[] { 1, 2 } });
 
         ArgumentException thrown = null;
         await CodecTestHarness.WriteAsync(writer =>
@@ -203,7 +166,7 @@ public class ArrayColumnCodecTests
     public async Task WriteStatePrefix_StateAwareOverloadGivenNoState_ThrowsArgument()
     {
         IColumnCodec codec = Resolve("Array(UInt32)");
-        var column = new ArrayColumn<uint[]>("c", "Array(UInt32)", new[] { new uint[] { 1, 2 } });
+        using IColumn column = DecodedColumns.Of("c", "Array(UInt32)", new[] { new uint[] { 1, 2 } });
 
         await CodecTestHarness.WriteAsync(writer =>
             Assert.Throws<ArgumentException>(() => codec.WriteStatePrefix(writer, column, 0, 1, state: null)));
@@ -221,69 +184,4 @@ public class ArrayColumnCodecTests
     [Test]
     public void Resolve_UnsupportedInner_ThrowsNotSupported()
         => Assert.Throws<NotSupportedException>(() => Resolve("Array(NoSuchType)"));
-
-    /// <summary>
-    /// Verifies that dense columns with a writable convenience element type bypass the jagged rebuild path.
-    /// </summary>
-    [Test]
-    public async Task WriteColumn_DenseColumnOfAConvenienceElementType_WritesItWithoutRebuildingEachRow()
-    {
-        const int elements = 64;
-        var stamps = new DateTime[elements];
-        for (int i = 0; i < elements; i++)
-        {
-            stamps[i] = new DateTime(2024, 6, 15, 0, 0, 0, DateTimeKind.Utc).AddSeconds(i);
-        }
-
-        var counting = new SpanCountingColumn<DateTime>(ClickHouseTcpColumn.Create("c", stamps));
-        IArrayColumn<DateTime> dense = ClickHouseTcpColumn.CreateArray("c", counting, new[] { 0, elements });
-        IColumnCodec codec = Resolve("Array(DateTime('UTC'))");
-
-        byte[] written = await CodecTestHarness.WriteSliceAsync(codec, dense, 0, 1);
-
-        // The jagged fallback would also produce these bytes, so the count is what pins the path taken.
-        byte[] expected = await CodecTestHarness.WriteSliceAsync(
-            codec,
-            new ArrayColumn<DateTime[]>("c", null, new[] { stamps }),
-            0,
-            1);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWrite(dense), Is.True);
-            Assert.That(written, Is.EqualTo(expected), "the same bytes either way round");
-            Assert.That(counting.SpanReads, Is.LessThan(elements), $"one run, not one row rebuild per element ({elements})");
-        });
-    }
-
-    /// <summary>Counts how often a column's values are read as a span, to tell a bulk read from a per-element one.</summary>
-    private sealed class SpanCountingColumn<T> : IColumn<T>
-    {
-        private readonly IColumn<T> source;
-
-        public SpanCountingColumn(IColumn<T> source) => this.source = source;
-
-        public int SpanReads { get; private set; }
-
-        public string Name => source.Name;
-
-        public string TypeName => source.TypeName;
-
-        public int RowCount => source.RowCount;
-
-        public ReadOnlySpan<T> Values
-        {
-            get
-            {
-                SpanReads++;
-                return source.Values;
-            }
-        }
-
-        public T this[int row] => source[row];
-
-        public object GetValue(int row) => source.GetValue(row);
-
-        public void Dispose() => source.Dispose();
-    }
 }

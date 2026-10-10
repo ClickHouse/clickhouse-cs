@@ -13,7 +13,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// <see cref="StringColumn"/>, which decodes to text on demand (UTF-8 by default, or a caller-chosen encoding)
 /// and also exposes the raw bytes — ClickHouse <c>String</c> is byte-oriented and may hold non-UTF-8 data.
 /// </summary>
-internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<string>
+internal sealed class StringColumnCodec : IColumnCodec
 {
     /// <summary>The shared, stateless instance.</summary>
     public static readonly StringColumnCodec Instance = new();
@@ -32,27 +32,6 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     /// <inheritdoc/>
     public Type ElementType => typeof(string);
 
-    /// <inheritdoc/>
-    public object NullPlaceholder => string.Empty;
-
-    /// <summary>
-    /// Accepts text or raw byte rows. Raw bytes are stored verbatim.
-    /// </summary>
-    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(string), typeof(byte[]) };
-
-    /// <inheritdoc/>
-    public object NullPlaceholderAs(Type writeType)
-    {
-        if (writeType == typeof(string))
-        {
-            return NullPlaceholder;
-        }
-
-        return writeType == typeof(byte[])
-            ? Array.Empty<byte>()
-            : throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
-    }
-
     /// <summary>The failure of a <see cref="T:byte[]"/> reading of a column that does not expose its wire bytes.</summary>
     /// <param name="column">The column, which is not an <see cref="IStringColumn"/>.</param>
     /// <returns>The exception to throw.</returns>
@@ -60,12 +39,6 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
         => new(
             $"Column '{column.Name}' ({column.TypeName}) was read as {column.GetType()}, which does not expose the wire bytes through IStringColumn, " +
             $"so its values cannot be read as a byte[]. Only a String column decoded from a server response does.");
-
-    /// <inheritdoc/>
-    // String keys may keep redundant entries when different invalid UTF-16 inputs encode alike, but never merge
-    // different bytes. Raw bytes have no key, so LowCardinality(String) rejects them during planning.
-    public object LowCardinalityKeyWriter(Type writeType)
-        => writeType == typeof(string) ? LowCardinalityKeys.Identity<string>() : null;
 
     /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -120,62 +93,18 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<string> or IColumn<byte[]>;
+    public bool CanWrite(IColumn column) => column is StringColumn;
 
     /// <inheritdoc/>
-    public bool WritesFromStorage(IColumn column) => column is StringColumn;
-
-    /// <inheritdoc/>
-    // Read per element through the indexer so a scattered write-path view (a substitute for a nullable string, a
-    // Tuple field) writes with no materialized copy.
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    // A column this client decoded holds the bytes the wire carried, so the write gives those again rather than the
+    // UTF-8 of its decoded text: a byte string UTF-8 cannot spell decodes to U+FFFD, and encoding that again would
+    // store the replacement character instead of the original bytes.
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        // A column this client decoded still holds the bytes the wire carried, so re-emit those rather than the
-        // UTF-8 of its decoded text: a byte string UTF-8 cannot spell decodes to U+FFFD, and re-encoding that would
-        // store the replacement character instead of the original bytes.
-        if (column is StringColumn decoded)
-        {
-            for (int i = 0; i < length; i++)
-            {
-                writer.WriteString(decoded.GetBytes(start + i));
-            }
-
-            return;
-        }
-
-        if (column is IColumn<byte[]> rawBytes)
-        {
-            for (int i = 0; i < length; i++)
-            {
-                int row = start + i;
-                byte[] value = rawBytes[row];
-                if (value is null)
-                {
-                    throw new ArgumentException(
-                        $"A {TypeName} column cannot hold a null value (at row {row}); wrap the type in Nullable to write nulls.",
-                        nameof(column));
-                }
-
-                writer.WriteString(value);
-            }
-
-            return;
-        }
-
-        var typed = (IColumn<string>)column;
+        var decoded = (StringColumn)column;
         for (int i = 0; i < length; i++)
         {
-            writer.WriteString(typed[start + i]);
-        }
-    }
-
-    /// <inheritdoc/>
-    // Each element is its own length-prefixed byte run, so a run of values is just written in order.
-    public void WriteValues(ClickHouseBinaryWriter writer, ReadOnlySpan<string> values)
-    {
-        foreach (string value in values)
-        {
-            writer.WriteString(value);
+            writer.WriteString(decoded.GetBytes(start + i));
         }
     }
 

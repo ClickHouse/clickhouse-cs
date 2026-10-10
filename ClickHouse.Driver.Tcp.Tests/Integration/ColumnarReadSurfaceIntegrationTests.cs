@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
@@ -661,7 +662,9 @@ public class ColumnarReadSurfaceIntegrationTests
             // value for a row to reference — while to a nullable dictionary it is the NULL marker. A row keyed at 0
             // is therefore the only row that can distinguish the two paths: rows keyed above the reserve survive a
             // verbatim re-emit unharmed, so a case without a slot-0 row passes whether or not the bug is present.
-            var dictionary = new ArrayColumn<string>("value", "String", new[] { string.Empty, "alpha", "beta" });
+            // A decoded dictionary, so only the missing NULL slot keeps the codec from writing the column from its
+            // storage.
+            IColumn<string> dictionary = (IColumn<string>)DecodedColumns.Of("value", "String", string.Empty, "alpha", "beta");
             using var nonNullableDense = new LowCardinalityColumn<string>(
                 "value",
                 "LowCardinality(String)",

@@ -16,9 +16,8 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// That permutation is a within-16-byte byte shuffle, so on a SIMD-capable target it is one
 /// <c>PSHUFB</c>/<c>TBL</c> per value via <see cref="Vector128.Shuffle{T}(Vector128{T}, Vector128{T})"/>. On read
 /// the whole column blob is shuffled straight into the destination <see cref="Guid"/>[]'s own memory (no per-value
-/// <c>new Guid(...)</c> parse); on write each <see cref="Guid"/> is shuffled through the indexer, since a write
-/// column may be a per-element view (e.g. the Nullable placeholder substitution) whose <c>Values</c> is not a
-/// contiguous span. This relies on the little-endian assumption the reinterpret paths already make (a
+/// <c>new Guid(...)</c> parse); on write each <see cref="Guid"/> of the decoded column is shuffled on its own. This
+/// relies on the little-endian assumption the reinterpret paths already make (a
 /// <see cref="Guid"/>'s in-memory bytes equal <see cref="Guid.TryWriteBytes(Span{byte})"/>'s output on
 /// little-endian). A scalar fallback covers targets without SIMD acceleration.
 /// </para>
@@ -47,14 +46,6 @@ internal sealed class UuidColumnCodec : IColumnCodec
     public Type ElementType => typeof(Guid);
 
     /// <inheritdoc/>
-    public object NullPlaceholder => Guid.Empty;
-
-    /// <inheritdoc/>
-    // A Guid compares by its 16 bytes, and the encoding reorders those bytes the same way every time.
-    public object LowCardinalityKeyWriter(Type writeType)
-        => writeType == typeof(Guid) ? LowCardinalityKeys.Identity<Guid>() : null;
-
-    /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
         => ArrayColumn<Guid>.ReadAsync(reader, columnName, columnType, rowCount, checked(rowCount * UuidSize), Fill, cancellationToken);
 
@@ -77,25 +68,20 @@ internal sealed class UuidColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<Guid>;
-
-    /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<Guid>;
+    public bool CanWrite(IColumn column) => column is ArrayColumn<Guid>;
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        // The write column may be a per-element view whose Values throws (e.g. the Nullable placeholder-
-        // substitution column), so each Guid is read through the indexer and shuffled individually — not bulk
-        // over Values. On little-endian a Guid's in-memory bytes equal TryWriteBytes's output, so the shuffle
-        // maps straight to the wire layout.
-        var typed = (IColumn<Guid>)column;
+        // On little-endian a Guid's in-memory bytes equal TryWriteBytes's output, so the shuffle maps straight to the
+        // wire layout.
+        ReadOnlySpan<Guid> values = ((ArrayColumn<Guid>)column).Values.Slice(start, length);
         Span<byte> wire = stackalloc byte[UuidSize];
         bool simd = Vector128.IsHardwareAccelerated;
-        for (int i = 0; i < length; i++)
+        for (int i = 0; i < values.Length; i++)
         {
-            Guid value = typed[start + i];
+            Guid value = values[i];
             ReadOnlySpan<byte> guidBytes = MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref value, 1));
             if (simd)
             {

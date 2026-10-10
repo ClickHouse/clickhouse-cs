@@ -1,8 +1,6 @@
 using System;
 using System.Buffers;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -42,10 +40,6 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     /// </summary>
     private const int MaxTypes = 1_000_000;
 
-    // Builds a flat typed column from boxed values, one cached delegate per element type — the ergonomic write
-    // path's per-runtime-type projection, mirroring the variant codec's.
-    private static readonly ConcurrentDictionary<Type, Func<string, string, object[], int, IColumn>> FlatBuilders = new();
-
     private readonly ColumnCodecRegistry registry;
     private readonly ResolveContext context;
 
@@ -67,11 +61,6 @@ internal sealed class DynamicColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public Type ElementType => typeof(object);
-
-    // A Dynamic is never nested inside Nullable (the server rejects Nullable(Dynamic); NULL rides the
-    // discriminator), so this placeholder is a formality the interface requires and is never written.
-    /// <inheritdoc/>
-    public object NullPlaceholder => null;
 
     /// <summary>Builds a <c>Dynamic</c> codec.</summary>
     /// <param name="node">The parsed <c>Dynamic</c> node; an optional <c>max_types=N</c> argument bounds the server's tracked type set but does not affect the wire.</param>
@@ -211,76 +200,60 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // The dense DynamicColumn is the zero-copy source; a flat IColumn<object> is scattered by each value's
-    // inferred type. A value whose CLR type has no inferred ClickHouse type throws at write time (inference
-    // cannot be pre-validated here, since the type set is data-derived).
+    // A decoded Dynamic column whose type columns the codecs of its types write.
     //
-    // The dense test is the concrete DynamicColumn, not the public IDynamicColumn: the dense planner trusts
-    // invariants only that class's constructor establishes — the type-name list matches the child-column count, and
-    // every discriminator is a valid type index or the NULL marker. Matching on the public interface would let a
-    // caller-supplied implementation reach the planner unchecked. Anything else writable arrives as IColumn<object>
-    // and takes the scattered path, which infers and validates per value.
-    public bool CanWrite(IColumn column) => column is DynamicColumn or IColumn<object>;
-
-    /// <inheritdoc/>
-    public bool WritesFromStorage(IColumn column) => column is DynamicColumn;
-
-    /// <inheritdoc/>
-    public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildState(column, start, length);
-
-    /// <inheritdoc/>
-    // The state-free path recomputes the write plan for the prefix; the type list it derives is a deterministic
-    // function of the data, so it matches the body's plan. The block layer avoids the recompute by threading the
-    // BeginWrite state through the state-aware overloads below.
-    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    // The test is the concrete DynamicColumn, not the public IDynamicColumn: the write trusts invariants only that
+    // class's constructor establishes (the type-name list matches the child-column count, and every discriminator
+    // is a valid type index or the NULL marker). A caller's column goes to the converter layer, which infers and
+    // validates per value.
+    public bool CanWrite(IColumn column)
     {
-        using DynamicWriteState state = BuildState(column, start, length);
-        WriteStatePrefixCore(writer, state);
+        if (column is not DynamicColumn dense)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < dense.TypeCount; i++)
+        {
+            if (!registry.Resolve(dense.TypeNames[i], in context).CanWrite(dense.GetTypeColumn(i)))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <inheritdoc/>
+    public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildDenseState((DynamicColumn)column, start, length);
+
+    /// <inheritdoc/>
+    // The version, the runtime type list, then each type's own prefix (empty for a leaf type).
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        WriteStatePrefixCore(writer, state.Expect<DynamicWriteState>(TypeName));
-    }
-
-    /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        using DynamicWriteState state = BuildState(column, start, length);
-        WriteBodyCore(writer, state);
-    }
-
-    /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
-    {
-        WriteBodyCore(writer, state.Expect<DynamicWriteState>(TypeName));
-    }
-
-    // Writes the state prefix from a computed write plan: version, the runtime type list, then each type's own
-    // prefix (empty for a leaf type).
-    private static void WriteStatePrefixCore(ClickHouseBinaryWriter writer, DynamicWriteState state)
-    {
+        var own = state.Expect<DynamicWriteState>(TypeName);
         writer.WriteUInt64(FlattenedVersion);
-        writer.WriteVarUInt((ulong)state.TypeNames.Length);
-        foreach (string name in state.TypeNames)
+        writer.WriteVarUInt((ulong)own.TypeNames.Length);
+        foreach (string name in own.TypeNames)
         {
             writer.WriteString(name);
         }
 
-        for (int i = 0; i < state.Children.Length; i++)
+        for (int i = 0; i < own.Children.Length; i++)
         {
-            state.Children[i].WriteStatePrefix(writer, state.ChildColumns[i], state.ChildStart[i], state.ChildLength[i], state.ChildStates[i]);
+            own.Children[i].WriteStatePrefix(writer, own.ChildColumns[i], own.ChildStart[i], own.ChildLength[i], own.ChildStates[i]);
         }
     }
 
-    // Writes the body from a computed write plan: the discriminators, then each type's dense run in wire order.
-    private static void WriteBodyCore(ClickHouseBinaryWriter writer, DynamicWriteState state)
+    /// <inheritdoc/>
+    // The discriminators, then each type's dense run in wire order.
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        WriteDiscriminators(writer, state.Discriminators.AsSpan(0, state.Length), state.Width);
-        for (int i = 0; i < state.Children.Length; i++)
+        var own = state.Expect<DynamicWriteState>(TypeName);
+        WriteDiscriminators(writer, ((DynamicColumn)column).Discriminators.Slice(start, length), own.Width);
+        for (int i = 0; i < own.Children.Length; i++)
         {
-            state.Children[i].WriteColumn(writer, state.ChildColumns[i], state.ChildStart[i], state.ChildLength[i], state.ChildStates[i]);
+            own.Children[i].WriteColumn(writer, own.ChildColumns[i], own.ChildStart[i], own.ChildLength[i], own.ChildStates[i]);
         }
     }
 
@@ -329,14 +302,9 @@ internal sealed class DynamicColumnCodec : IColumnCodec
         }
     }
 
-    // Computes the shared write plan for rows [start, start + length): the runtime type list, the per-row
-    // discriminators, and the per-type child column each type's run is written from.
-    private DynamicWriteState BuildState(IColumn column, int start, int length)
-        => column is DynamicColumn dense ? BuildDenseState(dense, start, length) : BuildScatteredState(column, start, length);
-
-    // The dense path: the type list, discriminators, and per-type child columns already exist. Copy the slice's
-    // discriminators and, per type, find its child-column run within the slice (the count before and within it,
-    // from the precomputed local indices — the same slicing the variant codec does).
+    // The type list, discriminators, and per-type child columns already exist. Per type, find its child-column run
+    // within the slice: the count before and within it, from the precomputed local indices, as the Variant codec
+    // slices its alternatives.
     private DynamicWriteState BuildDenseState(DynamicColumn dense, int start, int length)
     {
         int typeCount = dense.TypeCount;
@@ -371,15 +339,6 @@ internal sealed class DynamicColumnCodec : IColumnCodec
             within[d]++;
         }
 
-        // Rent only once the fallible indexing above is done. This loop and the per-type walk both index by
-        // discriminator, so renting first would leak the buffer if either ever faulted — nothing between the rent
-        // and the try below would return it.
-        int[] slice = ArrayPool<int>.Shared.Rent(length);
-        for (int i = 0; i < length; i++)
-        {
-            slice[i] = discriminators[start + i];
-        }
-
         var childColumns = new IColumn[typeCount];
         var childStates = new IColumnWriteState[typeCount];
         int statesBuilt = 0;
@@ -394,9 +353,8 @@ internal sealed class DynamicColumnCodec : IColumnCodec
         }
         catch
         {
-            // A child BeginWrite throwing mid-loop would otherwise leak the rented slice and the states already
-            // built (each may hold its own rented buffers).
-            ArrayPool<int>.Shared.Return(slice);
+            // A child BeginWrite throwing mid-loop would otherwise leak the states already built (each may hold its
+            // own rented buffers).
             for (int i = 0; i < statesBuilt; i++)
             {
                 childStates[i]?.Dispose();
@@ -413,157 +371,8 @@ internal sealed class DynamicColumnCodec : IColumnCodec
             ChildStart = before,
             ChildLength = within,
             ChildStates = childStates,
-            Discriminators = slice,
-            Length = length,
             Width = DiscriminatorWidth(typeCount),
         };
-    }
-
-    // The ergonomic path: infer each value's type, build the deterministic (name-sorted) type list, then scatter
-    // the values into per-type buckets and project each into a typed child column.
-    private DynamicWriteState BuildScatteredState(IColumn column, int start, int length)
-    {
-        string[] rowTypes = ArrayPool<string>.Shared.Rent(length);
-
-        // The value coerced to its inferred codec's element type (e.g. a DateTimeOffset becomes the raw Int64
-        // nanosecond count DateTime64(9) writes), so the per-type bucket holds what that codec writes.
-        object[] rowValues = ArrayPool<object>.Shared.Rent(length);
-        try
-        {
-            var distinct = new SortedSet<string>(StringComparer.Ordinal);
-            for (int row = 0; row < length; row++)
-            {
-                object value = column.GetValue(start + row);
-                if (value is null)
-                {
-                    rowTypes[row] = null;
-                    continue;
-                }
-
-                (string typeName, object canonical) = DynamicTypeInference.Infer(value);
-                rowTypes[row] = typeName;
-                rowValues[row] = canonical;
-                distinct.Add(typeName);
-            }
-
-            int typeCount = distinct.Count;
-            var names = new string[typeCount];
-            distinct.CopyTo(names);
-            var typeIndex = new Dictionary<string, int>(typeCount, StringComparer.Ordinal);
-            var children = new IColumnCodec[typeCount];
-            for (int i = 0; i < typeCount; i++)
-            {
-                typeIndex[names[i]] = i;
-                children[i] = registry.Resolve(names[i], in context);
-            }
-
-            var counts = new int[typeCount];
-            for (int row = 0; row < length; row++)
-            {
-                if (rowTypes[row] is string t)
-                {
-                    counts[typeIndex[t]]++;
-                }
-            }
-
-            int[] discriminators = ArrayPool<int>.Shared.Rent(length);
-            var buckets = new object[typeCount][];
-            var filled = new int[typeCount];
-            for (int i = 0; i < typeCount; i++)
-            {
-                buckets[i] = ArrayPool<object>.Shared.Rent(counts[i]);
-            }
-
-            // Declared before the try so the catch can dispose the child states already built (each may hold its
-            // own rented buffers) and return the discriminators buffer if a child BeginWrite throws mid-loop.
-            var childStates = new IColumnWriteState[typeCount];
-            int statesBuilt = 0;
-            try
-            {
-                for (int row = 0; row < length; row++)
-                {
-                    string t = rowTypes[row];
-                    if (t is null)
-                    {
-                        discriminators[row] = typeCount; // NULL
-                        continue;
-                    }
-
-                    int d = typeIndex[t];
-                    discriminators[row] = d;
-                    buckets[d][filled[d]++] = rowValues[row];
-                }
-
-                var childColumns = new IColumn[typeCount];
-                var childStart = new int[typeCount];
-                var childLength = new int[typeCount];
-                for (int i = 0; i < typeCount; i++)
-                {
-                    childLength[i] = filled[i];
-
-                    // Build each per-type bucket's typed column; the child codec's WriteColumn writes it
-                    // ergonomically, so no separate densify step is needed here.
-                    IColumn built = FlatBuilderFor(children[i].ElementType)(column.Name, children[i].TypeName, buckets[i], filled[i]);
-                    childColumns[i] = built;
-                    childStates[i] = children[i].BeginWrite(childColumns[i], 0, filled[i]);
-                    statesBuilt = i + 1;
-                }
-
-                return new DynamicWriteState
-                {
-                    TypeNames = names,
-                    Children = children,
-                    ChildColumns = childColumns,
-                    ChildStart = childStart,
-                    ChildLength = childLength,
-                    ChildStates = childStates,
-                    Discriminators = discriminators,
-                    Length = length,
-                    Width = DiscriminatorWidth(typeCount),
-                };
-            }
-            catch
-            {
-                ArrayPool<int>.Shared.Return(discriminators);
-                for (int i = 0; i < statesBuilt; i++)
-                {
-                    childStates[i]?.Dispose();
-                }
-
-                throw;
-            }
-            finally
-            {
-                for (int i = 0; i < buckets.Length; i++)
-                {
-                    ArrayPool<object>.Shared.Return(buckets[i], clearArray: true);
-                }
-            }
-        }
-        finally
-        {
-            ArrayPool<string>.Shared.Return(rowTypes, clearArray: true);
-            ArrayPool<object>.Shared.Return(rowValues, clearArray: true);
-        }
-    }
-
-    private static Func<string, string, object[], int, IColumn> FlatBuilderFor(Type elementType)
-        => FlatBuilders.GetOrAdd(elementType, static type => (Func<string, string, object[], int, IColumn>)
-            (typeof(DynamicColumnCodec)
-                .GetMethod(nameof(BuildFlatColumn), BindingFlags.NonPublic | BindingFlags.Static)
-                    ?? throw new InvalidOperationException($"Method '{nameof(BuildFlatColumn)}' was not found."))
-                .MakeGenericMethod(type)
-                .CreateDelegate(typeof(Func<string, string, object[], int, IColumn>)));
-
-    private static IColumn BuildFlatColumn<T>(string name, string typeName, object[] boxed, int count)
-    {
-        var values = new T[count];
-        for (int i = 0; i < count; i++)
-        {
-            values[i] = (T)boxed[i];
-        }
-
-        return new ArrayColumn<T>(name, typeName, values);
     }
 
     // Reads rowCount discriminators of the given width into dest, widening each to int. Width 1 (the common case,
@@ -624,7 +433,7 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     }
 
     // The write plan for one slice, computed once by BeginWrite and shared across the prefix and body phases: the
-    // runtime type list, the per-row discriminators, and each type's child column plus the slice within it.
+    // runtime type list, the discriminator width, and each type's child column plus the slice within it.
     private sealed class DynamicWriteState : IColumnWriteState
     {
         public string[] TypeNames;
@@ -633,8 +442,6 @@ internal sealed class DynamicColumnCodec : IColumnCodec
         public int[] ChildStart;
         public int[] ChildLength;
         public IColumnWriteState[] ChildStates;
-        public int[] Discriminators;
-        public int Length;
         public int Width;
 
         public void Dispose()
@@ -645,12 +452,6 @@ internal sealed class DynamicColumnCodec : IColumnCodec
                 {
                     state?.Dispose();
                 }
-            }
-
-            if (Discriminators is not null)
-            {
-                ArrayPool<int>.Shared.Return(Discriminators);
-                Discriminators = null;
             }
         }
     }

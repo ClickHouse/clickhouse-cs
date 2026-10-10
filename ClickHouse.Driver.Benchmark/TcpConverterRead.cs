@@ -266,11 +266,17 @@ public class TcpConverterRead
         return columns;
     }
 
-    // The block as an insert writes it.
+    // The block as an insert writes it: the codec of each type, and the write of the column (InsertColumnWrite.For).
     private static byte[] Encode(List<(string Name, string Type, IColumn Values)> columns, int rows)
     {
         InsertColumn[] plan = columns
-            .Select(c => new InsertColumn(c.Name, c.Type, ColumnCodecRegistry.Default.Resolve(c.Type, Context), c.Values))
+            .Select(c =>
+            {
+                IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(c.Type, Context);
+                InsertColumnWrite write = InsertColumnWrite.For(codec, c.Values, c.Type, Context, ColumnCodecRegistry.Default.Converters)
+                    ?? throw new InvalidOperationException($"The insert plan of '{c.Type}' does not accept the column.");
+                return new InsertColumn(c.Name, c.Type, codec, c.Values, write);
+            })
             .ToArray();
 
         using var stream = new MemoryStream();

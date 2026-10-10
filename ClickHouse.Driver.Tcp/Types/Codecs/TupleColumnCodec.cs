@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
@@ -23,11 +22,8 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </para>
 ///
 /// <para>
-/// On the write path a dense <c>TupleColumn</c> (whose child columns already exist) is serialized straight from
-/// those children with no copy. A flat column of <c>ValueTuple</c> values — the buffer
-/// an <c>Array(Tuple(...))</c> flattens into, or one a caller builds directly — is un-transposed into the
-/// per-child columns before the write when every child codec accepts that projection. A shape-only child such as
-/// <c>Nested</c> requires the dense tuple form so its named field columns remain available.
+/// The codec writes a dense <c>TupleColumn</c> only (<see cref="CanWrite"/>): each child column through its child
+/// codec, with no copy. The converter layer writes every other column.
 /// </para>
 /// </summary>
 internal sealed class TupleColumnCodec : IColumnCodec
@@ -60,15 +56,10 @@ internal sealed class TupleColumnCodec : IColumnCodec
         typeof(TupleColumn<,,,,,,>),
     };
 
-    // Cache projection builders only for tuple shapes that are used.
-    private static readonly ConcurrentDictionary<Type, Func<string, IColumn, int, IColumn>[]> LiftedProjectionBuilders = new();
-
     private readonly IColumnCodec[] children;
     private readonly string[] fieldNames;
     private readonly ConstructorInfo columnConstructor;
     private readonly Type icolumnOfTupleType;
-    private readonly Func<string, IColumn, int, IColumn>[] childProjectionBuilders;
-    private object nullPlaceholder;
 
     private TupleColumnCodec(string typeName, IColumnCodec[] children, string[] fieldNames)
     {
@@ -96,20 +87,6 @@ internal sealed class TupleColumnCodec : IColumnCodec
             new[] { typeof(string), typeof(string), typeof(IColumn[]), typeof(IReadOnlyList<string>), typeof(bool) },
             modifiers: null)
             ?? throw new InvalidOperationException($"The tuple column type '{columnType}' is missing its expected constructor.");
-
-        // One cached delegate per element for the ergonomic write path: a lazy projection view over the flat
-        // ValueTuple column that surfaces one element position, so the child codec writes strided through the tuples
-        // with no per-child buffer materialized. BuildProjection<T> closed over the child's element type once.
-        childProjectionBuilders = new Func<string, IColumn, int, IColumn>[arity];
-        MethodInfo projectionTemplate = typeof(TupleColumnCodec).GetMethod(nameof(BuildProjection), BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new InvalidOperationException($"Method '{nameof(BuildProjection)}' was not found.");
-
-        for (int i = 0; i < arity; i++)
-        {
-            childProjectionBuilders[i] = (Func<string, IColumn, int, IColumn>)projectionTemplate
-                .MakeGenericMethod(elementTypes[i])
-                .CreateDelegate(typeof(Func<string, IColumn, int, IColumn>));
-        }
     }
 
     /// <inheritdoc/>
@@ -117,13 +94,6 @@ internal sealed class TupleColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public Type ElementType { get; }
-
-    /// <inheritdoc/>
-    public object NullPlaceholder => nullPlaceholder ??= BuildNullPlaceholder(ElementType);
-
-    /// <inheritdoc/>
-    public object NullPlaceholderAs(Type writeType)
-        => writeType == ElementType ? NullPlaceholder : BuildNullPlaceholder(writeType);
 
     /// <summary>Builds a <c>Tuple(...)</c> codec, resolving each element's codec through the registry.</summary>
     /// <param name="node">The parsed <c>Tuple</c> node; its arguments are the element types (each optionally name-prefixed).</param>
@@ -212,48 +182,8 @@ internal sealed class TupleColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWriteElementType(Type elementType)
-    {
-        int arity = children.Length;
-        if (!elementType.IsGenericType || elementType.GetGenericTypeDefinition() != ValueTupleDefinitions[arity])
-        {
-            return false;
-        }
-
-        Type[] arguments = elementType.GetGenericArguments();
-        for (int i = 0; i < arity; i++)
-        {
-            if (!children[i].CanWriteElementType(arguments[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private object BuildNullPlaceholder(Type writeType)
-    {
-        if (!CanWriteElementType(writeType))
-        {
-            throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
-        }
-
-        Type[] arguments = writeType.GetGenericArguments();
-        var values = new object[arguments.Length];
-        for (int i = 0; i < arguments.Length; i++)
-        {
-            values[i] = children[i].NullPlaceholderAs(arguments[i]);
-        }
-
-        ConstructorInfo constructor = writeType.GetConstructor(arguments)
-            ?? throw new InvalidOperationException($"The tuple type '{writeType}' is missing its all-element constructor.");
-        return constructor.Invoke(values);
-    }
-
-    /// <inheritdoc/>
     // A tuple of this element type whose child columns the child codecs write from their storage.
-    public bool WritesFromStorage(IColumn column)
+    public bool CanWrite(IColumn column)
     {
         if (column is not ITupleColumn dense || !icolumnOfTupleType.IsInstanceOfType(column) || dense.Children.Count != children.Length)
         {
@@ -262,7 +192,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
 
         for (int i = 0; i < children.Length; i++)
         {
-            if (!children[i].WritesFromStorage(dense.Children[i]))
+            if (!children[i].CanWrite(dense.Children[i]))
             {
                 return false;
             }
@@ -272,129 +202,16 @@ internal sealed class TupleColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column)
+    // One write state for each child column.
+    public IColumnWriteState BeginWrite(IColumn column, int start, int length)
     {
-        // Dense tuples must be writable through their actual child columns.
-        if (column is ITupleColumn dense)
-        {
-            if (!icolumnOfTupleType.IsInstanceOfType(column) || dense.Children.Count != children.Length)
-            {
-                return false;
-            }
-
-            for (int i = 0; i < children.Length; i++)
-            {
-                if (!children[i].CanWrite(dense.Children[i]))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        return CanWriteElementType(column.ElementType);
-    }
-
-    // Resolve builders for the canonical or child-lifted tuple shape.
-    private Func<string, IColumn, int, IColumn>[] ProjectionBuildersFor(Type tupleType)
-    {
-        if (tupleType == ElementType)
-        {
-            return childProjectionBuilders;
-        }
-
-        if (!CanWriteElementType(tupleType))
-        {
-            throw new ArgumentException(
-                $"A {TypeName} column must hold rows of a CLR tuple type its field codecs accept, not {tupleType}.",
-                nameof(tupleType));
-        }
-
-        return LiftedProjectionBuilders.GetOrAdd(tupleType, BuildProjectionBuilders);
-    }
-
-    // Close one projection builder over each field type.
-    private static Func<string, IColumn, int, IColumn>[] BuildProjectionBuilders(Type tupleType)
-    {
-        MethodInfo template = typeof(TupleColumnCodec).GetMethod(nameof(BuildProjection), BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new InvalidOperationException($"Method '{nameof(BuildProjection)}' was not found.");
-
-        Type[] arguments = tupleType.GetGenericArguments();
-        var builders = new Func<string, IColumn, int, IColumn>[arguments.Length];
-        for (int i = 0; i < arguments.Length; i++)
-        {
-            builders[i] = (Func<string, IColumn, int, IColumn>)template
-                .MakeGenericMethod(arguments[i])
-                .CreateDelegate(typeof(Func<string, IColumn, int, IColumn>));
-        }
-
-        return builders;
-    }
-
-    /// <inheritdoc/>
-    // Prepare one column and write state per tuple field.
-    public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildState(column, start, length);
-
-    /// <inheritdoc/>
-    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        using TupleWriteState state = BuildState(column, start, length);
-        WriteStatePrefixCore(writer, state);
-    }
-
-    /// <inheritdoc/>
-    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
-    {
-        WriteStatePrefixCore(writer, state.Expect<TupleWriteState>(TypeName));
-    }
-
-    /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        using TupleWriteState state = BuildState(column, start, length);
-        WriteBodyCore(writer, state);
-    }
-
-    /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
-    {
-        WriteBodyCore(writer, state.Expect<TupleWriteState>(TypeName));
-    }
-
-    private void WriteStatePrefixCore(ClickHouseBinaryWriter writer, TupleWriteState state)
-    {
-        for (int i = 0; i < children.Length; i++)
-        {
-            children[i].WriteStatePrefix(writer, state.ChildColumns[i], state.ChildStart, state.Length, state.ChildStates[i]);
-        }
-    }
-
-    private void WriteBodyCore(ClickHouseBinaryWriter writer, TupleWriteState state)
-    {
-        for (int i = 0; i < children.Length; i++)
-        {
-            children[i].WriteColumn(writer, state.ChildColumns[i], state.ChildStart, state.Length, state.ChildStates[i]);
-        }
-    }
-
-    // Dense tuples reuse child columns; flat tuples use lazy field projections.
-    private TupleWriteState BuildState(IColumn column, int start, int length)
-    {
-        int arity = children.Length;
-        var childColumns = new IColumn[arity];
-        var childStates = new IColumnWriteState[arity];
-        ITupleColumn dense = column is ITupleColumn tuple && tuple.Children.Count == arity ? tuple : null;
-        Func<string, IColumn, int, IColumn>[] builders = dense is not null ? null : ProjectionBuildersFor(column.ElementType);
-
+        IReadOnlyList<IColumn> childColumns = ((ITupleColumn)column).Children;
+        var childStates = new IColumnWriteState[children.Length];
         int built = 0;
         try
         {
-            for (int i = 0; i < arity; i++)
+            for (int i = 0; i < children.Length; i++)
             {
-                childColumns[i] = dense is not null
-                    ? dense.Children[i]
-                    : builders[i](children[i].TypeName, column, i);
                 childStates[i] = children[i].BeginWrite(childColumns[i], start, length);
                 built = i + 1;
             }
@@ -406,7 +223,29 @@ internal sealed class TupleColumnCodec : IColumnCodec
             throw;
         }
 
-        return new TupleWriteState { ChildColumns = childColumns, ChildStart = start, Length = length, ChildStates = childStates };
+        return new TupleWriteState(childStates);
+    }
+
+    /// <inheritdoc/>
+    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
+    {
+        IColumnWriteState[] childStates = state.Expect<TupleWriteState>(TypeName).ChildStates;
+        IReadOnlyList<IColumn> childColumns = ((ITupleColumn)column).Children;
+        for (int i = 0; i < children.Length; i++)
+        {
+            children[i].WriteStatePrefix(writer, childColumns[i], start, length, childStates[i]);
+        }
+    }
+
+    /// <inheritdoc/>
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
+    {
+        IColumnWriteState[] childStates = state.Expect<TupleWriteState>(TypeName).ChildStates;
+        IReadOnlyList<IColumn> childColumns = ((ITupleColumn)column).Children;
+        for (int i = 0; i < children.Length; i++)
+        {
+            children[i].WriteColumn(writer, childColumns[i], start, length, childStates[i]);
+        }
     }
 
     // Dispose states created before a later child failed.
@@ -418,26 +257,13 @@ internal sealed class TupleColumnCodec : IColumnCodec
         }
     }
 
-    private static IColumn BuildProjection<T>(string typeName, IColumn source, int fieldIndex)
-        => new TupleFieldColumn<T>(typeName, source, fieldIndex);
-
-    // Per-field columns and states shared by the prefix and body.
+    // The write states of the children, shared by the prefix and body.
     private sealed class TupleWriteState : IColumnWriteState
     {
-        public IColumn[] ChildColumns;
-        public int ChildStart;
-        public int Length;
-        public IColumnWriteState[] ChildStates;
+        public TupleWriteState(IColumnWriteState[] childStates) => ChildStates = childStates;
 
-        public void Dispose()
-        {
-            if (ChildStates is not null)
-            {
-                foreach (IColumnWriteState state in ChildStates)
-                {
-                    state?.Dispose();
-                }
-            }
-        }
+        public IColumnWriteState[] ChildStates { get; }
+
+        public void Dispose() => DisposeStates(ChildStates, ChildStates.Length);
     }
 }

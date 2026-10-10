@@ -28,19 +28,7 @@ public class DynamicColumnCodecTests
     };
 
     [Test]
-    public async Task WriteFull_ErgonomicColumn_ProducesTheDocumentedBytes()
-    {
-        IColumnCodec codec = Resolve("Dynamic");
-        var column = new ArrayColumn<object>("d", "Dynamic", new object[] { 42UL, "hi", null });
-
-        // The inferred type list is name-sorted (String before UInt64), matching the server's canonicalization.
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteFull(w, column));
-
-        CollectionAssert.AreEqual(DocumentedBytes, bytes);
-    }
-
-    [Test]
-    public async Task WriteFull_DenseColumnReadBack_RoundTripsToIdenticalBytes()
+    public async Task WriteColumn_DenseColumnReadBack_RoundTripsToIdenticalBytes()
     {
         IColumnCodec codec = Resolve("Dynamic");
 
@@ -49,24 +37,7 @@ public class DynamicColumnCodecTests
         using IColumn dense = await codec.ReadColumnAsync(reader, "d", "Dynamic", 3, CodecTestHarness.None);
 
         // The read-back DynamicColumn is the zero-copy write source: writing it reproduces the exact bytes.
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteFull(w, dense));
-
-        CollectionAssert.AreEqual(DocumentedBytes, bytes);
-    }
-
-    [Test]
-    public async Task WriteStatePrefixThenColumn_SeparateStateFreeCalls_ProducesTheDocumentedBytes()
-    {
-        IColumnCodec codec = Resolve("Dynamic");
-        var column = new ArrayColumn<object>("d", "Dynamic", new object[] { 42UL, "hi", null });
-
-        // The state-free prefix and body calls each recompute the (deterministic) type list independently; the
-        // combined output must still match the shared-state path.
-        byte[] bytes = await CodecTestHarness.WriteAsync(w =>
-        {
-            codec.WriteStatePrefix(w, column);
-            codec.WriteColumn(w, column);
-        });
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(codec, dense, 0, 3, prefix: true);
 
         CollectionAssert.AreEqual(DocumentedBytes, bytes);
     }
@@ -86,9 +57,9 @@ public class DynamicColumnCodecTests
         0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // UInt64 run[1] = 7
     };
 
-    // The dense planner derives each type's child-column run start from the local index of that type's first
-    // in-slice row. At start 0 every one of those is 0, so a slice beginning at row 0 cannot tell a correct planner
-    // from one that ignores the offset entirely — this is the only test that can.
+    // The dense write starts the run of each type at the local index of the first row of that type in the slice. At
+    // start 0 each of these indices is 0, so only a slice that starts after earlier values shows that the write uses
+    // the offset.
     [Test]
     public async Task WriteColumn_DenseColumnSliceAfterEarlierValues_StartsEachRunAtItsSliceOffset()
     {
@@ -98,9 +69,9 @@ public class DynamicColumnCodecTests
         await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
         using IColumn dense = await codec.ReadColumnAsync(reader, "d", "Dynamic", 5, CodecTestHarness.None);
 
-        // Slice rows [3, 5): 7 (UInt64) and "yo" (String). Each is the *second* value of its run, so each run must
-        // be written from offset 1.
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, dense, 3, 2));
+        // Slice rows [3, 5): 7 (UInt64) and "yo" (String). Each row is the second value of its run, so each run starts
+        // at offset 1.
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(codec, dense, 3, 2);
 
         byte[] expected =
         {
@@ -205,6 +176,27 @@ public class DynamicColumnCodecTests
             Assert.That(column[0], Is.EqualTo(7L));
             Assert.That(() => column[1], Throws.InstanceOf<IndexOutOfRangeException>(), "a stale NULL discriminator must not read as an existing NULL row");
             Assert.That(() => column[2], Throws.InstanceOf<IndexOutOfRangeException>());
+        });
+    }
+
+    /// <summary>
+    /// The codec writes a Dynamic column from its storage only when the codec of each of its types writes the type
+    /// column from its storage: a type column that a caller builds goes to the converter layer with the whole column.
+    /// </summary>
+    [Test]
+    public void CanWrite_DynamicColumnWithATypeColumnThatACallerBuilt_IsFalse()
+    {
+        IColumnCodec codec = Resolve("Dynamic");
+        IColumn decodedText = DecodedColumns.Of("d", "String", "a");
+        IColumn callerText = new ArrayColumn<string>("d", "String", new[] { "a" });
+        IColumn numbers = PrimitiveColumn<ulong>.FromValues("d", "UInt64", new ulong[] { 7 });
+        using var stored = new DynamicColumn("d", "Dynamic", new[] { "String", "UInt64" }, new[] { 0, 1 }, new[] { decodedText, numbers }, rowCount: 2, pooledDiscriminators: false, ownsColumns: false);
+        using var built = new DynamicColumn("d", "Dynamic", new[] { "String", "UInt64" }, new[] { 0, 1 }, new[] { callerText, numbers }, rowCount: 2, pooledDiscriminators: false, ownsColumns: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.CanWrite(stored), Is.True, "every type column is a decoded column");
+            Assert.That(codec.CanWrite(built), Is.False, "the String column is a caller's ArrayColumn");
         });
     }
 

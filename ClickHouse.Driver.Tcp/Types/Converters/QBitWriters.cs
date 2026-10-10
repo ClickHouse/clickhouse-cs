@@ -83,7 +83,7 @@ internal abstract class QBitWriter<T> : ColumnWriter<T[]>
     /// <param name="planeStride">The number of bytes of one plane.</param>
     protected abstract void Transpose(byte[] scratch, T[] vector, int rowBase, int planeStride);
 
-    // The parameter name is the one that the QBit codec reports for the same vector.
+    // The parameter name is "vector": the refused value is the vector of a row.
 #pragma warning disable CA2208 // Instantiate argument exceptions correctly
     private T[] Validate(T[] vector, int row)
     {

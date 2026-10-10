@@ -1,9 +1,6 @@
 using System;
 using System.Buffers;
 using System.Globalization;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Runtime.Intrinsics;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -30,8 +27,6 @@ internal abstract class QBitColumnCodec : IColumnCodec
     public string TypeName { get; }
 
     public abstract Type ElementType { get; }
-
-    public abstract object NullPlaceholder { get; }
 
     /// <summary>The number of elements of each vector.</summary>
     internal int Dimension { get; }
@@ -107,67 +102,29 @@ internal abstract class QBitColumnCodec : IColumnCodec
         return CreateColumn(columnName, columnType, blob, rowCount, pooled: true);
     }
 
-    public abstract bool CanWrite(IColumn column);
+    /// <inheritdoc/>
+    // The decoded column of the same layout: the same element type, dimension and plane grouping. Equal body sizes do
+    // not imply equal layouts.
+    public bool CanWrite(IColumn column)
+        => column is QBitColumn dense
+            && dense.Dimension == Dimension
+            && dense.BitWidth == BitWidth
+            && dense.Stride == Stride
+            && column.ElementType == ElementType;
 
     /// <inheritdoc/>
-    public bool WritesFromStorage(IColumn column)
-        => column is QBitColumn dense && dense.Dimension == Dimension && dense.BitWidth == BitWidth && dense.Stride == Stride && CanWrite(column);
-
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    // A row range is contiguous within each plane, but planes are spaced by the source column's full row count, so
+    // each plane is one copy.
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        // A row range is contiguous within each plane, but planes are spaced by the source column's full row
-        // count. Dense copies require identical plane grouping; equal body sizes do not imply equal layouts.
-        if (column is QBitColumn dense && dense.Dimension == Dimension && dense.BitWidth == BitWidth && dense.Stride == Stride)
+        var dense = (QBitColumn)column;
+        for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
         {
-            for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
-            {
-                writer.WriteBytes(dense.WirePlane(wireIndex, start, length));
-            }
-
-            return;
+            writer.WriteBytes(dense.WirePlane(wireIndex, start, length));
         }
-
-        WriteTransposed(writer, column, start, length);
     }
 
     protected abstract IColumn CreateColumn(string name, string typeName, byte[] blob, int rowCount, bool pooled);
-
-    /// <summary>Transposes row vectors into a plane-major body.</summary>
-    protected abstract void WriteTransposed(ClickHouseBinaryWriter writer, IColumn column, int start, int length);
-
-    /// <summary>
-    /// Rents scratch space and clears its used region because transpose implementations only set bits.
-    /// </summary>
-    protected byte[] RentScratch(int length, out int byteCount)
-    {
-        byteCount = checked(BitWidth * length * BytesPerRow);
-        byte[] scratch = ArrayPool<byte>.Shared.Rent(byteCount);
-        Array.Clear(scratch, 0, byteCount);
-        return scratch;
-    }
-
-    /// <summary>
-    /// Returns a non-null vector with exactly <see cref="Dimension"/> elements.
-    /// </summary>
-    /// <exception cref="ArgumentException">The vector is null or its length differs from <see cref="Dimension"/>.</exception>
-    protected T[] Validate<T>(T[] vector, int row)
-    {
-        if (vector is null)
-        {
-            throw new ArgumentException(
-                $"A {TypeName} column cannot hold a null vector (at row {row}); wrap the type in Nullable to write nulls.",
-                nameof(vector));
-        }
-
-        if (vector.Length != Dimension)
-        {
-            throw new ArgumentException(
-                $"A {TypeName} vector at row {row} has {vector.Length} element(s); every vector must have exactly {Dimension}.",
-                nameof(vector));
-        }
-
-        return vector;
-    }
 }
 
 /// <summary>
@@ -175,8 +132,6 @@ internal abstract class QBitColumnCodec : IColumnCodec
 /// </summary>
 internal sealed class QBitSByteColumnCodec : QBitColumnCodec
 {
-    private sbyte[] nullPlaceholder;
-
     public QBitSByteColumnCodec(string typeName, int dimension)
         : base(typeName, dimension, bitWidth: 8)
     {
@@ -184,48 +139,8 @@ internal sealed class QBitSByteColumnCodec : QBitColumnCodec
 
     public override Type ElementType => typeof(sbyte[]);
 
-    /// <summary>Gets the all-zero vector used for null positions in a nullable column.</summary>
-    public override object NullPlaceholder => nullPlaceholder ??= new sbyte[Dimension];
-
-    public override bool CanWrite(IColumn column) => column is IColumn<sbyte[]>;
-
     protected override IColumn CreateColumn(string name, string typeName, byte[] blob, int rowCount, bool pooled)
         => new QBitSByteColumn(name, typeName, Dimension, blob, rowCount, pooled);
-
-    protected override void WriteTransposed(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        var typed = (IColumn<sbyte[]>)column;
-        byte[] scratch = RentScratch(length, out int byteCount);
-        try
-        {
-            int planeStride = length * BytesPerRow;
-            for (int r = 0; r < length; r++)
-            {
-                sbyte[] vector = Validate(typed[start + r], start + r);
-                int rowBase = r * BytesPerRow;
-                for (int i = 0; i < vector.Length; i++)
-                {
-                    // Preserve the element's two's-complement bit pattern.
-                    uint raw = unchecked((byte)vector[i]);
-                    int slot = QBitLayout.ByteOfGroup(i >> 3, BytesPerRow);
-                    byte bit = (byte)(1 << (i & 7));
-                    for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
-                    {
-                        if (((raw >> (7 - wireIndex)) & 1) != 0)
-                        {
-                            scratch[(wireIndex * planeStride) + rowBase + slot] |= bit;
-                        }
-                    }
-                }
-            }
-
-            writer.WriteBytes(scratch.AsSpan(0, byteCount));
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(scratch);
-        }
-    }
 }
 
 /// <summary>
@@ -234,8 +149,6 @@ internal sealed class QBitSByteColumnCodec : QBitColumnCodec
 /// </summary>
 internal sealed class QBitFloatColumnCodec : QBitColumnCodec
 {
-    private float[] nullPlaceholder;
-
     public QBitFloatColumnCodec(string typeName, int dimension, int bitWidth)
         : base(typeName, dimension, bitWidth)
     {
@@ -243,83 +156,13 @@ internal sealed class QBitFloatColumnCodec : QBitColumnCodec
 
     public override Type ElementType => typeof(float[]);
 
-    /// <summary>Gets the lazily allocated all-zero vector used for null positions in a nullable column.</summary>
-    public override object NullPlaceholder => nullPlaceholder ??= new float[Dimension];
-
-    public override bool CanWrite(IColumn column) => column is IColumn<float[]>;
-
     protected override IColumn CreateColumn(string name, string typeName, byte[] blob, int rowCount, bool pooled)
         => new QBitFloatColumn(name, typeName, Dimension, BitWidth, blob, rowCount, pooled);
-
-    protected override void WriteTransposed(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        var typed = (IColumn<float[]>)column;
-        byte[] scratch = RentScratch(length, out int byteCount);
-        try
-        {
-            bool simd = Vector256.IsHardwareAccelerated;
-            int planeStride = length * BytesPerRow;
-            for (int r = 0; r < length; r++)
-            {
-                float[] vector = Validate(typed[start + r], start + r);
-                int rowBase = (r * BytesPerRow);
-                int whole = simd ? Dimension >> 3 : 0;
-
-                if (whole != 0)
-                {
-                    TransposeGroups(scratch, vector, whole, rowBase, planeStride);
-                }
-
-                // Handle the tail, or the entire vector when SIMD is unavailable.
-                for (int i = whole << 3; i < vector.Length; i++)
-                {
-                    uint raw = BitConverter.SingleToUInt32Bits(vector[i]);
-                    int slot = QBitLayout.ByteOfGroup(i >> 3, BytesPerRow);
-                    byte bit = (byte)(1 << (i & 7));
-                    for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
-                    {
-                        // BFloat16 planes are the high 16 bits of the widened float.
-                        if (((raw >> (31 - wireIndex)) & 1) != 0)
-                        {
-                            scratch[(wireIndex * planeStride) + rowBase + slot] |= bit;
-                        }
-                    }
-                }
-            }
-
-            writer.WriteBytes(scratch.AsSpan(0, byteCount));
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(scratch);
-        }
-    }
-
-    /// <summary>
-    /// Transposes complete eight-element groups. Each <see cref="Vector256{T}.ExtractMostSignificantBits"/> call
-    /// produces one plane byte; shifting the lanes left exposes the next plane.
-    /// </summary>
-    private void TransposeGroups(byte[] scratch, float[] vector, int whole, int rowBase, int planeStride)
-    {
-        ref uint source = ref Unsafe.As<float, uint>(ref MemoryMarshal.GetArrayDataReference(vector));
-        for (int group = 0; group < whole; group++)
-        {
-            Vector256<uint> lanes = Vector256.LoadUnsafe(ref source, (nuint)(group << 3));
-            int slot = rowBase + QBitLayout.ByteOfGroup(group, BytesPerRow);
-            for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
-            {
-                scratch[(wireIndex * planeStride) + slot] = (byte)lanes.ExtractMostSignificantBits();
-                lanes <<= 1;
-            }
-        }
-    }
 }
 
 /// <summary>Handles <c>QBit(Float64, N)</c> as 64 planes over each element's IEEE-754 bit pattern.</summary>
 internal sealed class QBitDoubleColumnCodec : QBitColumnCodec
 {
-    private double[] nullPlaceholder;
-
     public QBitDoubleColumnCodec(string typeName, int dimension)
         : base(typeName, dimension, bitWidth: 64)
     {
@@ -327,74 +170,6 @@ internal sealed class QBitDoubleColumnCodec : QBitColumnCodec
 
     public override Type ElementType => typeof(double[]);
 
-    /// <summary>Gets the all-zero vector used for null positions in a nullable column.</summary>
-    public override object NullPlaceholder => nullPlaceholder ??= new double[Dimension];
-
-    public override bool CanWrite(IColumn column) => column is IColumn<double[]>;
-
     protected override IColumn CreateColumn(string name, string typeName, byte[] blob, int rowCount, bool pooled)
         => new QBitDoubleColumn(name, typeName, Dimension, blob, rowCount, pooled);
-
-    protected override void WriteTransposed(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        var typed = (IColumn<double[]>)column;
-        byte[] scratch = RentScratch(length, out int byteCount);
-        try
-        {
-            bool simd = Vector256.IsHardwareAccelerated;
-            int planeStride = length * BytesPerRow;
-            for (int r = 0; r < length; r++)
-            {
-                double[] vector = Validate(typed[start + r], start + r);
-                int rowBase = r * BytesPerRow;
-                int whole = simd ? Dimension >> 3 : 0;
-
-                if (whole != 0)
-                {
-                    TransposeGroups(scratch, vector, whole, rowBase, planeStride);
-                }
-
-                for (int i = whole << 3; i < vector.Length; i++)
-                {
-                    ulong raw = BitConverter.DoubleToUInt64Bits(vector[i]);
-                    int slot = QBitLayout.ByteOfGroup(i >> 3, BytesPerRow);
-                    byte bit = (byte)(1 << (i & 7));
-                    for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
-                    {
-                        if (((raw >> (63 - wireIndex)) & 1) != 0)
-                        {
-                            scratch[(wireIndex * planeStride) + rowBase + slot] |= bit;
-                        }
-                    }
-                }
-            }
-
-            writer.WriteBytes(scratch.AsSpan(0, byteCount));
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(scratch);
-        }
-    }
-
-    /// <summary>
-    /// Transposes complete eight-element groups. Each four-lane vector contributes one nibble to a plane byte.
-    /// </summary>
-    private void TransposeGroups(byte[] scratch, double[] vector, int whole, int rowBase, int planeStride)
-    {
-        ref ulong source = ref Unsafe.As<double, ulong>(ref MemoryMarshal.GetArrayDataReference(vector));
-        for (int group = 0; group < whole; group++)
-        {
-            Vector256<ulong> low = Vector256.LoadUnsafe(ref source, (nuint)(group << 3));
-            Vector256<ulong> high = Vector256.LoadUnsafe(ref source, (nuint)((group << 3) + 4));
-            int slot = rowBase + QBitLayout.ByteOfGroup(group, BytesPerRow);
-            for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
-            {
-                uint bits = low.ExtractMostSignificantBits() | (high.ExtractMostSignificantBits() << 4);
-                scratch[(wireIndex * planeStride) + slot] = (byte)bits;
-                low <<= 1;
-                high <<= 1;
-            }
-        }
-    }
 }
