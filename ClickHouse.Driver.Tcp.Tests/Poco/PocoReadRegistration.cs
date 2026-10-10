@@ -12,7 +12,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Poco;
 internal sealed class PocoReadRegistration : IDifferentialRegistration
 {
     // The POCO facets of the case list. A new case changes this count.
-    internal const int PocoFacets = 567;
+    internal const int PocoFacets = 587;
 
     /// <inheritdoc/>
     public void Register(DifferentialRegistry registry)

@@ -51,6 +51,8 @@ public class LeafWriterTests
         ("ArgumentException", "value", "A FixedString(2) value at row 0 is 3 bytes; every value must be exactly 2 bytes. Resize it to 2 bytes before writing it \u2014 the write path will not pad or truncate, since doing so would silently alter the data. (Parameter 'value')"), // 23 FixedString(2)
         ("ArgumentException", "value", "A FixedString(2) column cannot hold a null value (at row 0); wrap the type in Nullable to write nulls. (Parameter 'value')"), // 24 FixedString(2)
         ("ArgumentNullException", "value", "Value cannot be null. (Parameter 'value')"), // 25 JSON
+        ("ArgumentOutOfRangeException", "utc", "DateTime is outside the range ClickHouse DateTime can hold (1970-01-01 to 2106-02-07 06:28:15 UTC). (Parameter 'utc')\nActual value was 01/01/2200 00:00:00."), // 26 DateTime
+        ("ArgumentOutOfRangeException", "value", "Time64 is outside the range ClickHouse Time64 can hold ([-999:59:59, 999:59:59]). (Parameter 'value')\nActual value was 41.16:00:00."), // 27 Time64(3)
     };
 
     // Texts of at most 4 UTF-8 bytes. A lone surrogate encodes as the 3 bytes EF BF BD.
@@ -470,6 +472,8 @@ public class LeafWriterTests
         yield return Case("FixedString(2)", new[] { "abc"u8.ToArray() });
         yield return Case("FixedString(2)", new byte[][] { null });
         yield return Case("JSON", new string[] { null });
+        yield return Case("DateTime", new[] { new DateTime(2200, 1, 1, 0, 0, 0, DateTimeKind.Utc) });
+        yield return Case("Time64(3)", new[] { new TimeSpan(1000, 0, 0) });
     }
 
     private static async Task AssertWritesLikeTheCurrentPathAsync<T>(string type)

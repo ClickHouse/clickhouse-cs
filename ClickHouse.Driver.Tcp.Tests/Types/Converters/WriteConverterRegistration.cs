@@ -29,7 +29,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 internal sealed class WriteConverterRegistration : IDifferentialRegistration
 {
     // The Write facets of the case list, without the decoded inputs. A new case changes this count.
-    internal const int WriteFacets = 545;
+    internal const int WriteFacets = 559;
 
     /// <inheritdoc/>
     public void Register(DifferentialRegistry registry) => registry.Add(new IndexerWriteArm(), WriteFacets);
