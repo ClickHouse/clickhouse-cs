@@ -66,11 +66,9 @@ internal static class ArrayColumnCodec
 /// <see cref="ArrayValueColumn{TElement}"/> and slice inner values without boxing; the registry pipeline is
 /// non-generic, so <see cref="ArrayColumnCodec"/> closes this over the inner codec's runtime element type. The
 /// inner codec stays non-generic (<see cref="IColumnCodec"/>), so its column is cast to <c>IColumn&lt;TElement&gt;</c>
-/// once at the read boundary. The write path takes either shape as it comes: the dense
-/// <see cref="ArrayValueColumn{TElement}"/> is the wire's own layout and is written with no copy, while the
-/// ergonomic jagged form (<c>TElement[]</c> per row) is written from its rows without its elements being copied
-/// into a flat buffer first when the inner codec accepts that projected shape. An inner such as <c>Nested</c>,
-/// whose only write source is its dense named-field column, therefore requires the dense outer form too.
+/// once at the read boundary. The codec writes a dense column only (<see cref="CanWrite"/>): its offsets, rebased to
+/// the slice, then its inner column through the inner codec, with no copy. The converter layer writes every other
+/// column.
 /// </para>
 /// </summary>
 /// <typeparam name="TElement">The inner codec's CLR element type; each row surfaces as <typeparamref name="TElement"/>[].</typeparam>
@@ -89,25 +87,6 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
 
     /// <inheritdoc/>
     public Type ElementType => typeof(TElement[]);
-
-    /// <summary>
-    /// The placeholder for an absent <c>Array(T)</c> value is the empty array — a row whose offset advances by
-    /// zero and contributes no elements. Relevant only if a composite nests an <c>Array</c> and asks for its
-    /// placeholder.
-    /// </summary>
-    public object NullPlaceholder => Array.Empty<TElement>();
-
-    /// <inheritdoc/>
-    public object NullPlaceholderAs(Type writeType)
-    {
-        if (!CompositeElementProjections.TryGetArrayElement(writeType, out Type sourceElement)
-            || !inner.CanWriteElementType(sourceElement))
-        {
-            throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
-        }
-
-        return writeType == ElementType ? NullPlaceholder : Array.CreateInstance(sourceElement, 0);
-    }
 
     /// <inheritdoc/>
     public ValueTask ReadStatePrefixAsync(ClickHouseBinaryReader reader, CancellationToken cancellationToken)
@@ -205,172 +184,57 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWriteElementType(Type elementType)
-        => CompositeElementProjections.TryGetArrayElement(elementType, out Type sourceElement)
-            && inner.CanWriteElementType(sourceElement);
+    // A dense array whose inner column the inner codec writes.
+    public bool CanWrite(IColumn column) => column is IDenseArrayColumn dense && inner.CanWrite(dense.Inner);
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column)
-        => TryDense(column, out _) || ResolveWriteShape(column) is not null;
-
-    /// <inheritdoc/>
-    // A dense array whose inner column the inner codec writes from its storage.
-    public bool WritesFromStorage(IColumn column) => column is IDenseArrayColumn dense && inner.WritesFromStorage(dense.Inner);
-
-    /// <summary>
-    /// Recognizes a validated dense column whose inner element type this codec can write. Convenience element
-    /// types are accepted as well as the canonical decoded type, avoiding a jagged rebuild.
-    /// </summary>
-    private bool TryDense(IColumn column, out IDenseArrayColumn dense)
+    // The range of the elements of the slice, and the state of the inner write.
+    public IColumnWriteState BeginWrite(IColumn column, int start, int length)
     {
-        dense = column as IDenseArrayColumn;
-        if (dense is not null && inner.CanWrite(dense.Inner))
-        {
-            return true;
-        }
-
-        dense = null;
-        return false;
-    }
-
-    // Resolve the shape from the row's CLR element type.
-    private IArrayWriteShape ResolveWriteShape(IColumn column)
-    {
-        if (!CompositeElementProjections.TryGetArrayElement(column.ElementType, out Type sourceElement)
-            || !inner.CanWriteElementType(sourceElement))
-        {
-            return null;
-        }
-
-        return ArrayWriteShapes.For(sourceElement);
-    }
-
-    /// <inheritdoc/>
-    public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildState(column, start, length);
-
-    /// <inheritdoc/>
-    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        using ArrayWriteState state = BuildState(column, start, length);
-        WriteStatePrefixCore(writer, state);
+        var dense = (IDenseArrayColumn)column;
+        ReadOnlySpan<int> offsets = dense.Offsets;
+        int elementBase = offsets[start];
+        int elementCount = offsets[start + length] - elementBase;
+        return new ArrayWriteState(elementBase, elementCount, inner.BeginWrite(dense.Inner, elementBase, elementCount));
     }
 
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        WriteStatePrefixCore(writer, state.Expect<ArrayWriteState>(TypeName));
-    }
-
-    private void WriteStatePrefixCore(ClickHouseBinaryWriter writer, ArrayWriteState state)
-    {
-        if (state.Elements is not null)
-        {
-            inner.WriteStatePrefix(writer, state.Elements, state.ElementBase, state.ElementCount, state.InnerState);
-        }
+        var own = state.Expect<ArrayWriteState>(TypeName);
+        inner.WriteStatePrefix(writer, ((IDenseArrayColumn)column).Inner, own.ElementBase, own.ElementCount, own.InnerState);
     }
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        using ArrayWriteState state = BuildState(column, start, length);
-        WriteBody(writer, column, start, length, state);
-    }
-
-    /// <inheritdoc/>
+    // The stored offsets, rebased to the slice, then the elements of the slice.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        WriteBody(writer, column, start, length, state.Expect<ArrayWriteState>(TypeName));
-    }
-
-    // Write cumulative offsets, then the flattened elements.
-    private void WriteBody(ClickHouseBinaryWriter writer, IColumn column, int start, int length, ArrayWriteState state)
-    {
-        if (TryDense(column, out IDenseArrayColumn dense))
+        var own = state.Expect<ArrayWriteState>(TypeName);
+        var dense = (IDenseArrayColumn)column;
+        ReadOnlySpan<int> offsets = dense.Offsets;
+        for (int i = 0; i < length; i++)
         {
-            // Rebase the stored offsets to this slice.
-            ReadOnlySpan<int> offsets = dense.Offsets;
-            int elementBase = offsets[start];
-            for (int i = 0; i < length; i++)
-            {
-                writer.WriteUInt64((ulong)(offsets[start + i + 1] - elementBase));
-            }
-        }
-        else
-        {
-            int[] sliceOffsets = state.SliceOffsets;
-            for (int i = 0; i < length; i++)
-            {
-                writer.WriteUInt64((ulong)sliceOffsets[i + 1]);
-            }
+            writer.WriteUInt64((ulong)(offsets[start + i + 1] - own.ElementBase));
         }
 
-        if (state.Elements is not null)
-        {
-            // Sectioned codecs must see the whole flattened element column.
-            inner.WriteColumn(writer, state.Elements, state.ElementBase, state.ElementCount, state.InnerState);
-            return;
-        }
-
-        // Span-writable leaves can write each source row directly.
-        state.Shape.WriteRuns(inner, writer, column, start, length);
-    }
-
-    // Prepare the element range and the inner codec's state once per slice.
-    private ArrayWriteState BuildState(IColumn column, int start, int length)
-    {
-        if (TryDense(column, out IDenseArrayColumn dense))
-        {
-            // Dense columns already contain the flattened element column.
-            ReadOnlySpan<int> offsets = dense.Offsets;
-            int elementBase = offsets[start];
-            int elementCount = offsets[start + length] - elementBase;
-            IColumnWriteState innerState = inner.BeginWrite(dense.Inner, elementBase, elementCount);
-            return new ArrayWriteState(dense.Inner, elementBase, elementCount, innerState, sliceOffsets: null, shape: null);
-        }
-
-        // Compute ergonomic offsets once for both write phases.
-        IArrayWriteShape shape = ResolveWriteShape(column)
-            ?? throw new ArgumentException(
-                $"A {TypeName} column must hold rows of a CLR type its element codec accepts, not {column.GetType()}.",
-                nameof(column));
-
-        int[] sliceOffsets = shape.ComputeOffsets(column, start, length);
-        int total = sliceOffsets[length];
-        if (shape.InnerWritesSpans(inner))
-        {
-            return new ArrayWriteState(elements: null, elementBase: 0, total, innerState: null, sliceOffsets, shape);
-        }
-
-        // Give sectioned codecs a lazy flattened view.
-        IColumn view = shape.CreateFlatteningView(inner.TypeName, column, start, sliceOffsets, total);
-        IColumnWriteState viewState = inner.BeginWrite(view, 0, total);
-        return new ArrayWriteState(view, elementBase: 0, total, viewState, sliceOffsets, shape);
+        inner.WriteColumn(writer, dense.Inner, own.ElementBase, own.ElementCount, own.InnerState);
     }
 
     // State shared by the prefix and body writes for one slice.
     private sealed class ArrayWriteState : IColumnWriteState
     {
-        public ArrayWriteState(IColumn elements, int elementBase, int elementCount, IColumnWriteState innerState, int[] sliceOffsets, IArrayWriteShape shape)
+        public ArrayWriteState(int elementBase, int elementCount, IColumnWriteState innerState)
         {
-            Elements = elements;
             ElementBase = elementBase;
             ElementCount = elementCount;
             InnerState = innerState;
-            SliceOffsets = sliceOffsets;
-            Shape = shape;
         }
-
-        public IColumn Elements { get; }
 
         public int ElementBase { get; }
 
         public int ElementCount { get; }
 
         public IColumnWriteState InnerState { get; }
-
-        public int[] SliceOffsets { get; }
-
-        public IArrayWriteShape Shape { get; }
 
         public void Dispose() => InnerState?.Dispose();
     }

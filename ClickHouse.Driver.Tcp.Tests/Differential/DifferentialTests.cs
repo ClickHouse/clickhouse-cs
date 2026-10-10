@@ -264,7 +264,7 @@ public class DifferentialTests
     {
         IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(testCase.ColumnType, DifferentialEngine.Context);
         using IColumn column = Decode(testCase.ColumnType, bytes, testCase.RowCount);
-        if (!codec.WritesFromStorage(column))
+        if (!codec.CanWrite(column))
         {
             return $"{testCase.Id}: the codec does not write the decoded {column.GetType().Name} from its storage.";
         }

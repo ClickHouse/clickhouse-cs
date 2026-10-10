@@ -41,11 +41,6 @@ internal sealed class EmptyTupleColumnCodec : IColumnCodec
     public Type ElementType => typeof(ValueTuple);
 
     /// <inheritdoc/>
-    // The server rejects Nullable(Tuple(...)), so no null map ever selects a placeholder here; this satisfies the
-    // interface with the type's only value.
-    public object NullPlaceholder => default(ValueTuple);
-
-    /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         // The placeholder bytes must be consumed to keep the stream aligned, even though they carry no value.
@@ -67,19 +62,13 @@ internal sealed class EmptyTupleColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<ValueTuple>;
-
-    /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<ValueTuple>;
+    public bool CanWrite(IColumn column) => column is ArrayColumn<ValueTuple>;
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    // The rows hold no data: each is one placeholder byte.
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        // The rows hold no data, so the column contributes only its element type: this cast rejects a mismatched
-        // one the way every other codec's write does.
-        _ = (IColumn<ValueTuple>)column;
-
         for (int i = 0; i < length; i++)
         {
             writer.WriteByte(Placeholder);

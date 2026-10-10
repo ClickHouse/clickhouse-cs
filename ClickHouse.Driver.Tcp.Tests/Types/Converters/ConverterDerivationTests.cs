@@ -308,7 +308,11 @@ public class ConverterDerivationTests
         });
     }
 
-    /// <summary>A type holds NULL when its codec writes a NULL with no placeholder value of the type.</summary>
+    /// <summary>
+    /// A type holds NULL when a NULL row of it needs no value of the type: <c>Nullable</c>, a nullable dictionary, the
+    /// NULL discriminator of <c>Variant</c>, <c>Dynamic</c> and <c>Geometry</c>, and those types under
+    /// <c>SimpleAggregateFunction</c>. A composite of nullable elements does not hold NULL itself.
+    /// </summary>
     [TestCase("Nullable(String)", true)]
     [TestCase("nullable(Int32)", true)]
     [TestCase("LowCardinality(Nullable(String))", true)]
@@ -326,14 +330,8 @@ public class ConverterDerivationTests
     [TestCase("Point", false)]
     [TestCase("Ring", false)]
     [TestCase("SimpleAggregateFunction(anyLast, String)", false)]
-    public void HoldsNull_Type_IsWhetherTheCodecHasNoPlaceholder(string type, bool holdsNull)
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(ConverterDerivation.Default.HoldsNull(type), Is.EqualTo(holdsNull));
-            Assert.That(ConverterHarness.Codec(type).NullPlaceholder is null, Is.EqualTo(holdsNull), "the placeholder of the codec");
-        });
-    }
+    public void HoldsNull_Type_IsWhetherANullRowNeedsNoValue(string type, bool holdsNull)
+        => Assert.That(ConverterDerivation.Default.HoldsNull(type), Is.EqualTo(holdsNull));
 
     [Test]
     public void OfAndRefused_Null_Throw()

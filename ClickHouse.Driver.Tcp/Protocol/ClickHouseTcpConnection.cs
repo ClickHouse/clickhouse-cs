@@ -971,7 +971,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <param name="validateWritable">
     /// Whether to confirm each value column is writable as its target type. A column is then written through
     /// <see cref="InsertColumnWrite.For"/>: by its codec when the codec writes it from its storage, else by the converter
-    /// tree of its CLR type. Otherwise the codec writes every column.
+    /// tree of its CLR type. Otherwise the insert has no rows, no column is written, and the plan holds no writes.
     /// </param>
     /// <param name="error">Set to a human-readable message on mismatch; null on success.</param>
     /// <returns>The per-column write plan in schema order, or null when <paramref name="error"/> is set.</returns>
@@ -995,7 +995,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             if (byName.TryGetValue(schemaColumn.Name, out IColumn value))
             {
                 matched++;
-                plan[i] = new InsertColumn(schemaColumn.Name, schemaColumn.TypeName, codec: null, value);
+                plan[i] = new InsertColumn(schemaColumn.Name, schemaColumn.TypeName, codec: null, value, write: null);
             }
             else
             {
@@ -1024,13 +1024,15 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 return null;
             }
 
-            InsertColumnWrite write = validateWritable
-                ? InsertColumnWrite.For(codec, slot.Values, slot.TypeName, schema.Context, schema.Codecs.Converters)
-                : InsertColumnWrite.ThroughCodec(codec);
-            if (write is null)
+            InsertColumnWrite write = null;
+            if (validateWritable)
             {
-                error = DescribeUnwritableColumn(slot, schema.Codecs.Converters.SuggestedTypes(slot.TypeName, schema.Context, ConversionDirection.Write));
-                return null;
+                write = InsertColumnWrite.For(codec, slot.Values, slot.TypeName, schema.Context, schema.Codecs.Converters);
+                if (write is null)
+                {
+                    error = DescribeUnwritableColumn(slot, schema.Codecs.Converters.SuggestedTypes(slot.TypeName, schema.Context, ConversionDirection.Write));
+                    return null;
+                }
             }
 
             plan[i] = new InsertColumn(slot.Name, slot.TypeName, codec, slot.Values, write);

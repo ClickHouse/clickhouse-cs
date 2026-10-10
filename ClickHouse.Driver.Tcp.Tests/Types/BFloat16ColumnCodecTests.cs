@@ -1,33 +1,27 @@
-using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
-using static ClickHouse.Driver.Tcp.Tests.Utilities.CodecTestHarness;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
 [TestFixture]
 public class BFloat16ColumnCodecTests
 {
-    // Round-trips of exactly-representable values run against a live server (InsertRoundTripCase, with the
-    // experimental BFloat16 flag enabled). These unit tests cover only what a server round-trip cannot: the
-    // lossy narrowing of a non-representable value, and the accepted CLR element type.
-    [Test]
-    public async Task WriteColumn_NarrowsToTop16BitsOfFloat32()
-    {
-        // 1.1f is 0x3F8CCCCD in float32; narrowing to bfloat16 keeps the top 16 bits (0x3F8C), written
-        // little-endian as 0x8C 0x3F.
-        byte[] bytes = await WriteAsync(w => BFloat16ColumnCodec.Instance.WriteColumn(w, new ArrayColumn<float>("c", "BFloat16", new[] { 1.1f })));
+    // BFloat16 values, and the narrowing of a float that BFloat16 cannot hold, go to a live server in
+    // InsertRoundTripCase, with the experimental BFloat16 flag enabled.
 
-        CollectionAssert.AreEqual(new byte[] { 0x8C, 0x3F }, bytes);
-    }
-
+    // BFloat16 and Float32 both read as float. The storage of BFloat16 is the ArrayColumn<float> that its read gives.
+    // A decoded Float32 column holds 32-bit values, so the converter layer narrows it.
     [Test]
-    public void CanWrite_AcceptsFloatOnly()
+    public void CanWrite_DecodedBFloat16Column_IsTrueAndDecodedFloat32ColumnIsFalse()
     {
+        using IColumn bfloat16 = DecodedColumns.Of("c", "BFloat16", 1f, -2f);
+        using IColumn float32 = DecodedColumns.Of("c", "Float32", 1f, -2f);
+
         Assert.Multiple(() =>
         {
-            Assert.That(BFloat16ColumnCodec.Instance.CanWrite(new ArrayColumn<float>("c", "BFloat16", System.Array.Empty<float>())), Is.True);
-            Assert.That(BFloat16ColumnCodec.Instance.CanWrite(new ArrayColumn<double>("c", "BFloat16", System.Array.Empty<double>())), Is.False);
+            Assert.That(BFloat16ColumnCodec.Instance.CanWrite(bfloat16), Is.True);
+            Assert.That(BFloat16ColumnCodec.Instance.CanWrite(float32), Is.False);
         });
     }
 }

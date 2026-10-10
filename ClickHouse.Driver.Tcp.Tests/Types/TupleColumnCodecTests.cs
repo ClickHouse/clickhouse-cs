@@ -62,7 +62,7 @@ public class TupleColumnCodecTests
         IColumnCodec codec = Resolve("Tuple(Int32, String)");
         var column = new TupleColumn<int, string>("c", "Tuple(Int32, String)", Array.Empty<(int, string)>());
 
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column, 0, 0));
+        byte[] bytes = await CodecTestHarness.WriteSliceAsync(codec, column, 0, 0);
         Assert.That(bytes, Is.Empty, "a zero-row tuple writes no child values");
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
@@ -74,7 +74,7 @@ public class TupleColumnCodecTests
     public async Task WriteColumn_SlicedRange_WritesOnlyThatSliceOfEachChild()
     {
         IColumnCodec codec = Resolve("Tuple(Int32, String)");
-        var full = new TupleColumn<int, string>("c", "Tuple(Int32, String)", new (int, string)[]
+        using IColumn full = DecodedColumns.Of("c", "Tuple(Int32, String)", new (int, string)[]
         {
             (1, "a"),
             (2, "bb"),
@@ -82,7 +82,7 @@ public class TupleColumnCodecTests
             (4, "d"),
         });
 
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, full, start: 1, length: 2));
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(codec, full, start: 1, length: 2);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
         using IColumn read = await codec.ReadColumnAsync(reader, "c", "Tuple(Int32, String)", 2, CodecTestHarness.None);
 
@@ -90,27 +90,34 @@ public class TupleColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_AcceptsDenseAndFlatMatchingTupleColumnsOnly()
+    public void CanWrite_TupleColumnWithCallerBuiltChildren_ReturnsFalse()
     {
-        IColumnCodec codec = Resolve("Tuple(Int32, String)");
+        // A tuple built from rows has caller-built child columns, so the converter layer writes it.
+        const string type = "Tuple(Int32, String)";
+        IColumnCodec codec = Resolve(type);
+        var rows = new (int, string)[] { (1, "a") };
+        using IColumn decoded = DecodedColumns.Of("c", type, rows);
+        using var fromRows = new TupleColumn<int, string>("c", type, rows);
+        var flat = new ArrayColumn<(int, string)>("c", type, rows);
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(new TupleColumn<int, string>("c", "Tuple(Int32, String)", new (int, string)[] { (1, "a") })), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<(int, string)>("c", "Tuple(Int32, String)", new (int, string)[] { (1, "a") })), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<(long, string)>("c", "Tuple(Int64, String)", new (long, string)[] { (1L, "a") })), Is.False);
-            Assert.That(codec.CanWrite(PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 1 })), Is.False);
+            Assert.That(codec.CanWrite(decoded), Is.True, "the column that a query of the type reads");
+            Assert.That(codec.CanWrite(fromRows), Is.False, "a tuple built from rows");
+            Assert.That(codec.CanWrite(flat), Is.False, "a column of tuple values");
         });
     }
 
     [Test]
-    public void CanWrite_NestedChildWithoutDenseNamedFieldColumn_ReturnsFalse()
+    public async Task CanWrite_NestedChildWithoutDenseNamedFieldColumn_ReturnsFalse()
     {
+        // The converter layer writes no Nested column. Thus an insert writes the tuple only through the codec, and
+        // only when the Nested child is the NestedColumn that a query reads.
         const string type = "Tuple(Nested(a UInt8), String)";
         const string nestedType = "Nested(a UInt8)";
         IColumnCodec codec = Resolve(type);
-
-        // Both forms expose the right CLR ValueTuple, but neither retains Nested's named field column.
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(Array.Empty<byte>());
+        using IColumn decoded = await codec.ReadColumnAsync(reader, "c", type, 0, CodecTestHarness.None);
         var ergonomic = new ArrayColumn<(object[][], string)>("c", type, Array.Empty<(object[][], string)>());
         var wrongDense = new TupleColumn<object[][], string>(
             "c",
@@ -118,15 +125,16 @@ public class TupleColumnCodecTests
             new IColumn[]
             {
                 new ArrayColumn<object[][]>("c", nestedType, Array.Empty<object[][]>()),
-                new ArrayColumn<string>("c", "String", Array.Empty<string>()),
+                DecodedColumns.Of<string>("c", "String"),
             },
             fieldNames: null,
             ownsChildren: false);
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(ergonomic), Is.False, "the row-oriented projection has lost the named fields");
-            Assert.That(codec.CanWrite(wrongDense), Is.False, "a dense tuple still needs a real NestedColumn child");
+            Assert.That(codec.CanWrite(decoded), Is.True, "the column that a query of the type reads");
+            Assert.That(codec.CanWrite(ergonomic), Is.False, "a column of tuple values has no named field columns");
+            Assert.That(codec.CanWrite(wrongDense), Is.False, "the Nested child is not a NestedColumn");
         });
     }
 
@@ -142,10 +150,6 @@ public class TupleColumnCodecTests
             Assert.That(Resolve("Tuple(Array(UInt8), Nullable(Int32))").ElementType, Is.EqualTo(typeof((byte[], int?))));
         });
     }
-
-    [Test]
-    public void NullPlaceholder_UsesWritableChildPlaceholders()
-        => Assert.That(Resolve("Tuple(Int32, String)").NullPlaceholder, Is.EqualTo((0, string.Empty)));
 
     [Test]
     public void Resolve_UnnamedTuple_StampsFullTypeName()
@@ -234,11 +238,20 @@ public class TupleColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_NonWritableElement_IsFalse()
+    public async Task CanWrite_NonWritableElement_IsFalse()
     {
-        // A tuple over a non-writable element (Nothing) resolves for reads but must report it cannot be written.
-        IColumnCodec codec = Resolve("Tuple(Int32, Nothing)");
-        Assert.That(codec.CanWrite(PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 1 })), Is.False);
+        // The Nothing codec writes no column. Thus the codec of a tuple with a Nothing element does not write the
+        // column that a query of the type reads.
+        const string type = "Tuple(Int32, Nothing)";
+        IColumnCodec codec = Resolve(type);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(Array.Empty<byte>());
+        using IColumn decoded = await codec.ReadColumnAsync(reader, "c", type, 0, CodecTestHarness.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Resolve("Int32").CanWrite(((ITupleColumn)decoded).Children[0]), Is.True, "the Int32 child is the column that a query reads");
+            Assert.That(codec.CanWrite(decoded), Is.False);
+        });
     }
 
     [Test]
@@ -307,7 +320,6 @@ public class TupleColumnCodecTests
             IColumnCodec codec = Resolve("Tuple()");
             Assert.That(codec.TypeName, Is.EqualTo("Tuple()"));
             Assert.That(codec.ElementType, Is.EqualTo(typeof(ValueTuple)));
-            Assert.That(codec.NullPlaceholder, Is.EqualTo(default(ValueTuple)));
             Assert.That(
                 () => Resolve("Tuple"),
                 Throws.TypeOf<FormatException>().With.Message.Contains("at least one element"));
@@ -337,14 +349,14 @@ public class TupleColumnCodecTests
         IColumnCodec codec = Resolve("Tuple()");
         var column = new ArrayColumn<ValueTuple>("c", "Tuple()", new ValueTuple[3]);
 
-        byte[] prefix = await CodecTestHarness.WriteAsync(w => codec.WriteStatePrefix(w, column, 0, 3));
-        byte[] body = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column, 0, 3));
-        byte[] slice = await CodecTestHarness.WriteSliceAsync(codec, column, 1, 2);
-        byte[] empty = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column, 0, 0));
+        byte[] withPrefix = await CodecTestHarness.WriteStoredAsync(codec, column, 0, 3, prefix: true);
+        byte[] body = await CodecTestHarness.WriteStoredAsync(codec, column, 0, 3);
+        byte[] slice = await CodecTestHarness.WriteStoredAsync(codec, column, 1, 2);
+        byte[] empty = await CodecTestHarness.WriteStoredAsync(codec, column, 0, 0);
 
         Assert.Multiple(() =>
         {
-            Assert.That(prefix, Is.Empty, "the empty tuple has no state prefix");
+            Assert.That(withPrefix, Is.EqualTo(body), "the empty tuple has no state prefix");
             Assert.That(body, Is.EqualTo(new byte[] { (byte)'0', (byte)'0', (byte)'0' }));
             Assert.That(slice, Is.EqualTo(new byte[] { (byte)'0', (byte)'0' }), "a slice writes one byte per row written");
             Assert.That(empty, Is.Empty, "a zero-row write emits nothing");
@@ -380,46 +392,21 @@ public class TupleColumnCodecTests
     }
 
     [Test]
-    public void EmptyTuple_CanWrite_RejectsAnotherElementType()
-    {
-        // The write ignores the values entirely, so a mismatched column would otherwise be serialized as the right
-        // number of placeholder bytes instead of being refused.
-        IColumnCodec codec = Resolve("Tuple()");
-        var wrong = new ArrayColumn<int>("c", "Int32", new[] { 1, 2 });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWrite(new ArrayColumn<ValueTuple>("c", "Tuple()", new ValueTuple[1])), Is.True);
-            Assert.That(codec.CanWrite(wrong), Is.False);
-            Assert.ThrowsAsync<InvalidCastException>(
-                async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, wrong, 0, 2)));
-        });
-    }
-    [Test]
     public void CanWrite_DenseTupleColumnOfADifferentArity_ReturnsFalse()
     {
         IColumnCodec codec = Resolve("Tuple(Int32, String)");
         var narrower = new TupleColumn<int>(
             "c",
             "Tuple(Int32)",
-            new IColumn[] { new ArrayColumn<int>("c", "Int32", new[] { 1 }) },
+            new IColumn[] { PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 1 }) },
             fieldNames: null,
             ownsChildren: false);
 
-        Assert.That(codec.CanWrite(narrower), Is.False);
-    }
-
-    [Test]
-    public async Task WriteColumn_FlatTupleColumnOfUnacceptableFieldTypes_ThrowsNamingTheTupleType()
-    {
-        IColumnCodec codec = Resolve("Tuple(Int32, String)");
-        var wrongFields = new ArrayColumn<(int, int)>("c", "Tuple(Int32, String)", new[] { (1, 2) });
-
-        ArgumentException thrown = null;
-        await CodecTestHarness.WriteAsync(writer =>
-            thrown = Assert.Throws<ArgumentException>(() => codec.WriteColumn(writer, wrongFields, 0, 1)));
-
-        Assert.That(thrown.Message, Does.Contain("Tuple(Int32, String)").And.Contain("field codecs accept"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(Resolve("Tuple(Int32)").CanWrite(narrower), Is.True, "the codec of its own arity writes it");
+            Assert.That(codec.CanWrite(narrower), Is.False);
+        });
     }
 
     /// <summary>

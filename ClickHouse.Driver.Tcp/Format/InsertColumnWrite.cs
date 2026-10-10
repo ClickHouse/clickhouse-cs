@@ -58,11 +58,6 @@ internal abstract class InsertColumnWrite
     /// <param name="state">The state from <see cref="Begin"/>.</param>
     public abstract void Write(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state);
 
-    /// <summary>The write of a column through its codec, as the codec accepts it.</summary>
-    /// <param name="codec">The codec of the target type.</param>
-    /// <returns>The write.</returns>
-    public static InsertColumnWrite ThroughCodec(IColumnCodec codec) => new CodecWrite(codec);
-
     /// <summary>
     /// The write of <paramref name="values"/> as <paramref name="typeName"/>: through the codec when it writes the column
     /// from its storage, else through the converter tree of the column's CLR type. A column of no single CLR type (it
@@ -78,9 +73,9 @@ internal abstract class InsertColumnWrite
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     public static InsertColumnWrite For(IColumnCodec codec, IColumn values, string typeName, in ResolveContext context, ConverterDerivation derivation)
     {
-        if (codec.WritesFromStorage(values))
+        if (codec.CanWrite(values))
         {
-            return ThroughCodec(codec);
+            return new CodecWrite(codec);
         }
 
         Type elementType;

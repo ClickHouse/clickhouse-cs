@@ -109,7 +109,8 @@ public sealed class InsertRoundTripCase
         yield return Primitive("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 });
         yield return Primitive("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 });
 
-        // A column of labels is the other write shape: it converts to the declared ordinals, which is what reads back.
+        // A column of labels is the other CLR type that an Enum is written from: it converts to the declared ordinals,
+        // which is what reads back.
         yield return EnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 }, "a", "b");
         yield return EnumLabels("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 }, "x", "y");
 
@@ -119,8 +120,8 @@ public sealed class InsertRoundTripCase
         // Separators inside quoted labels must not split the enum declaration.
         yield return EnumLabels(@"Enum8('a,b' = 1, 'c\'d' = 2, 'e = f' = 3)", new sbyte[] { 1, 2, 3 }, "a,b", "c'd", "e = f");
 
-        // And through the wrappers, where the shape has to survive composition: the nullable substitute needs a
-        // placeholder label for its null rows, and the array path flattens the labels before the enum sees them.
+        // And through the wrappers: a NULL row of the Nullable takes the placeholder of the enum (its first declared
+        // member), and the Array writes the labels of all its rows.
         yield return NullableEnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte?[] { -1, null, 127 }, "a", null, "b");
         yield return ArrayEnumLabels("Enum8('a' = -1, 'b' = 127)", new[] { new sbyte[] { -1, 127 }, Array.Empty<sbyte>() }, new[] { "a", "b" }, Array.Empty<string>());
 
@@ -131,8 +132,9 @@ public sealed class InsertRoundTripCase
 
         yield return Strings("String", string.Empty, "hello", "héllo✓", "a\0b", new string('x', 500));
 
-        // A String is a byte string, so a byte[] per row is the other write shape; it reads back as the text those
-        // bytes spell. The non-UTF-8 case is in StringBytesIntegrationTests, where the point is that it survives.
+        // A String is a byte string, so a byte[] per row is the other CLR type that it is written from; it reads back
+        // as the text those bytes spell. The non-UTF-8 case is in StringBytesIntegrationTests, where the point is that
+        // it survives.
         yield return StringBytes(new[] { new byte[] { 0x61 }, Array.Empty<byte>(), new byte[] { 0x62, 0x63 } }, "a", string.Empty, "bc");
         yield return NullableStringBytes(new[] { new byte[] { 0x61 }, null, Array.Empty<byte>() }, "a", null, string.Empty);
 
@@ -394,10 +396,9 @@ public sealed class InsertRoundTripCase
         yield return NullableDateTime64s(3, 0L, null, 1_700_000_000_123L, null);
         yield return NullableDateTime64s(9, 1_700_000_000_123_456_789L, null, -1_000_000_001L, long.MaxValue);
 
-        // Nullable re-offers every CLR write spelling the bare inner accepts, each with its own-typed null
-        // placeholder — so Nullable(DateTime) takes DateTimeOffset? or DateTime?, and Nullable(DateTime64) takes
-        // long?, DateTimeOffset? or DateTime?. The cases above only cover the first spelling of each, which left
-        // the alternates proven by unit tests alone; these send them to a server.
+        // Nullable takes every CLR type that the bare inner is written from, made nullable, so Nullable(DateTime)
+        // takes DateTimeOffset? or DateTime?, and Nullable(DateTime64) takes long?, DateTimeOffset? or DateTime?. The
+        // cases above cover the first type of each; these send the others to a server.
         var nullableDateTimes = new DateTime?[] { DateTime.UnixEpoch.AddSeconds(1_700_000_000), null, DateTime.UnixEpoch };
         yield return new InsertRoundTripCase(
             "Nullable(DateTime) <- DateTime?",
@@ -551,9 +552,8 @@ public sealed class InsertRoundTripCase
             "Tuple(Int32)",
             name => new TupleColumn<int>(name, "Tuple(Int32)", new[] { new ValueTuple<int>(1), new ValueTuple<int>(int.MinValue), new ValueTuple<int>(int.MaxValue) }));
 
-        // FixedString(N) as a tuple element: the write path reaches the FixedString codec through a
-        // TupleFieldColumn projection rather than a dense blob, so it takes the strict per-value branch instead of
-        // the bulk blit — the one entrance the bare, Nullable and Array cases all miss.
+        // FixedString(N) as a tuple element: the field writer of the Tuple writes each byte[] value and checks its
+        // width, and the dense read-back writes the field from its storage.
         yield return Same(
             "Tuple(FixedString(4), String)",
             "Tuple(FixedString(4), String)",
@@ -573,10 +573,8 @@ public sealed class InsertRoundTripCase
                 (-2, string.Empty, -1.5e100),
             }));
 
-        // A flat ArrayColumn<ValueTuple> is not an ITupleColumn, so a top-level Tuple supplied that way takes the
-        // ergonomic boxed per-element projection instead of the dense child-column path. Every other Tuple case
-        // builds the dense TupleColumn, so the projection was only reachable at top level from a unit test; the
-        // read still comes back dense, hence the differing expected builder.
+        // A flat ArrayColumn<ValueTuple> is not an ITupleColumn: the Tuple writer writes it from its ValueTuple values.
+        // The read gives a TupleColumn, hence the expected builder.
         var flatTupleRows = new (int, string)[] { (1, "a"), (2, "bb"), (3, "ccc") };
         yield return new InsertRoundTripCase(
             "Tuple(Int32, String) <- flat ArrayColumn",
@@ -781,7 +779,7 @@ public sealed class InsertRoundTripCase
         // Map(K, V): byte-identical to Array(Tuple(K, V)) — offsets + a keys stream + a values stream. Each row
         // surfaces as a KeyValuePair<K, V>[] (not a Dictionary), so pair order round-trips; empty-map rows and an
         // all-empty column ride along. Keys within a row are kept unique here because the server rejects duplicate
-        // keys on insert — duplicate-key preservation is a wire property proven by the codec unit test instead.
+        // keys on insert; WireBytePinTests pins the bytes of duplicate keys in a row.
         // Map is, like Array/Tuple, an exception to the "wrap every type in Nullable" rule (the server rejects
         // Nullable(Map(...))), so nullability is composed inside the value as Map(K, Nullable(V)); Map keys are
         // themselves non-nullable in ClickHouse.
@@ -1132,11 +1130,10 @@ public sealed class InsertRoundTripCase
                 new byte[] { 0xFF, 0, 0xFF, 0 },
             }));
 
-        // The nullable counterpart of the DateTime case above, and the one that actually needs the codec's
-        // NullPlaceholderAs override: the reserved default in slot 1 is asked for as the shape's element type
-        // (uint), and DateTime answers with its wire zero — the epoch — where the CLR default would be
-        // DateTime.MinValue, which the type cannot even represent. The epoch is *also* present as a real value
-        // (row 2) next to NULLs, so the reserved NULL slot and the reserved default slot must stay distinct.
+        // The nullable counterpart of the DateTime case above: the reserved default in slot 1 is the placeholder of
+        // DateTime, its wire zero (the epoch); the CLR default DateTime.MinValue is outside the range of the type. The
+        // epoch is also present as a real value (row 2) next to NULLs, so the reserved NULL slot and the reserved
+        // default slot must stay distinct.
         yield return Same(
             "LowCardinality(Nullable(DateTime))",
             "LowCardinality(Nullable(DateTime))",
@@ -1567,8 +1564,8 @@ public sealed class InsertRoundTripCase
         // every alternative's prefix from that alternative's own row slice, zero-length ones included — so this is
         // where a JSON version word is most easily lost or duplicated. The alternatives arrive canonicalized and
         // "JSON" sorts before "UInt64", so JSON is discriminator 0. UInt64 is chosen as the second alternative on
-        // purpose: pairing JSON with String would make the two indistinguishable to the ergonomic write path, which
-        // picks an alternative by runtime CLR type and would send every string to the JSON arm.
+        // purpose: pairing JSON with String would make the two indistinguishable to the write of a caller's column,
+        // which places each value by its runtime CLR type, and both alternatives store a string.
         yield return Same(
             "Variant(JSON, UInt64)",
             "Variant(JSON, UInt64)",
@@ -2035,8 +2032,8 @@ public sealed class InsertRoundTripCase
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<string>(name, clickHouseType, values));
 
     // FixedString(N) inserts and reads back a per-row byte[]. Every value must be exactly N bytes: the write path
-    // rejects any other width rather than padding or truncating, so a wrong-width case belongs in the codec's unit
-    // tests (it never reaches the server), not here.
+    // rejects any other width rather than padding or truncating, so a wrong-width case belongs in the refusal tests of
+    // the leaf writers (it never reaches the server), not here.
     private static InsertRoundTripCase FixedStrings(int size, params byte[][] values)
     {
         string type = $"FixedString({size})";

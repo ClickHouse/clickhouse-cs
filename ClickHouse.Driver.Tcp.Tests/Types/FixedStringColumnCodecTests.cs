@@ -4,8 +4,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
-using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
@@ -28,39 +28,6 @@ public class FixedStringColumnCodecTests
     }
 
     [Test]
-    public async Task WriteColumn_ExactWidthValue_WritesBytesVerbatim()
-    {
-        byte[] value = { 0xDE, 0xAD, 0xBE, 0xEF };
-        byte[] bytes = await WriteAsync(w => Codec(4).WriteColumn(w, new ArrayColumn<byte[]>("c", "FixedString(4)", new[] { value })));
-
-        CollectionAssert.AreEqual(value, bytes);
-    }
-
-    // A value of any width other than N is rejected rather than padded or truncated: padding a short value would
-    // silently rewrite the caller's data and hide whatever produced the wrong width. This matches the HTTP path's
-    // FixedStringType, which requires a byte[] to be exactly N bytes.
-    [TestCase(0, TestName = "WriteColumn_EmptyValue_ThrowsArgument")]
-    [TestCase(3, TestName = "WriteColumn_ValueShorterThanWidth_ThrowsArgument")]
-    [TestCase(7, TestName = "WriteColumn_ValueLongerThanWidth_ThrowsArgument")]
-    public async Task WriteColumn_ValueWidthOtherThanN_ThrowsArgument(int valueLength)
-    {
-        var column = new ArrayColumn<byte[]>("c", "FixedString(6)", new[] { new byte[valueLength] });
-        var ex = await CaptureAsync(w => Codec(6).WriteColumn(w, column));
-
-        Assert.That(ex, Is.TypeOf<ArgumentException>());
-        Assert.That(ex.Message, Does.Contain("exactly 6 bytes"));
-    }
-
-    [Test]
-    public async Task WriteColumn_NullRow_ThrowsArgument()
-    {
-        var column = new ArrayColumn<byte[]>("c", "FixedString(4)", new byte[][] { null });
-        var ex = await CaptureAsync(w => Codec(4).WriteColumn(w, column));
-
-        Assert.That(ex, Is.TypeOf<ArgumentException>());
-    }
-
-    [Test]
     public async Task RoundTrip_MultipleRowsWithEmbeddedNulAndNonUtf8_PreservedAtFixedStride()
     {
         var values = new[]
@@ -70,7 +37,7 @@ public class FixedStringColumnCodecTests
             new byte[] { 0xFF, 0xFE, 0xFD, 0xFC },
         };
 
-        byte[] bytes = await WriteAsync(w => Codec(4).WriteColumn(w, new ArrayColumn<byte[]>("c", "FixedString(4)", values)));
+        byte[] bytes = await CodecTestHarness.WriteSliceAsync(Codec(4), new ArrayColumn<byte[]>("c", "FixedString(4)", values), 0, values.Length);
         using var reader = ReaderOver(bytes);
         using var column = (FixedStringColumn)await Codec(4).ReadColumnAsync(reader, "c", "FixedString(4)", values.Length, None);
 
@@ -98,7 +65,7 @@ public class FixedStringColumnCodecTests
         // RowCount must still fail fast rather than return a stale pooled slot — both before and after the cache
         // is materialized by touching Values.
         var values = new[] { new byte[] { 1, 2 }, new byte[] { 3, 4 } };
-        byte[] bytes = await WriteAsync(w => Codec(2).WriteColumn(w, new ArrayColumn<byte[]>("c", "FixedString(2)", values)));
+        byte[] bytes = await CodecTestHarness.WriteSliceAsync(Codec(2), new ArrayColumn<byte[]>("c", "FixedString(2)", values), 0, values.Length);
         using var reader = ReaderOver(bytes);
         using var column = (FixedStringColumn)await Codec(2).ReadColumnAsync(reader, "c", "FixedString(2)", values.Length, None);
 
@@ -117,31 +84,37 @@ public class FixedStringColumnCodecTests
         // The dense read-back holds its rows at the wire stride, so the codec blits the range in one copy instead
         // of walking it. The insert path splits a large column into per-block ranges, so a partial range must emit
         // exactly its own rows — a stride slip would show up as neighbouring rows' bytes.
-        using var dense = await DenseAsync(2, new byte[] { 1, 1 }, new byte[] { 2, 2 }, new byte[] { 3, 3 });
-        byte[] bytes = await WriteAsync(w => Codec(2).WriteColumn(w, dense, start: 1, length: 2));
+        using FixedStringColumn dense = Dense(2, new byte[] { 1, 1 }, new byte[] { 2, 2 }, new byte[] { 3, 3 });
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(Codec(2), dense, start: 1, length: 2);
 
         CollectionAssert.AreEqual(new byte[] { 2, 2, 3, 3 }, bytes);
     }
 
     [Test]
-    public async Task WriteColumn_DenseColumnOfDifferentWidth_ThrowsArgument()
+    public void CanWrite_DecodedColumnOfAnotherWidth_IsFalse()
     {
-        // A FixedString(2) read-back is not a valid body for a FixedString(4) column: blitting its blob would emit
-        // half the bytes the header promises and corrupt the block. The width guard must send it down the per-row
-        // path, which rejects each row on width — a shape no server round-trip can produce, hence the unit test.
-        using var dense = await DenseAsync(2, new byte[] { 1, 2 }, new byte[] { 3, 4 });
-        var ex = await CaptureAsync(w => Codec(4).WriteColumn(w, dense));
+        // A FixedString(2) read-back is not a body for a FixedString(4) column: its blob holds half the bytes that the
+        // header promises. So the codec does not write it, and the insert refuses each row on its width. No server
+        // round trip can make this column, so a unit test covers it.
+        using FixedStringColumn narrow = Dense(2, new byte[] { 1, 2 }, new byte[] { 3, 4 });
+        using FixedStringColumn wide = Dense(4, new byte[] { 1, 2, 3, 4 });
 
-        Assert.That(ex, Is.TypeOf<ArgumentException>());
-        Assert.That(ex.Message, Does.Contain("exactly 4 bytes"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(Codec(4).CanWrite(wide), Is.True);
+            Assert.That(Codec(4).CanWrite(narrow), Is.False);
+        });
+
+        ArgumentException thrown = Assert.ThrowsAsync<ArgumentException>(() => CodecTestHarness.WriteSliceAsync(Codec(4), narrow, 0, narrow.RowCount));
+        Assert.That(thrown.Message, Does.Contain("exactly 4 bytes"));
     }
 
     [Test]
-    public async Task GetBytes_RangeBeyondRowCount_ThrowsArgumentOutOfRange()
+    public void GetBytes_RangeBeyondRowCount_ThrowsArgumentOutOfRange()
     {
         // The blob is rented and typically longer than rowCount * N, so an over-long range must fail fast rather
         // than blit a stale pooled region into the block.
-        using var dense = await DenseAsync(2, new byte[] { 1, 2 }, new byte[] { 3, 4 });
+        using FixedStringColumn dense = Dense(2, new byte[] { 1, 2 }, new byte[] { 3, 4 });
 
         Assert.Multiple(() =>
         {
@@ -151,24 +124,6 @@ public class FixedStringColumnCodecTests
             Assert.Throws<ArgumentOutOfRangeException>(() => _ = dense.GetBytes(0, -1).Length);
             CollectionAssert.AreEqual(new byte[] { 1, 2, 3, 4 }, dense.GetBytes(0, 2).ToArray());
             Assert.That(dense.GetBytes(2, 0).Length, Is.EqualTo(0));
-        });
-    }
-
-    [Test]
-    public void NullPlaceholder_IsWidthZeroBytes()
-    {
-        // Nullable substitutes this at a null position, and the values stream must still advance a full row there,
-        // so the placeholder has to be exactly N bytes now that a short value is rejected.
-        CollectionAssert.AreEqual(new byte[6], (byte[])Codec(6).NullPlaceholder);
-    }
-
-    [Test]
-    public void CanWrite_AcceptsByteArrayColumn_RejectsOthers()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(Codec(4).CanWrite(new ArrayColumn<byte[]>("c", "FixedString(4)", new[] { new byte[4] })), Is.True);
-            Assert.That(Codec(4).CanWrite(new ArrayColumn<string>("c", "String", new[] { "x" })), Is.False);
         });
     }
 
@@ -185,45 +140,12 @@ public class FixedStringColumnCodecTests
 
     private static IColumnCodec Codec(int size) => ColumnCodecRegistry.Default.Resolve($"FixedString({size})", ResolveContext.ForWrite);
 
-    // Builds the dense, blob-backed column the read path produces — the shape the codec's bulk-blit write covers —
-    // by writing the values and reading them straight back.
-    private static async Task<FixedStringColumn> DenseAsync(int size, params byte[][] values)
-    {
-        string type = $"FixedString({size})";
-        byte[] bytes = await WriteAsync(w => Codec(size).WriteColumn(w, new ArrayColumn<byte[]>("c", type, values)));
-        using var reader = ReaderOver(bytes);
-        return (FixedStringColumn)await Codec(size).ReadColumnAsync(reader, "c", type, values.Length, None);
-    }
+    // The column that a query of FixedString(size) reads: one blob that holds the rows one after the other. The codec
+    // writes a range of it in one copy.
+    private static FixedStringColumn Dense(int size, params byte[][] values)
+        => (FixedStringColumn)DecodedColumns.Of("c", $"FixedString({size})", values);
 
     private static void Resolve(string type) => ColumnCodecRegistry.Default.Resolve(type, ResolveContext.ForWrite);
-
-    private static async Task<byte[]> WriteAsync(Action<ClickHouseBinaryWriter> write)
-    {
-        using var ms = new MemoryStream();
-        using (var writer = new ClickHouseBinaryWriter(ms))
-        {
-            write(writer);
-            await writer.FlushAsync(None);
-        }
-
-        return ms.ToArray();
-    }
-
-    private static async Task<Exception> CaptureAsync(Action<ClickHouseBinaryWriter> write)
-    {
-        using var ms = new MemoryStream();
-        using var writer = new ClickHouseBinaryWriter(ms);
-        try
-        {
-            write(writer);
-            await writer.FlushAsync(None);
-            return null;
-        }
-        catch (Exception ex)
-        {
-            return ex;
-        }
-    }
 
     private static ClickHouseBinaryReader ReaderOver(byte[] bytes) => new(new MemoryStream(bytes));
 }

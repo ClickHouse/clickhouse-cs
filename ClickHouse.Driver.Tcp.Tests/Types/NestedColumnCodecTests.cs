@@ -16,7 +16,8 @@ public class NestedColumnCodecTests
     private static NestedColumn Nested(string typeName, string[] fieldNames, IColumn[] fields, int[] offsets)
         => new("c", typeName, fieldNames, fields, offsets, rowCount: offsets.Length - 1, pooledOffsets: false, ownsFields: false);
 
-    private static IColumn Field<T>(string typeName, params T[] values) => new ArrayColumn<T>("c", typeName, values);
+    // A field column as a query of the field type reads it, so the codec writes a Nested column of such fields.
+    private static IColumn Field<T>(string typeName, params T[] values) => DecodedColumns.Of<T>("c", typeName, values);
 
     [Test]
     public async Task ReadColumn_WriteThenRead_FixedAndStringFieldsRoundTripWithEmptyRows()
@@ -81,7 +82,7 @@ public class NestedColumnCodecTests
         IColumnCodec codec = Resolve(type);
         var column = Nested(type, new[] { "a", "b" }, new[] { Field<byte>("UInt8"), Field<string>("String") }, new[] { 0 });
 
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column, 0, 0));
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(codec, column, 0, 0);
         Assert.That(bytes, Is.Empty, "an empty Nested column writes no offsets and no field streams");
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
@@ -102,7 +103,7 @@ public class NestedColumnCodecTests
             new[] { Field<byte>("UInt8", 1, 2, 3, 4, 5, 6), Field<string>("String", "a", "b", "c", "d", "e", "f") },
             new[] { 0, 1, 3, 3, 6 }); // rows: [a], [b,c], [], [d,e,f]
 
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, full, start: 1, length: 2));
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(codec, full, start: 1, length: 2);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
         using IColumn read = await codec.ReadColumnAsync(reader, "c", type, 2, CodecTestHarness.None);
         var nested = (NestedColumn)read;
@@ -116,19 +117,24 @@ public class NestedColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_AcceptsMatchingNestedColumnOnly()
+    public void CanWrite_NestedColumnWithCallerBuiltOrMismatchedFields_ReturnsFalse()
     {
         IColumnCodec codec = Resolve("Nested(a UInt8, b String)");
         var matching = Nested("Nested(a UInt8, b String)", new[] { "a", "b" }, new[] { Field<byte>("UInt8", 1), Field<string>("String", "x") }, new[] { 0, 1 });
+        var callerBuilt = Nested(
+            "Nested(a UInt8, b String)",
+            new[] { "a", "b" },
+            new IColumn[] { new ArrayColumn<byte>("c", "UInt8", new byte[] { 1 }), new ArrayColumn<string>("c", "String", new[] { "x" }) },
+            new[] { 0, 1 });
         var wrongFieldType = Nested("Nested(a UInt8, b UInt8)", new[] { "a", "b" }, new[] { Field<byte>("UInt8", 1), Field<byte>("UInt8", 2) }, new[] { 0, 1 });
         var wrongFieldCount = Nested("Nested(a UInt8)", new[] { "a" }, new[] { Field<byte>("UInt8", 1) }, new[] { 0, 1 });
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(matching), Is.True);
-            Assert.That(codec.CanWrite(wrongFieldType), Is.False);
-            Assert.That(codec.CanWrite(wrongFieldCount), Is.False);
-            Assert.That(codec.CanWrite(new ArrayColumn<byte>("c", "UInt8", new byte[] { 1 })), Is.False);
+            Assert.That(codec.CanWrite(matching), Is.True, "fields that a query of the field types reads");
+            Assert.That(codec.CanWrite(callerBuilt), Is.False, "caller-built field columns");
+            Assert.That(codec.CanWrite(wrongFieldType), Is.False, "a UInt8 column in the String field");
+            Assert.That(codec.CanWrite(wrongFieldCount), Is.False, "one field, not two");
         });
     }
 
@@ -174,14 +180,6 @@ public class NestedColumnCodecTests
     }
 
     [Test]
-    public void WriteColumn_NonNestedColumn_ThrowsArgument()
-    {
-        IColumnCodec codec = Resolve("Nested(a UInt8, b String)");
-        var wrong = new ArrayColumn<byte>("c", "UInt8", new byte[] { 1 });
-        Assert.ThrowsAsync<ArgumentException>(() => CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, wrong, 0, 1)));
-    }
-
-    [Test]
     public void ReadColumn_TruncatedFieldStream_ThrowsAndDisposesAlreadyReadFields()
     {
         // Valid offsets declaring one element and a full first field, but the second field's stream is truncated:
@@ -212,10 +210,6 @@ public class NestedColumnCodecTests
     [Test]
     public void ElementType_IsArrayOfRecords()
         => Assert.That(Resolve("Nested(a UInt8, b String)").ElementType, Is.EqualTo(typeof(object[][])));
-
-    [Test]
-    public void NullPlaceholder_IsEmptyRow()
-        => Assert.That(Resolve("Nested(a UInt8, b String)").NullPlaceholder, Is.EqualTo(Array.Empty<object[]>()));
 
     [Test]
     public void GetField_UnknownName_ThrowsKeyNotFound()

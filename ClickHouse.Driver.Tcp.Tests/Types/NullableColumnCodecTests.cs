@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -53,6 +51,7 @@ public class NullableColumnCodecTests
 
         Assert.Multiple(() =>
         {
+            Assert.That(codec.CanWrite(dense), Is.True, "the codec writes the column from its storage");
             Assert.That(dense.RowCount, Is.EqualTo(3), "the row count comes from the inner column, not a separate argument");
             Assert.That(((IColumn<int?>)read).Values.ToArray(), Is.EqualTo(new int?[] { 7, null, 9 }));
         });
@@ -94,187 +93,6 @@ public class NullableColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_AcceptsOnlyMatchingNullableColumn()
-    {
-        IColumnCodec value = Resolve("Nullable(Int32)");
-        IColumnCodec reference = Resolve("Nullable(String)");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(value.CanWrite(new ArrayColumn<int?>("c", "Nullable(Int32)", new int?[] { 1 })), Is.True);
-            Assert.That(value.CanWrite(new ArrayColumn<int>("c", "Int32", new[] { 1 })), Is.False);
-            Assert.That(value.CanWrite(new ArrayColumn<long?>("c", "Nullable(Int64)", new long?[] { 1 })), Is.False);
-            Assert.That(reference.CanWrite(new ArrayColumn<string>("c", "Nullable(String)", new[] { "x" })), Is.True);
-        });
-    }
-
-    [Test]
-    public async Task WriteColumn_NullableDateTimeAsDateTimeSpelling_RoundTripsAsCanonicalOffset()
-    {
-        // The bare DateTime codec accepts both DateTimeOffset and DateTime; Nullable(DateTime) re-offers both.
-        // A DateTime? column (the inner's alternate spelling made nullable) must write, with the null row taking
-        // a DateTime placeholder, and read back as the canonical raw epoch seconds (uint?).
-        IColumnCodec codec = Resolve("Nullable(DateTime('UTC'))");
-        var input = new DateTime?[] { DateTime.UnixEpoch.AddSeconds(1_700_000_000), null, DateTime.UnixEpoch };
-        var column = new ArrayColumn<DateTime?>("c", "Nullable(DateTime('UTC'))", input);
-
-        using IColumn read = await CodecTestHarness.RoundTripAsync(codec, column, "Nullable(DateTime('UTC'))", column.RowCount);
-
-        var expected = new uint?[] { 1_700_000_000u, null, 0u };
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.ElementType, Is.EqualTo(typeof(uint?)));
-            Assert.That(((IColumn<uint?>)read).Values.ToArray(), Is.EqualTo(expected));
-            Assert.That(read.GetValue(1), Is.Null);
-        });
-    }
-
-    [TestCase("Nullable(DateTime('UTC'))", new[] { typeof(uint?), typeof(DateTimeOffset?), typeof(DateTime?) })]
-    [TestCase("Nullable(Int32)", new[] { typeof(int?) })]
-    [TestCase("Nullable(String)", new[] { typeof(string), typeof(byte[]) })]
-    public void CanWriteElementType_EveryInnerWriteTypeMadeNullable_IsTrue(string type, Type[] writeTypes)
-    {
-        // A reference type is already nullable, so the wrapper takes the inner spellings unchanged: String takes text or
-        // the bytes themselves.
-        IColumnCodec codec = Resolve(type);
-
-        Assert.That(writeTypes.Where(writeType => !codec.CanWriteElementType(writeType)), Is.Empty);
-    }
-
-    [Test]
-    public void NullPlaceholderAs_EveryWritableSpelling_IsNullAndAnythingElseThrows()
-    {
-        IColumnCodec codec = Resolve("Nullable(DateTime('UTC'))");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.NullPlaceholderAs(typeof(uint?)), Is.Null);
-            Assert.That(codec.NullPlaceholderAs(typeof(DateTime?)), Is.Null);
-            Assert.Throws<NotSupportedException>(() => codec.NullPlaceholderAs(typeof(DateTime)));
-        });
-    }
-
-    [Test]
-    public async Task WriteFull_NullableTupleWithLiftedFields_RoundTrips()
-    {
-        const string type = "Nullable(Tuple(DateTime('UTC'), String))";
-        IColumnCodec codec = Resolve(type);
-        var input = new (DateTime, string)?[]
-        {
-            (DateTime.UnixEpoch.AddSeconds(60), "present"),
-            null,
-        };
-        var column = new ArrayColumn<(DateTime, string)?>("c", type, input);
-
-        byte[] bytes = await CodecTestHarness.WriteAsync(writer => codec.WriteFull(writer, column));
-        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
-        await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
-        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, input.Length, CodecTestHarness.None);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWrite(column), Is.True);
-            Assert.That(
-                ((IColumn<(uint, string)?>)read).Values.ToArray(),
-                Is.EqualTo(new (uint, string)?[] { (60u, "present"), null }));
-        });
-    }
-
-    [Test]
-    public void NullPlaceholderAs_LiftedCompositeTypes_ReturnsAssignableValues()
-    {
-        IColumnCodec tuple = Resolve("Tuple(DateTime('UTC'), String)");
-        IColumnCodec array = Resolve("Array(DateTime('UTC'))");
-        IColumnCodec map = Resolve("Map(String, DateTime('UTC'))");
-        IColumnCodec lowCardinality = Resolve("LowCardinality(DateTime('UTC'))");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(tuple.NullPlaceholderAs(typeof((DateTime, string))), Is.EqualTo((DateTime.UnixEpoch, string.Empty)));
-            Assert.That(array.NullPlaceholderAs(typeof(DateTime[])), Is.InstanceOf<DateTime[]>().And.Empty);
-            Assert.That(
-                map.NullPlaceholderAs(typeof(KeyValuePair<string, DateTime>[])),
-                Is.InstanceOf<KeyValuePair<string, DateTime>[]>().And.Empty);
-            Assert.That(lowCardinality.NullPlaceholderAs(typeof(DateTime)), Is.EqualTo(DateTime.UnixEpoch));
-        });
-    }
-
-    [TestCase("Array(DateTime('UTC'))", typeof(Guid[]))]
-    [TestCase("Map(String, DateTime('UTC'))", typeof(KeyValuePair<string, Guid>[]))]
-    [TestCase("Tuple(DateTime('UTC'), String)", typeof(ValueTuple<Guid, string>))]
-    [TestCase("LowCardinality(DateTime('UTC'))", typeof(Guid))]
-    public void NullPlaceholderAs_UnwritableCompositeType_Throws(string type, Type writeType)
-        => Assert.Throws<NotSupportedException>(() => Resolve(type).NullPlaceholderAs(writeType));
-
-    [Test]
-    public void CanWrite_NullableDateTime_AcceptsBothOffsetAndDateTimeSpellings()
-    {
-        IColumnCodec codec = Resolve("Nullable(DateTime('UTC'))");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWrite(new ArrayColumn<DateTimeOffset?>("c", "Nullable(DateTime('UTC'))", new DateTimeOffset?[] { DateTimeOffset.UnixEpoch })), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<DateTime?>("c", "Nullable(DateTime('UTC'))", new DateTime?[] { DateTime.UnixEpoch })), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<int?>("c", "Nullable(Int32)", new int?[] { 1 })), Is.False);
-        });
-    }
-
-    [Test]
-    public async Task WriteColumn_NullableDateTime64AsOffsetAndDateTimeSpellings_RoundTripsAsCanonicalNative()
-    {
-        // DateTime64's canonical read type is the raw Int64 count, but it accepts DateTimeOffset and DateTime on
-        // write; Nullable(DateTime64) re-offers all three. Both alternate spellings must round-trip through the
-        // raw read type, with a null placeholder at the null row.
-        IColumnCodec codec = Resolve("Nullable(DateTime64(3, 'UTC'))");
-        DateTimeOffset present = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_123);
-        const long presentCount = 1_700_000_000_123L; // scale 3: milliseconds since the epoch
-
-        var asOffset = new ArrayColumn<DateTimeOffset?>("c", "Nullable(DateTime64(3, 'UTC'))", new DateTimeOffset?[] { present, null });
-        var asDateTime = new ArrayColumn<DateTime?>("c", "Nullable(DateTime64(3, 'UTC'))", new DateTime?[] { present.UtcDateTime, null });
-
-        using IColumn fromOffset = await CodecTestHarness.RoundTripAsync(codec, asOffset, "Nullable(DateTime64(3, 'UTC'))", 2);
-        using IColumn fromDateTime = await CodecTestHarness.RoundTripAsync(codec, asDateTime, "Nullable(DateTime64(3, 'UTC'))", 2);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.ElementType, Is.EqualTo(typeof(long?)));
-
-            var offsetRead = (IColumn<long?>)fromOffset;
-            Assert.That(offsetRead[0].Value, Is.EqualTo(presentCount));
-            Assert.That(fromOffset.GetValue(1), Is.Null);
-
-            var dateTimeRead = (IColumn<long?>)fromDateTime;
-            Assert.That(dateTimeRead[0].Value, Is.EqualTo(presentCount));
-            Assert.That(fromDateTime.GetValue(1), Is.Null);
-        });
-    }
-
-    [Test]
-    public void CanWrite_NullableDateTime64_AcceptsNativeOffsetAndDateTimeSpellings()
-    {
-        IColumnCodec codec = Resolve("Nullable(DateTime64(3, 'UTC'))");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWrite(new ArrayColumn<long?>("c", "Nullable(DateTime64(3, 'UTC'))", new long?[] { 0L })), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<DateTimeOffset?>("c", "Nullable(DateTime64(3, 'UTC'))", new DateTimeOffset?[] { DateTimeOffset.UnixEpoch })), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<DateTime?>("c", "Nullable(DateTime64(3, 'UTC'))", new DateTime?[] { DateTime.UnixEpoch })), Is.True);
-        });
-    }
-
-    [Test]
-    public void WriteColumn_ColumnOfUnacceptedSpelling_ThrowsArgument()
-    {
-        // WriteColumn is normally guarded by CanWrite, but a direct call with a column whose CLR spelling none of
-        // the inner's writable spellings match must fail with a clear error rather than a nested cast failure.
-        IColumnCodec codec = Resolve("Nullable(DateTime('UTC'))");
-        using var writer = new ClickHouseBinaryWriter(new System.IO.MemoryStream());
-        var wrong = new ArrayColumn<long?>("c", "Nullable(Int64)", new long?[] { 1 });
-
-        Assert.Throws<ArgumentException>(() => codec.WriteColumn(writer, wrong, 0, 1));
-    }
-
-    [Test]
     public async Task ReadColumn_NullableNothing_SurfacesEveryRowAsNull()
     {
         // Nullable(Nothing) is how a bare NULL literal is typed. Wire: null-map (all null) then one Nothing
@@ -295,12 +113,15 @@ public class NullableColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_NullableNothing_ReturnsFalse()
+    public async Task CanWrite_NullableNothing_ReturnsFalse()
     {
-        // The inner Nothing codec cannot write, so Nullable(Nothing) must report not-writable up front rather
-        // than accept the column and fail mid-write. (Reading Nullable(Nothing) still works — see above.)
+        // The Nothing codec writes no column. Thus the Nullable(Nothing) codec does not write the column that it
+        // reads.
         IColumnCodec codec = Resolve("Nullable(Nothing)");
-        Assert.That(codec.CanWrite(new ArrayColumn<object>("c", "Nullable(Nothing)", new object[] { null, null })), Is.False);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(new byte[] { 1, 1, 0, 0 });
+        using IColumn decoded = await codec.ReadColumnAsync(reader, "c", "Nullable(Nothing)", 2, CodecTestHarness.None);
+
+        Assert.That(codec.CanWrite(decoded), Is.False);
     }
 
     [Test]
@@ -319,5 +140,4 @@ public class NullableColumnCodecTests
     [Test]
     public void Resolve_Nullable_StampsFullTypeName()
         => Assert.That(Resolve("Nullable(UInt8)").TypeName, Is.EqualTo("Nullable(UInt8)"));
-
 }

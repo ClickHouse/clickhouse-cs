@@ -1,12 +1,15 @@
 using System;
-using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
-/// <summary>Reads and writes one ClickHouse column type.</summary>
+/// <summary>
+/// The wire layer of one ClickHouse column type: it reads a column, and it writes a column from its storage (the
+/// column that a query of the type reads). The converter layer (<see cref="Converters.ConverterDerivation"/>) gives
+/// every other reading and write.
+/// </summary>
 internal interface IColumnCodec
 {
     /// <summary>The ClickHouse type name handled by this codec.</summary>
@@ -14,26 +17,6 @@ internal interface IColumnCodec
 
     /// <summary>The canonical CLR type returned by <see cref="ReadColumnAsync"/>.</summary>
     Type ElementType { get; }
-
-    /// <summary>
-    /// Preferred CLR write types. Composite combinations may be omitted; test them with
-    /// <see cref="CanWriteElementType"/>.
-    /// </summary>
-    IReadOnlyList<Type> WritableElementTypes => new[] { ElementType };
-
-    /// <summary>A valid canonical value for the hidden inner value of a null.</summary>
-    object NullPlaceholder { get; }
-
-    /// <summary>
-    /// Returns a writable placeholder of <paramref name="writeType"/>. This must support every type accepted by
-    /// <see cref="CanWriteElementType"/>.
-    /// </summary>
-    /// <param name="writeType">The CLR write type to express the placeholder in.</param>
-    /// <returns>The placeholder value, assignable to <paramref name="writeType"/>.</returns>
-    /// <exception cref="NotSupportedException"><paramref name="writeType"/> is not a writable element type.</exception>
-    object NullPlaceholderAs(Type writeType) => writeType == ElementType
-        ? NullPlaceholder
-        : throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
 
     /// <summary>Reads the column's serialization state prefix, if any. Default: none.</summary>
     /// <param name="reader">The reader positioned at the prefix.</param>
@@ -50,44 +33,17 @@ internal interface IColumnCodec
     /// <returns>The decoded column.</returns>
     ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken);
 
-    /// <summary>Whether <see cref="WriteColumn"/> accepts this concrete column.</summary>
-    /// <param name="column">The column to test.</param>
-    /// <returns><see langword="true"/> if <see cref="WriteColumn"/> accepts <paramref name="column"/>.</returns>
-    bool CanWrite(IColumn column);
-
     /// <summary>
-    /// Whether <see cref="WriteColumn"/> writes this column from its own storage, with no conversion of its values: the
-    /// column that a query of the type reads, or a dense composite column in the wire layout of the type whose child
-    /// columns the codecs of the children write from their storage (an array that
-    /// <see cref="ClickHouseTcpColumn.CreateArray{TElement}"/> builds over a decoded column). Such a write keeps the bytes
-    /// that the server sent (the raw bytes of a <c>String</c>, a LowCardinality dictionary and its keys). The column then
-    /// has the element type of the codec. The default is false.
+    /// Whether <see cref="WriteColumn"/> writes this column: the column that a query of the type reads, or a dense
+    /// composite column in the wire layout of the type whose child columns the codecs of the children write (an array
+    /// that <see cref="ClickHouseTcpColumn.CreateArray{TElement}"/> builds over a decoded column). The write is from the
+    /// storage of the column, with no conversion of its values, so it keeps the bytes that the server sent (the raw
+    /// bytes of a <c>String</c>, a LowCardinality dictionary and its keys). The column then has the element type of the
+    /// codec. Every other column goes through the converter layer. The default is false.
     /// </summary>
     /// <param name="column">The column to test.</param>
-    /// <returns>Whether the codec writes the column from its storage.</returns>
-    bool WritesFromStorage(IColumn column) => false;
-
-    /// <summary>Whether a row-oriented column with <paramref name="elementType"/> can be written.</summary>
-    /// <param name="elementType">The candidate CLR element type.</param>
-    /// <returns>Whether a column of that element type can be written.</returns>
-    bool CanWriteElementType(Type elementType)
-    {
-        if (elementType == ElementType)
-        {
-            return true;
-        }
-
-        IReadOnlyList<Type> writable = WritableElementTypes;
-        for (int i = 0; i < writable.Count; i++)
-        {
-            if (writable[i] == elementType)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    /// <returns>Whether the codec writes the column.</returns>
+    bool CanWrite(IColumn column) => false;
 
     /// <summary>
     /// Whether <paramref name="value"/> belongs to this type rather than to a sibling that takes the same CLR type.
@@ -103,10 +59,9 @@ internal interface IColumnCodec
     /// </para>
     ///
     /// <para>
-    /// This is narrower than <see cref="CanWrite"/>: a codec may decline a value here that its writer would
-    /// otherwise accept, because the question is which alternative the value <em>means</em>, not which one could
-    /// store it. <c>IPv6</c> writes an IPv4 address by mapping it, but declines it beside an <c>IPv4</c>
-    /// alternative that is the better home for it.
+    /// A codec may decline a value here that the converter of its type accepts, because the question is which
+    /// alternative the value <em>means</em>, not which one could store it. <c>IPv6</c> is written from an IPv4 address
+    /// by mapping it, but declines it beside an <c>IPv4</c> alternative that is the better home for it.
     /// </para>
     /// </summary>
     /// <param name="value">The non-null value being placed: of this codec's element type, or of a CLR type that the
@@ -114,62 +69,28 @@ internal interface IColumnCodec
     /// <returns>Whether this codec claims the value.</returns>
     bool ClaimsValue(object value) => true;
 
-    /// <summary>
-    /// A typed strategy that projects <paramref name="writeType"/> values to LowCardinality dictionary keys, or
-    /// <see langword="null"/> when the codec offers none.
-    ///
-    /// <para>
-    /// Equal keys must encode identically; unequal keys may encode identically at the cost of a redundant dictionary
-    /// entry. Where CLR equality disagrees with encoding, derive the key from the same conversion the write path uses.
-    /// </para>
-    ///
-    /// <para>
-    /// Returning <see langword="null"/> means the type cannot be a LowCardinality inner. A codec that stays silent
-    /// is rejected when a write is planned rather than deduplicated on the wrong relation.
-    /// </para>
-    /// </summary>
-    /// <param name="writeType">One of this codec's writable CLR element types.</param>
-    /// <returns>An <see cref="Codecs.ILowCardinalityKeyWriter{TSource}"/>, boxed because this interface is not generic, or null.</returns>
-    object LowCardinalityKeyWriter(Type writeType) => null;
-
     /// <summary>Prepares state shared by the prefix and body. The caller disposes it after the body.</summary>
-    /// <param name="column">The column about to be written; must match this codec's element type.</param>
+    /// <param name="column">The column about to be written, which <see cref="CanWrite"/> accepts.</param>
     /// <param name="start">The zero-based first row the write will cover.</param>
     /// <param name="length">The number of rows the write will cover.</param>
     /// <returns>The per-operation write state, or <see langword="null"/> when the codec needs none.</returns>
     IColumnWriteState BeginWrite(IColumn column, int start, int length) => null;
 
-    /// <summary>Writes the serialization prefix. The default writes nothing.</summary>
+    /// <summary>Writes the serialization prefix, with the state from <see cref="BeginWrite"/>. The default writes nothing.</summary>
     /// <param name="writer">The writer to encode into.</param>
-    /// <param name="column">The column whose prefix to write; must match this codec's element type.</param>
+    /// <param name="column">The column whose prefix to write, which <see cref="CanWrite"/> accepts.</param>
     /// <param name="start">The zero-based first row the following body will write.</param>
     /// <param name="length">The number of rows the following body will write.</param>
-    void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    /// <param name="state">The state from <see cref="BeginWrite"/>; null only for a codec that returns null from it.</param>
+    void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
     }
 
-    /// <summary>Writes the prefix using state from <see cref="BeginWrite"/>.</summary>
+    /// <summary>Writes the selected rows, with the state from <see cref="BeginWrite"/>.</summary>
     /// <param name="writer">The writer to encode into.</param>
-    /// <param name="column">The column whose prefix to write; must match this codec's element type.</param>
-    /// <param name="start">The zero-based first row the following body will write.</param>
-    /// <param name="length">The number of rows the following body will write.</param>
-    /// <param name="state">The scratch from this codec's <see cref="BeginWrite"/>; null only for a codec that returns null from it.</param>
-    void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
-        => WriteStatePrefix(writer, column, start, length);
-
-    /// <summary>Writes the selected column rows.</summary>
-    /// <param name="writer">The writer to encode into.</param>
-    /// <param name="column">The column whose values to write; must match this codec's element type.</param>
+    /// <param name="column">The column whose values to write, which <see cref="CanWrite"/> accepts.</param>
     /// <param name="start">The zero-based first row to write.</param>
     /// <param name="length">The number of rows to write.</param>
-    void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length);
-
-    /// <summary>Writes the body using state from <see cref="BeginWrite"/>.</summary>
-    /// <param name="writer">The writer to encode into.</param>
-    /// <param name="column">The column whose values to write; must match this codec's element type.</param>
-    /// <param name="start">The zero-based first row to write.</param>
-    /// <param name="length">The number of rows to write.</param>
-    /// <param name="state">The scratch from this codec's <see cref="BeginWrite"/>; null only for a codec that returns null from it.</param>
-    void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
-        => WriteColumn(writer, column, start, length);
+    /// <param name="state">The state from <see cref="BeginWrite"/>; null only for a codec that returns null from it.</param>
+    void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state);
 }

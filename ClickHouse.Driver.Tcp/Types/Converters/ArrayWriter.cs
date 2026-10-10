@@ -108,7 +108,7 @@ internal sealed class ArrayWriter<T> : ColumnWriter<T[]>, IArrayWriter
         inner.Write(writer, own.Child(values), own.Inner);
     }
 
-    // The parameter name is the one that the Array codec reports for the same row.
+    // The parameter name is "column": the refused value is a row of the column.
 #pragma warning disable CA2208 // Instantiate argument exceptions correctly
     private static ArgumentException NullRow(ValueSource<T[]> values, int position)
         => new(

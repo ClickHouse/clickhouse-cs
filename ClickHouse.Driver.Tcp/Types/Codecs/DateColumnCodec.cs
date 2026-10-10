@@ -26,14 +26,6 @@ internal sealed class DateColumnCodec : IColumnCodec
     public Type ElementType => typeof(DateOnly);
 
     /// <inheritdoc/>
-    public object NullPlaceholder => DateColumnCodecShared.Epoch;
-
-    /// <inheritdoc/>
-    // A DateOnly compares by its day number, which is what is encoded.
-    public object LowCardinalityKeyWriter(Type writeType)
-        => writeType == typeof(DateOnly) ? LowCardinalityKeys.Identity<DateOnly>() : null;
-
-    /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         return ArrayColumn<DateOnly>.ReadAsync(reader, columnName, columnType, rowCount, checked(rowCount * sizeof(ushort)), Fill, cancellationToken);
@@ -49,39 +41,26 @@ internal sealed class DateColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<DateOnly>;
-
-    /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<DateOnly>;
+    public bool CanWrite(IColumn column) => column is ArrayColumn<DateOnly>;
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
         // The decoded column holds the dates: they are converted to their day counts a chunk at a time.
-        if (column is ArrayColumn<DateOnly> stored)
+        var stored = (ArrayColumn<DateOnly>)column;
+        Span<ushort> chunk = stackalloc ushort[DateColumnCodecShared.ChunkValues];
+        ReadOnlySpan<DateOnly> values = stored.Values.Slice(start, length);
+        while (!values.IsEmpty)
         {
-            Span<ushort> chunk = stackalloc ushort[DateColumnCodecShared.ChunkValues];
-            ReadOnlySpan<DateOnly> values = stored.Values.Slice(start, length);
-            while (!values.IsEmpty)
+            int count = Math.Min(chunk.Length, values.Length);
+            for (int i = 0; i < count; i++)
             {
-                int count = Math.Min(chunk.Length, values.Length);
-                for (int i = 0; i < count; i++)
-                {
-                    chunk[i] = ToDays(values[i]);
-                }
-
-                writer.WriteBytes(MemoryMarshal.AsBytes(chunk.Slice(0, count)));
-                values = values.Slice(count);
+                chunk[i] = ToDays(values[i]);
             }
 
-            return;
-        }
-
-        var typed = (IColumn<DateOnly>)column;
-        for (int i = 0; i < length; i++)
-        {
-            writer.WriteUInt16(ToDays(typed[start + i]));
+            writer.WriteBytes(MemoryMarshal.AsBytes(chunk.Slice(0, count)));
+            values = values.Slice(count);
         }
     }
 
@@ -124,14 +103,6 @@ internal sealed class Date32ColumnCodec : IColumnCodec
     public Type ElementType => typeof(DateOnly);
 
     /// <inheritdoc/>
-    public object NullPlaceholder => DateColumnCodecShared.Epoch;
-
-    /// <inheritdoc/>
-    // A DateOnly compares by its day number, which is what is encoded.
-    public object LowCardinalityKeyWriter(Type writeType)
-        => writeType == typeof(DateOnly) ? LowCardinalityKeys.Identity<DateOnly>() : null;
-
-    /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         return ArrayColumn<DateOnly>.ReadAsync(reader, columnName, columnType, rowCount, checked(rowCount * sizeof(int)), Fill, cancellationToken);
@@ -147,19 +118,14 @@ internal sealed class Date32ColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<DateOnly>;
-
-    /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<DateOnly>;
+    public bool CanWrite(IColumn column) => column is ArrayColumn<DateOnly>;
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        var typed = (IColumn<DateOnly>)column;
-        for (int i = 0; i < length; i++)
+        foreach (DateOnly value in ((ArrayColumn<DateOnly>)column).Values.Slice(start, length))
         {
-            DateOnly value = typed[start + i];
             int days = value.DayNumber - DateColumnCodecShared.UnixEpochDayNumber;
             if (days < MinDays || days > MaxDays)
             {

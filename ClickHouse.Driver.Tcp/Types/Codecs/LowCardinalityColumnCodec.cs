@@ -8,8 +8,8 @@ using ClickHouse.Driver.Tcp.Protocol;
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
 /// <summary>
-/// The wire constants and per-key encoding shared by the low-cardinality codec (read side) and its shape (write
-/// side). A <c>LowCardinality</c> column replaces <c>N</c> inner values with a block-local dictionary of the
+/// The wire constants and per-key encoding shared by the low-cardinality codec and the dictionary writers of the
+/// converter layer. A <c>LowCardinality</c> column replaces <c>N</c> inner values with a block-local dictionary of the
 /// distinct values plus <c>N</c> keys indexing into it; the key width is the smallest unsigned integer that can
 /// index the dictionary.
 /// </summary>
@@ -104,24 +104,21 @@ internal static class LowCardinalityWire
 ///
 /// <para>
 /// Each Native block ships a self-contained, block-local dictionary — there is no cross-block dictionary state,
-/// so the codec keeps none. Cached <see cref="ILowCardinalityShape"/> instances handle typed columns and write-time
-/// deduplication.
+/// so the codec keeps none. Cached <see cref="ILowCardinalityShape"/> instances handle typed columns. The codec writes
+/// a decoded column only (<see cref="CanWrite"/>), with its dictionary and keys; the converter layer interns every
+/// other column into a dictionary.
 /// </para>
 /// </summary>
 internal sealed class LowCardinalityColumnCodec : IColumnCodec
 {
     private readonly IColumnCodec inner;
     private readonly ILowCardinalityShape shape;
-    private readonly bool nullable;
-    private readonly bool innerCanWrite;
 
     private LowCardinalityColumnCodec(string typeName, IColumnCodec inner, bool nullable)
     {
         TypeName = typeName;
         this.inner = inner;
-        this.nullable = nullable;
         shape = LowCardinalityShapes.For(inner.ElementType, nullable);
-        innerCanWrite = shape.CanInnerWrite(inner);
     }
 
     /// <inheritdoc/>
@@ -129,25 +126,6 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public Type ElementType => shape.SurfaceElementType;
-
-    /// <summary>
-    /// The placeholder for an absent value: for a nullable inner it is <see langword="null"/> itself (the reserved
-    /// NULL dictionary slot), otherwise the inner codec's placeholder. Relevant only if a composite nests a
-    /// <c>LowCardinality</c> and asks for its placeholder; the server rejects <c>Nullable(LowCardinality(...))</c>,
-    /// so this is not exercised by a nullable wrapper.
-    /// </summary>
-    public object NullPlaceholder => nullable ? null : inner.NullPlaceholder;
-
-    /// <inheritdoc/>
-    public object NullPlaceholderAs(Type writeType)
-    {
-        if (!InnerAccepts(writeType, out Type innerType))
-        {
-            throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
-        }
-
-        return nullable ? null : inner.NullPlaceholderAs(innerType);
-    }
 
     /// <summary>Builds a <c>LowCardinality(T)</c> codec, resolving the inner type <c>T</c> through the registry.</summary>
     /// <param name="node">The parsed <c>LowCardinality</c> type node; its single argument is the inner type.</param>
@@ -358,74 +336,49 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWriteElementType(Type elementType) => InnerAccepts(elementType, out _);
-
-    // LowCardinality needs wire-equivalent keys to build its dictionary. Reject writable types without a key
-    // during planning rather than failing after the write starts.
-    private bool InnerAccepts(Type elementType, out Type innerType)
-        => TryInnerWriteType(elementType, out innerType)
-            && inner.CanWriteElementType(innerType)
-            && inner.LowCardinalityKeyWriter(innerType) is not null;
-
-    /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => WriteShapeFor(column) is not null;
-
-    /// <inheritdoc/>
-    // A decoded LowCardinality column whose dictionary the inner codec writes from its storage.
-    public bool WritesFromStorage(IColumn column)
-        => WriteShapeFor(column) is { } writeShape && writeShape.WritesFromStorage(column) && inner.WritesFromStorage(((ILowCardinalityColumn)column).Dictionary);
-
-    /// <summary>Maps a LowCardinality CLR type to the type expected by its inner codec.</summary>
-    private bool TryInnerWriteType(Type elementType, out Type innerType)
-    {
-        if (!nullable)
-        {
-            innerType = elementType;
-            return true;
-        }
-
-        innerType = Nullable.GetUnderlyingType(elementType);
-        if (innerType is not null)
-        {
-            return true;
-        }
-
-        if (elementType.IsValueType)
-        {
-            return false;
-        }
-
-        innerType = elementType;
-        return true;
-    }
-
-    // Resolve the canonical or child-lifted write shape.
-    private ILowCardinalityShape WriteShapeFor(IColumn column)
-    {
-        Type elementType = column.ElementType;
-        if (elementType == ElementType)
-        {
-            return innerCanWrite && shape.CanWrite(column) ? shape : null;
-        }
-
-        if (!InnerAccepts(elementType, out Type innerType))
-        {
-            return null;
-        }
-
-        ILowCardinalityShape lifted = LowCardinalityShapes.For(innerType, nullable);
-        return lifted.CanWrite(column) ? lifted : null;
-    }
+    // A decoded LowCardinality column whose dictionary the inner codec writes.
+    public bool CanWrite(IColumn column)
+        => shape.CanWrite(column) && inner.CanWrite(((ILowCardinalityColumn)column).Dictionary);
 
     /// <inheritdoc/>
     // The prefix is a fixed version marker.
-    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
         => writer.WriteInt64(LowCardinalityWire.StatePrefixVersion);
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-        => (WriteShapeFor(column) ?? throw new ArgumentException(
-                $"A {TypeName} column must hold a CLR type its inner codec accepts, not {column.GetType()}.",
-                nameof(column)))
-            .WriteBody(inner, writer, column, start, length);
+    // The dictionary and the keys of the decoded column, written again with no rebuild. The whole dictionary is written
+    // even for a slice: unused entries are harmless, and the key width is fixed by the dictionary size, so a slice's keys
+    // keep the same encoding. A zero-length slice writes no body at all: only the state prefix (emitted by the block
+    // layer, or by a composite's prefix phase) precedes it.
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
+    {
+        if (length == 0)
+        {
+            return;
+        }
+
+        var dense = (ILowCardinalityColumn)column;
+        IColumn dictionary = dense.Dictionary;
+        int dictSize = dictionary.RowCount;
+        int code = LowCardinalityWire.SelectKeyWidthCode(dictSize);
+
+        writer.WriteUInt64(LowCardinalityWire.NativeFlags | (ulong)code);
+        writer.WriteUInt64((ulong)dictSize);
+        IColumnWriteState dictionaryState = inner.BeginWrite(dictionary, 0, dictSize);
+        try
+        {
+            inner.WriteColumn(writer, dictionary, 0, dictSize, dictionaryState);
+        }
+        finally
+        {
+            dictionaryState?.Dispose();
+        }
+
+        writer.WriteUInt64((ulong)length);
+        ReadOnlySpan<int> keys = dense.Keys;
+        for (int i = 0; i < length; i++)
+        {
+            LowCardinalityWire.WriteKey(writer, code, keys[start + i]);
+        }
+    }
 }

@@ -16,8 +16,6 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 internal sealed class DateTime64ColumnCodec : IColumnCodec
 {
     private const int MaxScale = 9; // Nanoseconds — the finest scale ClickHouse DateTime64 supports.
-    private const int DotNetTickScale = 7; // .NET tick = 100 ns = 10^-7 s.
-    private static readonly long UnixEpochTicks = DateTime.UnixEpoch.Ticks;
 
     private readonly int scale;
     private readonly ResolvedTimeZone timeZone;
@@ -40,51 +38,6 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
 
     /// <summary>The timezone of the column: from the type string, else from the session, else UTC.</summary>
     internal ResolvedTimeZone TimeZone => timeZone;
-
-    /// <inheritdoc/>
-    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(long), typeof(DateTimeOffset), typeof(DateTime) };
-
-    /// <inheritdoc/>
-    public object NullPlaceholder => 0L;
-
-    /// <inheritdoc/>
-    public object NullPlaceholderAs(Type writeType)
-    {
-        if (writeType == typeof(long))
-        {
-            return NullPlaceholder;
-        }
-
-        if (writeType == typeof(DateTimeOffset))
-        {
-            return DateTimeOffset.UnixEpoch;
-        }
-
-        if (writeType == typeof(DateTime))
-        {
-            return DateTime.UnixEpoch;
-        }
-
-        throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
-    }
-
-    /// <inheritdoc/>
-    // Both instant surfaces compare on the count at this column's scale: two values inside one tick of the scale
-    // encode identically, and equal ticks under different Kind do not.
-    public object LowCardinalityKeyWriter(Type writeType)
-    {
-        if (writeType == typeof(long))
-        {
-            return LowCardinalityKeys.Identity<long>();
-        }
-
-        if (writeType == typeof(DateTimeOffset))
-        {
-            return LowCardinalityKeys.Projected<DateTimeOffset, long>(CountFromDateTimeOffset);
-        }
-
-        return writeType == typeof(DateTime) ? LowCardinalityKeys.Projected<DateTime, long>(CountFromDateTime) : null;
-    }
 
     /// <summary>Builds a <c>DateTime64</c> codec from its scale and optional timezone arguments.</summary>
     /// <param name="node">The parsed <c>DateTime64</c> type node.</param>
@@ -113,83 +66,14 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
         => DateTime64Column.ReadAsync(reader, columnName, columnType, scale, timeZone, rowCount, cancellationToken);
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<long> or IColumn<DateTimeOffset> or IColumn<DateTime>;
-
-    /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool WritesFromStorage(IColumn column) => column is DateTime64Column;
+    public bool CanWrite(IColumn column) => column is DateTime64Column;
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
         // The decoded column stores the wire values.
-        if (column is DateTime64Column stored)
-        {
-            writer.WriteBytes(MemoryMarshal.AsBytes(stored.Values.Slice(start, length)));
-            return;
-        }
-
-        switch (column)
-        {
-            case IColumn<long> counts:
-                for (int i = 0; i < length; i++)
-                {
-                    writer.WriteInt64(counts[start + i]);
-                }
-
-                break;
-            case IColumn<DateTimeOffset> offsets:
-                for (int i = 0; i < length; i++)
-                {
-                    writer.WriteInt64(CountFromDateTimeOffset(offsets[start + i]));
-                }
-
-                break;
-            case IColumn<DateTime> dateTimes:
-                for (int i = 0; i < length; i++)
-                {
-                    writer.WriteInt64(CountFromDateTime(dateTimes[start + i]));
-                }
-
-                break;
-            default:
-                throw new ArgumentException(
-                    $"A DateTime64 column must hold long, DateTimeOffset, or DateTime values, not {column.GetType()}.",
-                    nameof(column));
-        }
+        var stored = (DateTime64Column)column;
+        writer.WriteBytes(MemoryMarshal.AsBytes(stored.Values.Slice(start, length)));
     }
-
-    // Converts an instant to the wire count at this column's scale. A DateTimeOffset holds only 100 ns ticks, so
-    // scales 7 and finer are always exact; a coarser scale must divide the .NET tick count evenly, since dropping
-    // non-zero sub-scale digits would silently lose precision.
-    private long CountFromDateTimeOffset(DateTimeOffset value)
-    {
-        long dotNetTicksSinceEpoch = value.UtcDateTime.Ticks - UnixEpochTicks;
-        int places = scale - DotNetTickScale;
-        if (places >= 0)
-        {
-            // Fine scales reach their Int64 limit before DateTimeOffset; report the value and column explicitly.
-            long scaleUp = FixedPointScaling.Pow10(places);
-            if (dotNetTicksSinceEpoch > long.MaxValue / scaleUp || dotNetTicksSinceEpoch < long.MinValue / scaleUp)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(value),
-                    value,
-                    $"{value:o} cannot be written to {TypeName} (scale {scale}): the count of sub-second units since 1970-01-01 does not fit in an Int64.");
-            }
-
-            return dotNetTicksSinceEpoch * scaleUp;
-        }
-
-        long factor = FixedPointScaling.Pow10(-places);
-        if (dotNetTicksSinceEpoch % factor != 0)
-        {
-            throw new ArgumentException($"{value:o} cannot be written to {TypeName} (scale {scale}) without losing precision.", nameof(value));
-        }
-
-        return dotNetTicksSinceEpoch / factor;
-    }
-
-    private long CountFromDateTime(DateTime value)
-        => CountFromDateTimeOffset(new DateTimeOffset(DateTimeColumnCodec.ToUtc(value, timeZone)));
 }

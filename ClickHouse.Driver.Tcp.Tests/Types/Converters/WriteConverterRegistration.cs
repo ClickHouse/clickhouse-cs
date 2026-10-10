@@ -47,7 +47,7 @@ internal sealed class WriteConverterRegistration : IDifferentialRegistration
         public override SliceWriter Bind<T>(IColumn<T> column, string columnType, ResolveContext context)
         {
             IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(columnType, context);
-            if (codec.WritesFromStorage(column))
+            if (codec.CanWrite(column))
             {
                 return (output, start, length) => WriteThroughCodec(codec, column, output, start, length);
             }
