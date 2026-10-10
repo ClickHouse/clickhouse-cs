@@ -17,9 +17,9 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// that it gave before, so the interner can stop it at any value with no change to the result.
 /// </para>
 /// <para>
-/// The CLR lookup costs a hash and an insert for each new value. So after <see cref="ProbeValues"/> lookups, the interner
-/// stops it when more than half of them failed (the values do not repeat much), as <see cref="ClrKeyedByteInterner{T}"/>
-/// does. A leaf whose CLR value is its canonical value has no CLR lookup: the canonical lookup is the same lookup.
+/// The CLR lookup costs a hash and an insert for each new value. So the interner stops it when more than half of the
+/// first <see cref="ProbeValues"/> lookups fail (the values do not repeat much), at the lookup that passes the half, as
+/// <see cref="ClrKeyedByteInterner{T}"/> does. A leaf whose CLR value is its canonical value has no CLR lookup: the canonical lookup is the same lookup.
 /// </para>
 /// <para>
 /// One interner serves one write, on one thread. Dispose it to return its buffer.
@@ -107,13 +107,27 @@ internal sealed class ClrKeyedFixedInterner<T, TCanon> : IDisposable
     {
         int key = canonical.Intern(leaf.ToCanonical(value, canonical.Count));
         map.Add(value, key);
-        misses++;
-        if (--probeLeft == 0)
+        if (probeLeft > 0)
         {
-            EndProbe();
+            EndProbeOnMiss();
         }
 
         return key;
+    }
+
+    // A miss during the probe. When more than half of the probe has missed, the end of the probe can only stop the CLR
+    // lookup, so it stops now and the values after it cost no CLR lookup.
+    private void EndProbeOnMiss()
+    {
+        if (++misses * 2 > ProbeValues)
+        {
+            clrKeys = null;
+            probeLeft = 0;
+        }
+        else if (--probeLeft == 0)
+        {
+            EndProbe();
+        }
     }
 
     // The end of the probe: the CLR lookup stops when more than half of the probe lookups failed.
