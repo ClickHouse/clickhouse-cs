@@ -1,0 +1,1 @@
+* Fixed reading `SimpleAggregateFunction(...)` values stored inside `Dynamic`, `Variant` or `JSON` columns, which threw `NotImplementedException` instead of returning the value (issue #505). Reading an `AggregateFunction(...)` value from those columns now reports the same actionable "use `<function>Merge()`" error as a top-level `AggregateFunction` column.
