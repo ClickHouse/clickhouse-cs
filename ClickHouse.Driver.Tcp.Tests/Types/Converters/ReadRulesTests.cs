@@ -268,7 +268,7 @@ public class ReadRulesTests
     // The element type of an array, or the type argument of a generic collection interface.
     private static Type ElementOf(Type type) => type.IsArray ? type.GetElementType() : type.GetGenericArguments()[0];
 
-    /// <summary>Writes a column with its codec and decodes it into a block of one column called <c>value</c>.</summary>
+    /// <summary>Writes a column as an insert writes it and decodes it into a block of one column called <c>value</c>.</summary>
     internal static Block Decode(string columnType, IColumn source)
     {
         IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(columnType, DifferentialEngine.Context);
