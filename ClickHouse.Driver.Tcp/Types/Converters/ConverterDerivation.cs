@@ -186,7 +186,7 @@ internal sealed partial class ConverterDerivation
 
                 return direction == ConversionDirection.Read
                     ? DeriveCompositeRead(name, node, root, in context, clrType, order)
-                    : Refuse(node, root, $"'{node}' has no converter for {clrType}.");
+                    : DeriveCompositeWrite(name, node, root, in context, clrType);
         }
     }
 

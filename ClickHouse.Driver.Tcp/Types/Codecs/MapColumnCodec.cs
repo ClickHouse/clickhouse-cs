@@ -315,6 +315,13 @@ internal sealed class MapColumnCodec : IColumnCodec
         return writeShape is not null && writeShape.CanWrite(keyCodec, valueCodec, column, childrenCanWrite);
     }
 
+    /// <inheritdoc/>
+    public bool WritesFromStorage(IColumn column)
+    {
+        IMapShape writeShape = WriteShapeFor(column, out bool childrenCanWrite);
+        return writeShape is not null && writeShape.IsDense(column) && writeShape.CanWrite(keyCodec, valueCodec, column, childrenCanWrite);
+    }
+
     /// <summary>Parses the CLR map-row shape <c>KeyValuePair&lt;TKey, TValue&gt;[]</c>.</summary>
     private static bool TryPairArguments(Type candidate, out Type pairType, out Type[] arguments)
     {
@@ -411,6 +418,11 @@ internal interface IMapShape
     /// <summary>Whether both codecs accept this shape's flattened columns.</summary>
     bool CanInnerWrite(IColumnCodec keyCodec, IColumnCodec valueCodec);
 
+    /// <summary>Whether the column is a dense Map column of this shape, whose key and value columns are written as they are.</summary>
+    /// <param name="column">The column.</param>
+    /// <returns>Whether the column is dense.</returns>
+    bool IsDense(IColumn column);
+
     /// <summary>Flattens the slice and prepares both child write states.</summary>
     IColumnWriteState BeginWrite(IColumnCodec keyCodec, IColumnCodec valueCodec, IColumn column, int start, int length);
 
@@ -460,6 +472,9 @@ internal sealed class MapShape<TKey, TValue> : IMapShape
     /// <inheritdoc/>
     public bool CanInnerWrite(IColumnCodec keyCodec, IColumnCodec valueCodec)
         => keyCodec.CanWriteElementType(typeof(TKey)) && valueCodec.CanWriteElementType(typeof(TValue));
+
+    /// <inheritdoc/>
+    public bool IsDense(IColumn column) => column is MapColumn<TKey, TValue>;
 
     /// <inheritdoc/>
     public IColumnWriteState BeginWrite(IColumnCodec keyCodec, IColumnCodec valueCodec, IColumn column, int start, int length)

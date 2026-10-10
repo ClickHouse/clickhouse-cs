@@ -27,6 +27,9 @@ internal abstract class NullableLowCardinalityShape<T> : ILowCardinalityShape, I
     bool ILowCardinalityNullMap.IsNull(IColumn source, int row) => IsNull(source, row);
 
     /// <inheritdoc/>
+    public bool WritesFromStorage(IColumn column) => column is IDenseLowCardinality<T>;
+
+    /// <inheritdoc/>
     public bool CanInnerWrite(IColumnCodec inner)
         => inner.CanWriteElementType(typeof(T)) && inner.LowCardinalityKeyWriter(typeof(T)) is ILowCardinalityKeyWriter<T>;
 

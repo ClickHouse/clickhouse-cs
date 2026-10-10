@@ -18,6 +18,9 @@ internal sealed class LowCardinalityShape<T> : ILowCardinalityShape
     public bool CanWrite(IColumn column) => column is IColumn<T>;
 
     /// <inheritdoc/>
+    public bool WritesFromStorage(IColumn column) => column is LowCardinalityColumn<T>;
+
+    /// <inheritdoc/>
     public bool CanInnerWrite(IColumnCodec inner)
         => inner.CanWriteElementType(typeof(T)) && inner.LowCardinalityKeyWriter(typeof(T)) is ILowCardinalityKeyWriter<T>;
 

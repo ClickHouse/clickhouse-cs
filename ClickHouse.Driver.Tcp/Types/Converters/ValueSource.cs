@@ -24,7 +24,7 @@ internal readonly ref struct ValueSource<T>
     private readonly ReadOnlySpan<T[]> segments;
     private readonly ReadOnlySpan<byte> absent;
 
-    private ValueSource(ReadOnlySpan<T> values, ReadOnlySpan<T[]> segments, bool isSegmented, int count, int firstRow, ReadOnlySpan<byte> absent, bool hasAbsent)
+    private ValueSource(ReadOnlySpan<T> values, ReadOnlySpan<T[]> segments, bool isSegmented, int count, int firstRow, ReadOnlySpan<byte> absent, bool hasAbsent, string column)
     {
         this.values = values;
         this.segments = segments;
@@ -33,6 +33,7 @@ internal readonly ref struct ValueSource<T>
         Count = count;
         FirstRow = firstRow;
         HasAbsent = hasAbsent;
+        Column = column;
     }
 
     /// <summary>The number of values in all runs together.</summary>
@@ -49,6 +50,12 @@ internal readonly ref struct ValueSource<T>
 
     /// <summary>Whether <see cref="Absent"/> marks positions. When false, every position has a value.</summary>
     public bool HasAbsent { get; }
+
+    /// <summary>
+    /// The name of the column that the values come from, for error messages. A composite gives it to the sources of its
+    /// children. Null when the caller did not give one.
+    /// </summary>
+    public string Column { get; }
 
     /// <summary>
     /// One byte for each position in all runs together, when <see cref="HasAbsent"/> is true. A byte that is not
@@ -74,14 +81,16 @@ internal readonly ref struct ValueSource<T>
     /// <summary>Makes a source over one span.</summary>
     /// <param name="values">The values.</param>
     /// <param name="firstRow">The row of the column that <c>values[0]</c> comes from, for error messages.</param>
+    /// <param name="column">The name of the column, for error messages (<see cref="Column"/>).</param>
     /// <returns>The source.</returns>
-    public static ValueSource<T> Of(ReadOnlySpan<T> values, int firstRow = 0)
-        => new(values, default, isSegmented: false, values.Length, firstRow, default, hasAbsent: false);
+    public static ValueSource<T> Of(ReadOnlySpan<T> values, int firstRow = 0, string column = null)
+        => new(values, default, isSegmented: false, values.Length, firstRow, default, hasAbsent: false, column);
 
     /// <summary>Makes a source over a list of segments. A null segment counts as an empty one.</summary>
     /// <param name="segments">The segments, in wire order.</param>
+    /// <param name="column">The name of the column, for error messages (<see cref="Column"/>).</param>
     /// <returns>The source.</returns>
-    public static ValueSource<T> OfSegments(ReadOnlySpan<T[]> segments)
+    public static ValueSource<T> OfSegments(ReadOnlySpan<T[]> segments, string column = null)
     {
         long count = 0;
         foreach (T[] segment in segments)
@@ -94,7 +103,7 @@ internal readonly ref struct ValueSource<T>
             throw new ArgumentException($"The segments hold {count} values; a value source holds at most {int.MaxValue}.", nameof(segments));
         }
 
-        return new(default, segments, isSegmented: true, (int)count, firstRow: 0, default, hasAbsent: false);
+        return new(default, segments, isSegmented: true, (int)count, firstRow: 0, default, hasAbsent: false, column);
     }
 
     /// <summary>Gives a copy of this source whose positions <paramref name="absent"/> marks.</summary>
@@ -108,7 +117,7 @@ internal readonly ref struct ValueSource<T>
             throw new ArgumentException($"The marks cover {absent.Length} positions, but the source has {Count} values.", nameof(absent));
         }
 
-        return new(values, segments, IsSegmented, Count, FirstRow, absent, hasAbsent: true);
+        return new(values, segments, IsSegmented, Count, FirstRow, absent, hasAbsent: true, Column);
     }
 
     /// <summary>One run of values. A source over one span has one run: the span.</summary>
