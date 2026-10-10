@@ -292,16 +292,13 @@ public class VariantWriterTests
 
         public Type ElementType { get; }
 
-        public object NullPlaceholder => null;
-
         public bool ClaimsValue(object value) => false;
 
         public System.Threading.Tasks.ValueTask<IColumn> ReadColumnAsync(ClickHouse.Driver.Tcp.Protocol.ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, System.Threading.CancellationToken cancellationToken)
             => throw new NotSupportedException();
 
-        public bool CanWrite(IColumn column) => false;
-
-        public void WriteColumn(ClickHouse.Driver.Tcp.Protocol.ClickHouseBinaryWriter writer, IColumn column, int start, int length) => throw new NotSupportedException();
+        public void WriteColumn(ClickHouse.Driver.Tcp.Protocol.ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
+            => throw new NotSupportedException();
     }
 
     // Variant(UInt8, Array(UInt8), Array(Array(UInt8)), ...): alternatives of distinct canonical CLR types.

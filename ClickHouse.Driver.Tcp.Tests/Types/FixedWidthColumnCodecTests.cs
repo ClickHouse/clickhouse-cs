@@ -1,26 +1,22 @@
 using System;
-using System.IO;
 using System.Numerics;
-using System.Threading;
 using System.Threading.Tasks;
-using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
+using static ClickHouse.Driver.Tcp.Tests.Utilities.CodecTestHarness;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
 [TestFixture]
 public class FixedWidthColumnCodecTests
 {
-    private static readonly CancellationToken None = CancellationToken.None;
-
     [Test]
     public async Task WriteColumn_Int32_IsLittleEndianAndContiguous()
     {
         var codec = new FixedWidthColumnCodec<int>("Int32");
         IColumn column = PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 1, -1 });
 
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, column));
+        byte[] bytes = await WriteStoredAsync(codec, column, 0, column.RowCount);
 
         CollectionAssert.AreEqual(new byte[] { 0x01, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF }, bytes);
     }
@@ -86,7 +82,7 @@ public class FixedWidthColumnCodecTests
     public async Task ReadColumn_StampsNameAndType()
     {
         var codec = new FixedWidthColumnCodec<int>("Int32");
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, PrimitiveColumn<int>.FromValues("ignored", "Int32", new[] { 7 })));
+        byte[] bytes = await WriteStoredAsync(codec, PrimitiveColumn<int>.FromValues("ignored", "Int32", new[] { 7 }), 0, 1);
         using var reader = ReaderOver(bytes);
 
         using IColumn column = await codec.ReadColumnAsync(reader, "the_name", "Int32", 1, None);
@@ -99,8 +95,10 @@ public class FixedWidthColumnCodecTests
         });
     }
 
+    // The storage of a fixed-width type is the PrimitiveColumn<T> that its read gives. An ArrayColumn<int> that a caller
+    // builds has the element type of the codec, but the converter layer writes it.
     [Test]
-    public void CanWrite_MatchesElementType_RejectsMismatch()
+    public void CanWrite_PrimitiveColumnOfTheType_IsTrueAndEveryOtherColumnIsFalse()
     {
         var codec = new FixedWidthColumnCodec<int>("Int32");
 
@@ -108,32 +106,19 @@ public class FixedWidthColumnCodecTests
         {
             Assert.That(codec.CanWrite(PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 1 })), Is.True);
             Assert.That(codec.CanWrite(PrimitiveColumn<long>.FromValues("c", "Int64", new[] { 1L })), Is.False);
-            Assert.That(codec.CanWrite(new ArrayColumn<string>("c", "String", new[] { "x" })), Is.False);
+            Assert.That(codec.CanWrite(new ArrayColumn<int>("c", "Int32", new[] { 1 })), Is.False);
         });
     }
 
+    // The codec writes the stored values of the column, and reads them back.
     private static async Task AssertRoundTripAsync<T>(IColumnCodec codec, string type, T[] values)
         where T : unmanaged
     {
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, PrimitiveColumn<T>.FromValues("c", type, values)));
+        byte[] bytes = await WriteStoredAsync(codec, PrimitiveColumn<T>.FromValues("c", type, values), 0, values.Length);
         using var reader = ReaderOver(bytes);
 
         using var column = (IColumn<T>)await codec.ReadColumnAsync(reader, "c", type, values.Length, None);
 
         CollectionAssert.AreEqual(values, column.Values.ToArray());
     }
-
-    private static async Task<byte[]> WriteAsync(Action<ClickHouseBinaryWriter> write)
-    {
-        using var ms = new MemoryStream();
-        using (var writer = new ClickHouseBinaryWriter(ms))
-        {
-            write(writer);
-            await writer.FlushAsync(None);
-        }
-
-        return ms.ToArray();
-    }
-
-    private static ClickHouseBinaryReader ReaderOver(byte[] bytes) => new(new MemoryStream(bytes));
 }

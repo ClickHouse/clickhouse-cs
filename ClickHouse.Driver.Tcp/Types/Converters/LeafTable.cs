@@ -8,8 +8,7 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// <summary>
 /// The leaf table: for each leaf ClickHouse type, the CLR types that it reads as and writes from, and the converter
 /// for each pair. It is the only place that knows a (leaf type, CLR type) pair. A composite only recurses to its
-/// leaves. The pairs are the readings and the writes that the leaf codecs offer, and one write that no codec offers:
-/// <c>FixedString</c> from <see cref="string"/>.
+/// leaves.
 /// </summary>
 internal static class LeafTable
 {
@@ -177,9 +176,9 @@ internal static class LeafTable
         => leaf
             .Read<T>(static _ => Identity<T>(), applies: applies)
             .Read<string>(static codec => new ValueLeafReader<T, string, EnumAsLabel<T>>(new(((EnumColumnCodec<T>)codec).Members)), conversion: true, applies: applies)
-            .Write<T>(static codec => new FixedLeafWriter<T, T, IdentityWrite<T>>(default, (T)codec.NullPlaceholder), applies: applies)
+            .Write<T>(static codec => new FixedLeafWriter<T, T, IdentityWrite<T>>(default, ((EnumColumnCodec<T>)codec).NullPlaceholder), applies: applies)
             .Write<string>(
-                static codec => new FixedLeafWriter<string, T, EnumFromLabel<T>>(new((EnumColumnCodec<T>)codec), (T)codec.NullPlaceholder),
+                static codec => new FixedLeafWriter<string, T, EnumFromLabel<T>>(new((EnumColumnCodec<T>)codec), ((EnumColumnCodec<T>)codec).NullPlaceholder),
                 conversion: true,
                 applies: applies);
 

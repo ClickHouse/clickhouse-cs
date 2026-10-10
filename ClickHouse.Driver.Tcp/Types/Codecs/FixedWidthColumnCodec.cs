@@ -23,7 +23,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </para>
 /// </summary>
 /// <typeparam name="T">The CLR type the ClickHouse value maps to.</typeparam>
-internal sealed class FixedWidthColumnCodec<T> : IColumnCodec, ISpanWritableCodec<T>
+internal sealed class FixedWidthColumnCodec<T> : IColumnCodec
     where T : unmanaged
 {
     /// <summary>Initializes a new instance of the <see cref="FixedWidthColumnCodec{T}"/> class.</summary>
@@ -35,33 +35,6 @@ internal sealed class FixedWidthColumnCodec<T> : IColumnCodec, ISpanWritableCode
 
     /// <inheritdoc/>
     public Type ElementType => typeof(T);
-
-    /// <inheritdoc/>
-    public object NullPlaceholder => default(T);
-
-    /// <inheritdoc/>
-    // The bytes are the value reinterpreted, so equal integers are equal bytes. The floats are the exception:
-    // +0 equals -0 and every NaN equals every other, none of which holds of their bit patterns, so they compare
-    // on the bit pattern instead.
-    public object LowCardinalityKeyWriter(Type writeType)
-    {
-        if (writeType != typeof(T))
-        {
-            return null;
-        }
-
-        if (typeof(T) == typeof(float))
-        {
-            return LowCardinalityKeys.Projected<float, int>(BitConverter.SingleToInt32Bits);
-        }
-
-        if (typeof(T) == typeof(double))
-        {
-            return LowCardinalityKeys.Projected<double, long>(BitConverter.DoubleToInt64Bits);
-        }
-
-        return LowCardinalityKeys.Identity<T>();
-    }
 
     /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -88,34 +61,11 @@ internal sealed class FixedWidthColumnCodec<T> : IColumnCodec, ISpanWritableCode
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<T>;
-
-    /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool WritesFromStorage(IColumn column) => column is PrimitiveColumn<T>;
+    public bool CanWrite(IColumn column) => column is PrimitiveColumn<T>;
 
     /// <inheritdoc/>
-    // A contiguous column (the dense read-back, or a caller's array-backed column) blits its whole slice in one
-    // copy; a scattered write-path view (Nullable's substitute, a Tuple field, a Variant alternative) has no span,
-    // so each value is written on its own — the per-element cost the scattered fixed-width positions accept.
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        var typed = (IColumn<T>)column;
-        if (typed is ISpanColumn<T> contiguous)
-        {
-            writer.WriteBytes(MemoryMarshal.AsBytes(contiguous.Span.Slice(start, length)));
-            return;
-        }
-
-        for (int i = 0; i < length; i++)
-        {
-            T value = typed[start + i];
-            writer.WriteBytes(MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref value, 1)));
-        }
-    }
-
-    /// <inheritdoc/>
-    // The wire form is the raw little-endian bytes, so a run of values is one contiguous blit.
-    public void WriteValues(ClickHouseBinaryWriter writer, ReadOnlySpan<T> values)
-        => writer.WriteBytes(MemoryMarshal.AsBytes(values));
+    // The stored bytes are the wire bytes, so the slice is one copy.
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
+        => writer.WriteBytes(MemoryMarshal.AsBytes(((PrimitiveColumn<T>)column).Values.Slice(start, length)));
 }

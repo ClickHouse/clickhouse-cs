@@ -1,7 +1,6 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -52,10 +51,9 @@ internal static class VariantWire
 /// </para>
 ///
 /// <para>
-/// On the write path a dense <see cref="VariantColumn"/> is serialized straight from its discriminator stream and
-/// per-type child columns with no copy. A flat <c>IColumn&lt;object&gt;</c> — a caller's column or what an
-/// <c>Array(Variant(...))</c> flattens into — is scattered by each value's runtime CLR type into per-type
-/// buffers, which boxes; this is the ergonomic, not the hot, path.
+/// The codec writes a decoded <see cref="VariantColumn"/> of the same alternatives only (<see cref="CanWrite"/>): its
+/// discriminator stream, then its per-type child columns, with no copy. The converter layer writes every other
+/// column, and places each value by its CLR type.
 /// </para>
 /// </summary>
 internal sealed class VariantColumnCodec : IColumnCodec
@@ -65,74 +63,11 @@ internal sealed class VariantColumnCodec : IColumnCodec
     private const int MaxTypes = 255;
 
     private readonly IColumnCodec[] children;
-    private readonly Func<string, string, object[], int, IColumn>[] childFlatBuilders;
-    private readonly Dictionary<Type, int> discriminatorByClrType;
-    private readonly Dictionary<Type, int[]> collidingDiscriminatorsByClrType;
-    private readonly bool allChildrenWritable;
 
     private VariantColumnCodec(string typeName, IColumnCodec[] children)
     {
         TypeName = typeName;
         this.children = children;
-
-        int typeCount = children.Length;
-        childFlatBuilders = new Func<string, string, object[], int, IColumn>[typeCount];
-        MethodInfo builderTemplate = typeof(VariantColumnCodec).GetMethod(nameof(BuildFlatColumn), BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new InvalidOperationException($"Method '{nameof(BuildFlatColumn)}' was not found.");
-
-        // Map each alternative's canonical element type to its discriminator, so the ergonomic write path can
-        // pick a row's alternative from the runtime type of its value. Only the canonical element type is keyed
-        // here — not a codec's extra convenience write types (e.g. DateTime alongside DateTimeOffset): the
-        // per-alternative bucket is materialized as that exact element type (BuildFlatColumn<ElementType>), so a
-        // convenience-typed value would fail the bucket cast. Rejecting it up front with a clear "no alternative"
-        // error beats a deep InvalidCastException.
-        //
-        // Several alternatives can share a CLR type even though the server forbids duplicate alternative *types*:
-        // they only have to surface the same one. Ring and LineString are both Array(Point), so both surface as
-        // (double, double)[], as do Polygon and MultiLineString — which makes four of Geometry's six collide.
-        // IPv4 and IPv6 both surface IPAddress, JSON and String both surface string, and Int64, DateTime64 and
-        // Time64 all surface long. A colliding type is struck from the map and its alternatives are collected
-        // instead, for DiscriminatorFor to settle per value; it never tie-breaks to the lower discriminator. The
-        // rest of the map is unaffected: a string written into Variant(IPv4, IPv6, String) is unambiguous and
-        // resolves in one lookup.
-        var byClrType = new Dictionary<Type, List<int>>();
-        bool writable = true;
-        for (int i = 0; i < typeCount; i++)
-        {
-            Type elementType = children[i].ElementType;
-            childFlatBuilders[i] = (Func<string, string, object[], int, IColumn>)builderTemplate
-                .MakeGenericMethod(elementType)
-                .CreateDelegate(typeof(Func<string, string, object[], int, IColumn>));
-
-            if (!byClrType.TryGetValue(elementType, out List<int> sharing))
-            {
-                sharing = new List<int>(1);
-                byClrType[elementType] = sharing;
-            }
-
-            sharing.Add(i);
-
-            // A Variant over a non-writable alternative (e.g. Nothing) is rejected up front rather than mid-write.
-            writable &= children[i].CanWriteElementType(elementType);
-        }
-
-        // Split once, so the write path pays nothing for a collision it does not have: a type owned by a single
-        // alternative resolves in one dictionary hit and never touches the candidate list.
-        discriminatorByClrType = new Dictionary<Type, int>(byClrType.Count);
-        collidingDiscriminatorsByClrType = new Dictionary<Type, int[]>();
-        foreach (KeyValuePair<Type, List<int>> entry in byClrType)
-        {
-            if (entry.Value.Count == 1)
-            {
-                discriminatorByClrType[entry.Key] = entry.Value[0];
-            }
-            else
-            {
-                collidingDiscriminatorsByClrType[entry.Key] = entry.Value.ToArray();
-            }
-        }
-
-        allChildrenWritable = writable;
     }
 
     /// <inheritdoc/>
@@ -148,11 +83,6 @@ internal sealed class VariantColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public Type ElementType => typeof(object);
-
-    // A Variant is never nested inside Nullable (the server rejects Nullable(Variant(...))), so this placeholder
-    // is a formality the interface requires and is never written.
-    /// <inheritdoc/>
-    public object NullPlaceholder => null;
 
     /// <summary>Builds a <c>Variant(...)</c> codec, resolving each alternative's codec through the registry.</summary>
     /// <param name="node">The parsed <c>Variant</c> node; its arguments are the alternative types in discriminator order.</param>
@@ -252,38 +182,22 @@ internal sealed class VariantColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // BeginWrite selects dense reuse or scattering by runtime type.
+    // A decoded Variant column of the same alternatives, whose alternative columns the alternative codecs write.
     //
-    // The dense test is the concrete VariantColumn, not the public IVariantColumn: the dense writer trusts
-    // invariants only that class's constructor establishes (every discriminator is either a valid alternative index
-    // or the NULL marker, and LocalIndices is exactly as long as the column with a correct per-type running index).
-    // Matching on the public interface would let a caller-supplied implementation reach the writer with none of
-    // that checked, and the first thing the writer does is put the discriminators on the wire — so a bad value
-    // would desync the block mid-stream rather than fail cleanly. Anything else writable arrives as IColumn<object>
-    // and goes down the scattered path, which validates as it goes.
-    //
-    // Whether a *value* names an alternative is not answerable here: an IColumn<object> says nothing about the
-    // runtime types it holds, so a Variant with colliding alternatives is still accepted at this gate and refuses
-    // the individual value later, in DiscriminatorFor. Refusing the whole column here instead would also reject
-    // every unambiguous value it holds.
-    public bool CanWriteElementType(Type elementType) => allChildrenWritable && elementType == ElementType;
-
-    /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => allChildrenWritable && column is IColumn<object>;
-
-    /// <inheritdoc/>
-    // A decoded Variant column of the same alternatives, whose alternative columns the alternative codecs write from
-    // their storage.
-    public bool WritesFromStorage(IColumn column)
+    // The test is the concrete VariantColumn, not the public IVariantColumn: the write trusts invariants only that
+    // class's constructor establishes (every discriminator is either a valid alternative index or the NULL marker,
+    // and LocalIndices is exactly as long as the column with a correct per-type running index). A caller's
+    // implementation of the interface goes to the converter layer, which validates as it goes.
+    public bool CanWrite(IColumn column)
     {
-        if (!allChildrenWritable || column is not VariantColumn dense || !HasTheSameAlternatives(dense))
+        if (column is not VariantColumn dense || !HasTheSameAlternatives(dense))
         {
             return false;
         }
 
         for (int i = 0; i < children.Length; i++)
         {
-            if (!children[i].WritesFromStorage(dense.GetTypeColumn(i)))
+            if (!children[i].CanWrite(dense.GetTypeColumn(i)))
             {
                 return false;
             }
@@ -293,17 +207,14 @@ internal sealed class VariantColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // Project the slice into one column per alternative once, and open each alternative's own write state over it,
-    // so the prefix and body phases share a single projection and a child never sees the variant's own column.
-    // Every alternative gets a column and a state even when no row selects it: the alternative set is fixed by the
-    // type rather than by the data, so each one's prefix belongs on the wire regardless of which rows arrived.
+    // Each alternative's slice is the contiguous run of its values whose rows fall in [start, start + length), so
+    // the prefix and body phases share one set of child slices and states. Every alternative gets a state even when
+    // no row selects it: the alternative set is fixed by the type rather than by the data, so each one's prefix
+    // belongs on the wire regardless of which rows arrived.
     public IColumnWriteState BeginWrite(IColumn column, int start, int length)
-        => column is VariantColumn dense && HasTheSameAlternatives(dense)
-            ? BuildDenseState(dense, start, length)
-            : BuildScatteredState(column, start, length);
+        => BuildDenseState((VariantColumn)column, start, length);
 
-    // Dense reuse is safe only when discriminator indices name the same alternatives in the same order.
-    // Otherwise scatter by runtime type and validate before writing.
+    // Discriminator indices name the same alternatives only when the alternatives and their order are the same.
     private bool HasTheSameAlternatives(VariantColumn dense)
     {
         if (dense.TypeCount != children.Length)
@@ -324,29 +235,28 @@ internal sealed class VariantColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        using VariantWriteState state = BeginWriteCore(column, start, length);
-        WriteStatePrefixCore(writer, state);
-    }
-
-    /// <inheritdoc/>
+    // A fixed mode word, then every alternative's own prefix over its child column, including the alternatives no
+    // row selected.
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        WriteStatePrefixCore(writer, state.Expect<VariantWriteState>(TypeName));
+        var own = state.Expect<VariantWriteState>(TypeName);
+        writer.WriteUInt64(VariantWire.BasicDiscriminatorsMode);
+        for (int i = 0; i < children.Length; i++)
+        {
+            children[i].WriteStatePrefix(writer, own.ChildColumns[i], own.ChildStart[i], own.ChildLength[i], own.ChildStates[i]);
+        }
     }
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        using VariantWriteState state = BeginWriteCore(column, start, length);
-        WriteBodyCore(writer, state);
-    }
-
-    /// <inheritdoc/>
+    // The row-order discriminator stream, then each alternative's values in alternative order.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        WriteBodyCore(writer, state.Expect<VariantWriteState>(TypeName));
+        var own = state.Expect<VariantWriteState>(TypeName);
+        writer.WriteBytes(((VariantColumn)column).Discriminators.Slice(start, length));
+        for (int i = 0; i < children.Length; i++)
+        {
+            children[i].WriteColumn(writer, own.ChildColumns[i], own.ChildStart[i], own.ChildLength[i], own.ChildStates[i]);
+        }
     }
 
     // How many rows chose each alternative — the length of every run that follows the discriminators.
@@ -402,33 +312,6 @@ internal sealed class VariantColumnCodec : IColumnCodec
         return typeColumns;
     }
 
-    // A fixed mode word, then every alternative's own prefix over its projected column — including the alternatives
-    // no row selected, whose column is simply empty.
-    private void WriteStatePrefixCore(ClickHouseBinaryWriter writer, VariantWriteState state)
-    {
-        writer.WriteUInt64(VariantWire.BasicDiscriminatorsMode);
-        for (int i = 0; i < children.Length; i++)
-        {
-            children[i].WriteStatePrefix(writer, state.ChildColumns[i], state.ChildStart[i], state.ChildLength[i], state.ChildStates[i]);
-        }
-    }
-
-    // The row-order discriminator stream, then each alternative's values in alternative order.
-    private void WriteBodyCore(ClickHouseBinaryWriter writer, VariantWriteState state)
-    {
-        writer.WriteBytes(state.Discriminators is not null
-            ? state.Discriminators.AsSpan(0, state.Length)
-            : state.Dense.Discriminators.Slice(state.Start, state.Length));
-
-        for (int i = 0; i < children.Length; i++)
-        {
-            children[i].WriteColumn(writer, state.ChildColumns[i], state.ChildStart[i], state.ChildLength[i], state.ChildStates[i]);
-        }
-    }
-
-    private VariantWriteState BeginWriteCore(IColumn column, int start, int length)
-        => (VariantWriteState)BeginWrite(column, start, length);
-
     // The dense path: the discriminators and per-type child columns already exist, so each alternative's slice is
     // the contiguous run of its values whose originating rows fall in [start, start + length) — found by counting
     // that type's discriminators before and within the slice, since values are stored in row order. The child
@@ -470,74 +353,12 @@ internal sealed class VariantColumnCodec : IColumnCodec
             childColumns[i] = dense.GetTypeColumn(i);
         }
 
-        return OpenChildStates(childColumns, childStart, childLength, dense, start, length, discriminators: null);
+        return OpenChildStates(childColumns, childStart, childLength);
     }
 
-    // The ergonomic path: scatter a flat column of boxed values into per-type buckets by each value's runtime CLR
-    // type, building the discriminator stream as it goes, then project each bucket into its alternative's own typed
-    // column. Mirrors the tuple codec's flat write, bucketing by discriminator instead of distributing across
-    // parallel columns. The buckets are pooled scratch for the projection only, so they go back before returning;
-    // the discriminator buffer outlives this call because the body phase writes it, so the state owns it.
-    private VariantWriteState BuildScatteredState(IColumn column, int start, int length)
-    {
-        int typeCount = children.Length;
-        byte[] discriminators = ArrayPool<byte>.Shared.Rent(length);
-        var buckets = new object[typeCount][];
-        var filled = new int[typeCount];
-        for (int i = 0; i < typeCount; i++)
-        {
-            buckets[i] = ArrayPool<object>.Shared.Rent(length);
-        }
-
-        try
-        {
-            for (int row = 0; row < length; row++)
-            {
-                object value = column.GetValue(start + row);
-                if (value is null)
-                {
-                    discriminators[row] = IVariantColumn.NullDiscriminator;
-                    continue;
-                }
-
-                int discriminator = DiscriminatorFor(value);
-                discriminators[row] = (byte)discriminator;
-                buckets[discriminator][filled[discriminator]++] = value;
-            }
-
-            var childColumns = new IColumn[typeCount];
-            for (int i = 0; i < typeCount; i++)
-            {
-                childColumns[i] = childFlatBuilders[i](column.Name, children[i].TypeName, buckets[i], filled[i]);
-            }
-
-            // Each projected column starts at 0 and runs for the rows that selected that alternative.
-            return OpenChildStates(childColumns, new int[typeCount], filled, dense: null, start, length, discriminators);
-        }
-        catch
-        {
-            ArrayPool<byte>.Shared.Return(discriminators);
-            throw;
-        }
-        finally
-        {
-            for (int i = 0; i < typeCount; i++)
-            {
-                ArrayPool<object>.Shared.Return(buckets[i], clearArray: true);
-            }
-        }
-    }
-
-    // Opens each alternative's own write state over its projected column and assembles the slice's state. A later
-    // alternative's BeginWrite throwing must not leak the states already opened, nor the rented discriminators.
-    private VariantWriteState OpenChildStates(
-        IColumn[] childColumns,
-        int[] childStart,
-        int[] childLength,
-        VariantColumn dense,
-        int start,
-        int length,
-        byte[] discriminators)
+    // Opens each alternative's own write state over its child column and assembles the slice's state. A later
+    // alternative's BeginWrite throwing must not leak the states already opened.
+    private VariantWriteState OpenChildStates(IColumn[] childColumns, int[] childStart, int[] childLength)
     {
         var childStates = new IColumnWriteState[children.Length];
         int opened = 0;
@@ -556,11 +377,6 @@ internal sealed class VariantColumnCodec : IColumnCodec
                 childStates[i]?.Dispose();
             }
 
-            if (discriminators is not null)
-            {
-                ArrayPool<byte>.Shared.Return(discriminators);
-            }
-
             throw;
         }
 
@@ -570,101 +386,18 @@ internal sealed class VariantColumnCodec : IColumnCodec
             ChildStart = childStart,
             ChildLength = childLength,
             ChildStates = childStates,
-            Dense = dense,
-            Start = start,
-            Length = length,
-            Discriminators = discriminators,
         };
     }
 
-    // Resolves the discriminator for a value, or throws if no alternative takes it — or if more than one does.
-    // Reached from BeginWrite, so either refusal happens before a byte is on the wire.
-    private int DiscriminatorFor(object value)
-    {
-        Type clrType = value.GetType();
-        if (discriminatorByClrType.TryGetValue(clrType, out int discriminator))
-        {
-            return discriminator;
-        }
-
-        if (collidingDiscriminatorsByClrType.TryGetValue(clrType, out int[] candidates))
-        {
-            return SettleCollision(value, clrType, candidates);
-        }
-
-        throw new ArgumentException(
-            $"Variant '{TypeName}' has no alternative for a value of CLR type '{clrType}'. Supported CLR types: {SupportedClrTypes()}.");
-    }
-
-    // Every alternative's element type, in discriminator order and without repeats. A type several alternatives
-    // share is supported as well — settled per value in SettleCollision — so listing only the unambiguous map
-    // would call an IPAddress unsupported in Variant(IPv4, IPv6, String).
-    private string SupportedClrTypes()
-    {
-        var seen = new HashSet<Type>();
-        var names = new List<string>(children.Length);
-        foreach (IColumnCodec child in children)
-        {
-            if (seen.Add(child.ElementType))
-            {
-                names.Add(child.ElementType.ToString());
-            }
-        }
-
-        return string.Join(", ", names);
-    }
-
-    // Several alternatives surface this CLR type, so the type alone does not name one and the value is asked
-    // instead. Exactly one claimant resolves it; anything else is refused rather than tie-broken, because picking
-    // would store the value as the wrong type in silence — a Ring written as a LineString.
-    private int SettleCollision(object value, Type clrType, int[] candidates)
-    {
-        int claimed = -1;
-        for (int i = 0; i < candidates.Length; i++)
-        {
-            if (!children[candidates[i]].ClaimsValue(value))
-            {
-                continue;
-            }
-
-            if (claimed >= 0)
-            {
-                throw new ArgumentException(
-                    $"Variant '{TypeName}' cannot place a value of CLR type '{clrType}': the alternatives {NameCandidates(candidates)} all " +
-                    "surface that type, and the value does not say which of them is meant.");
-            }
-
-            claimed = candidates[i];
-        }
-
-        if (claimed < 0)
-        {
-            throw new ArgumentException(
-                $"Variant '{TypeName}' cannot place a value of CLR type '{clrType}': it surfaces the type of the alternatives " +
-                $"{NameCandidates(candidates)}, but matches none of them.");
-        }
-
-        return claimed;
-    }
-
-    private string NameCandidates(int[] candidates)
-        => string.Join(", ", Array.ConvertAll(candidates, candidate => $"'{children[candidate].TypeName}'"));
-
-    // The write scratch of one slice, shared across the prefix and body phases. ChildColumns holds one column per
-    // alternative — borrowed from the dense column, or projected out of the boxed values — with the slice of it that
-    // alternative occupies and its own codec's state; an alternative no row selected carries an empty slice rather
-    // than being absent, so its prefix is still written. Discriminators is the scattered path's own row-order stream,
-    // rented and returned on dispose; for a dense column it is null and Dense supplies the stream instead.
+    // The write scratch of one slice, shared across the prefix and body phases: one child column per alternative,
+    // borrowed from the decoded column, with the slice of it that alternative occupies and its own codec's state. An
+    // alternative no row selected carries an empty slice rather than being absent, so its prefix is still written.
     private sealed class VariantWriteState : IColumnWriteState
     {
         public IColumn[] ChildColumns;
         public int[] ChildStart;
         public int[] ChildLength;
         public IColumnWriteState[] ChildStates;
-        public VariantColumn Dense;
-        public int Start;
-        public int Length;
-        public byte[] Discriminators;
 
         public void Dispose()
         {
@@ -674,12 +407,6 @@ internal sealed class VariantColumnCodec : IColumnCodec
                 {
                     state?.Dispose();
                 }
-            }
-
-            if (Discriminators is not null)
-            {
-                ArrayPool<byte>.Shared.Return(Discriminators);
-                Discriminators = null;
             }
         }
     }
@@ -691,17 +418,5 @@ internal sealed class VariantColumnCodec : IColumnCodec
         {
             columns[i]?.Dispose();
         }
-    }
-
-    // Builds a flat typed column from boxed values — the ergonomic write path's per-type projection.
-    private static IColumn BuildFlatColumn<T>(string name, string typeName, object[] boxed, int count)
-    {
-        var values = new T[count];
-        for (int i = 0; i < count; i++)
-        {
-            values[i] = (T)boxed[i];
-        }
-
-        return new ArrayColumn<T>(name, typeName, values);
     }
 }

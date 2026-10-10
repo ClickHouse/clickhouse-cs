@@ -22,8 +22,8 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// <para>
 /// <c>Ring</c>/<c>LineString</c> and <c>Polygon</c>/<c>MultiLineString</c> are distinct types to the server and
 /// identical to this client beyond their names. Inside <c>Geometry</c> that makes a value of either shared shape
-/// ambiguous, so it can only be written from the dense column, whose discriminators name the alternative; a
-/// <c>Point</c> or <c>MultiPolygon</c> is unique and still writes from an ergonomic one.
+/// ambiguous, so only the decoded column, whose discriminators name the alternative, writes it; a <c>Point</c> or
+/// <c>MultiPolygon</c> value is unique, and the converter layer writes it.
 /// </para>
 /// </summary>
 internal static class GeoColumnCodecs

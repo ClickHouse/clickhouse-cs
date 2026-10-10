@@ -10,7 +10,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
 /// <summary>
 /// Infers the ClickHouse type a CLR value should be written as inside a <c>Dynamic</c> column. The set of types a
-/// <c>Dynamic</c> holds is not declared, so the ergonomic write path derives each value's type from its runtime
+/// <c>Dynamic</c> holds is not declared, so the converter layer derives each value's type from its runtime
 /// shape. This is self-contained (the TCP client cannot reference the main driver's type system), covering the
 /// scalar types the codecs support plus recursion into <c>Array</c>/<c>Map</c>/<c>Tuple</c> of them.
 ///

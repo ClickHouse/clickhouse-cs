@@ -48,13 +48,6 @@ internal sealed class JsonStringColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public Type ElementType => typeof(string);
 
-    /// <summary>
-    /// The JSON text an empty object serializes to. Unlike every other codec's placeholder, this one reaches the
-    /// server as real input: a <c>Nullable(JSON)</c> column's values stream is parsed at every position, the null
-    /// ones included, so the empty string a String column would use is rejected as unparseable JSON.
-    /// </summary>
-    public object NullPlaceholder => "{}";
-
     /// <summary>Builds a <c>JSON</c> codec.</summary>
     /// <param name="node">The parsed <c>JSON</c> node. Its arguments — typed paths, <c>max_dynamic_paths=N</c>, <c>SKIP</c> hints — do not affect the String layout and are kept only in the type name.</param>
     /// <returns>The codec.</returns>
@@ -77,18 +70,15 @@ internal sealed class JsonStringColumnCodec : IColumnCodec
         => StringColumnCodec.Instance.ReadColumnAsync(reader, columnName, columnType, rowCount, cancellationToken);
 
     /// <inheritdoc/>
-    // JSON accepts text only; do not inherit String's raw-byte write shape.
-    public bool CanWrite(IColumn column) => column is IColumn<string>;
-
-    /// <inheritdoc/>
-    public bool WritesFromStorage(IColumn column) => column is StringColumn;
+    // The column that a query of the type reads.
+    public bool CanWrite(IColumn column) => column is StringColumn;
 
     /// <inheritdoc/>
     // The prefix is a fixed version marker, independent of the data; the column/slice is unused.
-    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
         => writer.WriteUInt64(StringVersion);
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-        => StringColumnCodec.Instance.WriteColumn(writer, column, start, length);
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
+        => StringColumnCodec.Instance.WriteColumn(writer, column, start, length, state);
 }

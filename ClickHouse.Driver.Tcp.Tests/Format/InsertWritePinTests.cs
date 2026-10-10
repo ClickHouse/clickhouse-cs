@@ -335,7 +335,7 @@ public class InsertWritePinTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.WritesFromStorage(decoded), Is.False);
+            Assert.That(codec.CanWrite(decoded), Is.False);
             Assert.That(Convert.ToHexString(written), Is.EqualTo(bytes));
             Assert.That(Enumerable.Range(0, readBack.RowCount).Select(readBack.GetValue), Is.EqualTo(values));
         });

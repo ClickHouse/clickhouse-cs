@@ -11,9 +11,9 @@ namespace ClickHouse.Driver.Tcp.Tests.Utilities;
 /// <para>
 /// Depth is the number of <c>Array</c> levels. Every level of every shape carries an empty row somewhere and rows of
 /// differing lengths, so each level's offsets stream holds both an equal consecutive pair (an empty row) and an
-/// uneven run. That matters most on the write path: the ergonomic (jagged) write gives a nested <c>Array</c> inner a
-/// <c>ConcatColumn</c> flattening view rather than driving it per row, so depth <c>d</c> stacks <c>d - 1</c> of those
-/// views, each one resolving flat element indices back through the level below it.
+/// uneven run. That matters most on the write path: the converter layer gives the child of each <c>Array</c> level the
+/// arrays of the rows of the level above as segments, with no flat copy, so depth <c>d</c> stacks <c>d - 1</c> levels of
+/// segments, and each level counts its offsets from the arrays that it gets.
 /// </para>
 /// </summary>
 public sealed class NestedArrayShape
@@ -47,7 +47,7 @@ public sealed class NestedArrayShape
     /// <summary>The shapes, for use as an NUnit <c>TestCaseSource</c>.</summary>
     public static IEnumerable<NestedArrayShape> Shapes()
     {
-        // Exercise the bulk leaf write through nested ConcatColumn views at depths 2 through 7.
+        // The write of the leaf under nested segments, at depths 2 through 7.
         yield return Shape<byte[]>(2, "Array(UInt8)", Depth2Rows);
         yield return Shape<byte[][]>(3, "Array(Array(UInt8))", Depth3Rows);
         yield return Shape<byte[][][]>(4, "Array(Array(Array(UInt8)))", Depth4Rows);
@@ -56,7 +56,7 @@ public sealed class NestedArrayShape
         yield return Shape<byte[][][][][][]>(7, "Array(Array(Array(Array(Array(Array(UInt8))))))", Depth7Rows);
 
         // Two other leaf kinds under the same skeleton, at depth 3 — enough to put more than one Array level above
-        // the leaf, which is all that distinguishes them. Deeper adds another ConcatColumn but no new branch, so the
+        // the leaf, which is all that distinguishes them. Deeper adds another level of segments but no new branch, so the
         // ladder above carries the depth and these carry the leaf.
         //
         // String: a variable-width leaf, so the innermost write is a per-element length prefix rather than a blit.

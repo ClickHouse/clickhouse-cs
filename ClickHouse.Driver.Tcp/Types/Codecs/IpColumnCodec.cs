@@ -35,14 +35,6 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
     public Type ElementType => typeof(IPAddress);
 
     /// <inheritdoc/>
-    public object NullPlaceholder => IPAddress.Any;
-
-    /// <inheritdoc/>
-    // IPAddress.Equals also compares the ScopeId, which is not encoded, so the wire integer is the relation.
-    public object LowCardinalityKeyWriter(Type writeType)
-        => writeType == typeof(IPAddress) ? LowCardinalityKeys.Projected<IPAddress, uint>(ToWireValue) : null;
-
-    /// <inheritdoc/>
     // The address family is the whole of the IPv4/IPv6 tie-break: an IPv4 address is this alternative's, and the
     // IPv6 codec declines it so that exactly one claims.
     public bool ClaimsValue(object value) => value is IPAddress address && address.AddressFamily == AddressFamily.InterNetwork;
@@ -67,39 +59,25 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<IPAddress>;
-
-    /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<IPAddress>;
+    public bool CanWrite(IColumn column) => column is ArrayColumn<IPAddress>;
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    // The decoded column holds the addresses: their wire values are written a chunk at a time.
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        // The decoded column holds the addresses: their wire values are written a chunk at a time.
-        if (column is ArrayColumn<IPAddress> stored)
+        Span<uint> chunk = stackalloc uint[ChunkValues];
+        ReadOnlySpan<IPAddress> addresses = ((ArrayColumn<IPAddress>)column).Values.Slice(start, length);
+        while (!addresses.IsEmpty)
         {
-            Span<uint> chunk = stackalloc uint[ChunkValues];
-            ReadOnlySpan<IPAddress> addresses = stored.Values.Slice(start, length);
-            while (!addresses.IsEmpty)
+            int count = Math.Min(chunk.Length, addresses.Length);
+            for (int i = 0; i < count; i++)
             {
-                int count = Math.Min(chunk.Length, addresses.Length);
-                for (int i = 0; i < count; i++)
-                {
-                    chunk[i] = ToWireValue(addresses[i]);
-                }
-
-                writer.WriteBytes(MemoryMarshal.AsBytes(chunk.Slice(0, count)));
-                addresses = addresses.Slice(count);
+                chunk[i] = ToWireValue(addresses[i]);
             }
 
-            return;
-        }
-
-        var values = (IColumn<IPAddress>)column;
-        for (int i = 0; i < length; i++)
-        {
-            writer.WriteUInt32(ToWireValue(values[start + i]));
+            writer.WriteBytes(MemoryMarshal.AsBytes(chunk.Slice(0, count)));
+            addresses = addresses.Slice(count);
         }
     }
 
@@ -141,9 +119,6 @@ internal sealed class IPv6ColumnCodec : IColumnCodec
     public Type ElementType => typeof(IPAddress);
 
     /// <inheritdoc/>
-    public object NullPlaceholder => IPAddress.IPv6Any;
-
-    /// <inheritdoc/>
     // Declines an IPv4 address even though the writer below maps one into 16 bytes: beside an IPv4 alternative
     // that address means IPv4, and claiming it too would leave the tie unresolved. A standalone IPv6 column, and
     // an IPv6 alternative with no IPv4 sibling, never reach here and still accept it.
@@ -162,55 +137,26 @@ internal sealed class IPv6ColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<IPAddress>;
-
-    /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<IPAddress>;
+    public bool CanWrite(IColumn column) => column is ArrayColumn<IPAddress>;
 
     /// <inheritdoc/>
-    // IPAddress.Equals also compares the ScopeId, which is not encoded, and holds an IPv4 address distinct from
-    // its own mapped form, which encodes the same. The 16 encoded bytes are the relation.
-    public object LowCardinalityKeyWriter(Type writeType)
-        => writeType == typeof(IPAddress) ? LowCardinalityKeys.Projected<IPAddress, (ulong, ulong)>(ToWireKey) : null;
-
-    private static (ulong, ulong) ToWireKey(IPAddress value)
+    // The wire form is the 16 network-order bytes verbatim. The decoded column holds the addresses: their 16 bytes are
+    // written a chunk at a time.
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        Span<byte> network = stackalloc byte[Size];
-        WriteNetworkBytes(value, network);
-        return (BinaryPrimitives.ReadUInt64LittleEndian(network), BinaryPrimitives.ReadUInt64LittleEndian(network.Slice(sizeof(ulong))));
-    }
-
-    /// <inheritdoc/>
-    // The wire form is the 16 network-order bytes verbatim.
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        // The decoded column holds the addresses: their 16 bytes are written a chunk at a time.
-        if (column is ArrayColumn<IPAddress> stored)
+        Span<byte> chunk = stackalloc byte[ChunkValues * Size];
+        ReadOnlySpan<IPAddress> addresses = ((ArrayColumn<IPAddress>)column).Values.Slice(start, length);
+        while (!addresses.IsEmpty)
         {
-            Span<byte> chunk = stackalloc byte[ChunkValues * Size];
-            ReadOnlySpan<IPAddress> addresses = stored.Values.Slice(start, length);
-            while (!addresses.IsEmpty)
+            int count = Math.Min(ChunkValues, addresses.Length);
+            for (int i = 0; i < count; i++)
             {
-                int count = Math.Min(ChunkValues, addresses.Length);
-                for (int i = 0; i < count; i++)
-                {
-                    WriteNetworkBytes(addresses[i], chunk.Slice(i * Size, Size));
-                }
-
-                writer.WriteBytes(chunk.Slice(0, count * Size));
-                addresses = addresses.Slice(count);
+                WriteNetworkBytes(addresses[i], chunk.Slice(i * Size, Size));
             }
 
-            return;
-        }
-
-        var values = (IColumn<IPAddress>)column;
-        Span<byte> network = stackalloc byte[Size];
-        for (int i = 0; i < length; i++)
-        {
-            WriteNetworkBytes(values[start + i], network);
-            writer.WriteBytes(network);
+            writer.WriteBytes(chunk.Slice(0, count * Size));
+            addresses = addresses.Slice(count);
         }
     }
 
