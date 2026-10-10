@@ -44,6 +44,13 @@ public class ClickHouseTcpTypesIntegrationTests
         yield return Candidate("Array(LowCardinality(String))", new[] { new byte[] { 0x61 }, new byte[] { 0xFF } });
         yield return Candidate("LowCardinality(FixedString(4))", "abcd");
         yield return Candidate("Variant(String, UInt64)", (object)new byte[] { 0x61 });
+
+        // The write rules of D6: an enum as its ordinal, a value type into a nullable type and back, a cast; no widening.
+        yield return Candidate("Enum8('a' = -1, 'b' = 127)", Ordinal.A);
+        yield return Candidate("Nullable(Int32)", 7);
+        yield return Candidate("Int32", (int?)7);
+        yield return Candidate("Variant(String, UInt64)", "seven");
+        yield return Candidate("Int64", 7);
     }
 
     private static IEnumerable<TestCaseData> ReadCandidates()
@@ -222,4 +229,9 @@ public class ClickHouseTcpTypesIntegrationTests
             .Invoke(block, new object[] { 0 });
 
     private static string UniqueTableName() => $"tcp_types_test_{Guid.NewGuid():N}";
+
+    private enum Ordinal : sbyte
+    {
+        A = -1,
+    }
 }
