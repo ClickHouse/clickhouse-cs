@@ -8,7 +8,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// once per element type and cached.
 ///
 /// <para>
-/// This exists because the codec pipeline is non-generic — the registry parses a type string at runtime and
+/// This exists because the codec pipeline is non-generic: the registry parses a type string at runtime and
 /// hands codecs back through <see cref="IColumnCodec"/>, so the element type <c>T</c> arrives only as a
 /// <see cref="Type"/>. The T-independent machinery (the version prefix, the metadata word, the keys stream)
 /// stays in <see cref="LowCardinalityColumnCodec"/>; the thin slice that genuinely needs <c>T</c> lives here.

@@ -58,7 +58,8 @@ public class DecimalColumnCodecTests
     public async Task WriteColumn_NegativeWideDecimal_SignExtendsAcrossFullWidth()
     {
         // A negative Decimal256 mantissa must sign-extend into the high limbs, not zero-fill. Asserted on the
-        // encoded bytes rather than through a read-back, because a symmetric sign bug cancels out in a round-trip.
+        // encoded bytes rather than through a read-back: a read-back gives the same value when the write and the read
+        // both invert the sign.
         // The value round-trip against a real server is the Decimal(76, 20) case in InsertRoundTripCase. Two's
         // complement: -2^200 is 2^256 - 2^200 = (2^56 - 1) << 200, so every bit from 200 up is set, i.e. bytes 0..24
         // are zero and bytes 25..31 are 0xFF in the little-endian 32-byte limb.

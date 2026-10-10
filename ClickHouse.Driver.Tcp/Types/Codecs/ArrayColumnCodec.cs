@@ -58,7 +58,7 @@ internal static class ArrayColumnCodec
 /// delegates the serialization-state prefix to the inner codec, then reads/writes a per-row offsets stream
 /// (<c>num_rows</c> little-endian <c>UInt64</c>, each the cumulative element end after that row) followed by the
 /// inner type's encoding for every element of every row concatenated end-to-end. The decoded column surfaces
-/// each row as the inner CLR value array — <c>Array(UInt32)</c> as <c>uint[]</c>, <c>Array(String)</c> as
+/// each row as the inner CLR value array: <c>Array(UInt32)</c> as <c>uint[]</c>, <c>Array(String)</c> as
 /// <c>string[]</c>, <c>Array(Array(UInt8))</c> as <c>byte[][]</c>.
 ///
 /// <para>

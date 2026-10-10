@@ -16,7 +16,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 ///
 /// <para>
 /// The result is a canonical ClickHouse type string, resolved to a codec through the registry, whose element type
-/// matches the CLR value — so an inferred type both round-trips the value and buckets values of the same type
+/// matches the CLR value, so an inferred type both round-trips the value and buckets values of the same type
 /// together. Where a CLR type maps to more than one ClickHouse type, a documented default is chosen: an
 /// <see cref="IPAddress"/> is disambiguated by its address family, and a bare <see cref="DateOnly"/> maps to the
 /// wider <c>Date32</c>.

@@ -658,10 +658,10 @@ public class ColumnarReadSurfaceIntegrationTests
         {
             await client.ExecuteAsync($"CREATE TABLE {table} (value LowCardinality(Nullable(String))) ENGINE = Memory");
 
-            // Row 0's key is 0 deliberately. To a non-nullable dictionary slot 0 is the type default — an ordinary
-            // value for a row to reference — while to a nullable dictionary it is the NULL marker. A row keyed at 0
+            // Row 0's key is 0 deliberately. To a non-nullable dictionary slot 0 is the type default (an ordinary
+            // value for a row to reference), while to a nullable dictionary it is the NULL marker. A row keyed at 0
             // is therefore the only row that can distinguish the two paths: rows keyed above the reserve survive a
-            // verbatim re-emit unharmed, so a case without a slot-0 row passes whether or not the bug is present.
+            // verbatim re-emit unharmed, so a case without a slot-0 row passes on both paths.
             // A decoded dictionary, so only the missing NULL slot keeps the codec from writing the column from its
             // storage.
             IColumn<string> dictionary = (IColumn<string>)DecodedColumns.Of("value", "String", string.Empty, "alpha", "beta");
