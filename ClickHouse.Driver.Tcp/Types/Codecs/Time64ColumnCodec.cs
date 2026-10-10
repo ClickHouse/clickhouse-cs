@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -121,6 +122,13 @@ internal sealed class Time64ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
+        // The decoded column stores the wire values.
+        if (column is Time64Column stored)
+        {
+            writer.WriteBytes(MemoryMarshal.AsBytes(stored.Values.Slice(start, length)));
+            return;
+        }
+
         switch (column)
         {
             case IColumn<long> counts:
