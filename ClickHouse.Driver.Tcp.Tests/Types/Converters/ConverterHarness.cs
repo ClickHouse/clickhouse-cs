@@ -40,6 +40,26 @@ internal static class ConverterHarness
         return await codec.ReadColumnAsync(reader, source.Name, type, source.RowCount, CodecTestHarness.None);
     }
 
+    /// <summary>
+    /// Decodes <paramref name="rows"/> rows of <paramref name="type"/> from <paramref name="bytes"/> as a query reads a
+    /// column: the state prefix when there are rows, then the body. It fails the test when bytes are left over.
+    /// </summary>
+    public static async Task<IColumn> ReadBackAsync(string type, byte[] bytes, int rows, string name = "c")
+    {
+        IColumnCodec codec = Codec(type);
+        using var stream = new System.IO.MemoryStream(bytes);
+        using var reader = new ClickHouseBinaryReader(stream);
+        if (rows > 0)
+        {
+            await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
+        }
+
+        IColumn column = await codec.ReadColumnAsync(reader, name, type, rows, CodecTestHarness.None);
+        Exception end = await CatchAsync(async () => await reader.ReadByteAsync(CodecTestHarness.None));
+        Assert.That(end?.InnerException, Is.InstanceOf<System.IO.EndOfStreamException>(), $"{type}: the read leaves bytes after the column");
+        return column;
+    }
+
     /// <summary>A decoded <c>Nothing</c> column: the codec reads one byte for each row and keeps no value.</summary>
     public static async Task<IColumn> DecodeNothingAsync(int rows)
     {
