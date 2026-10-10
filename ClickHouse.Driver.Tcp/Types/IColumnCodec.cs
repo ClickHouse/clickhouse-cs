@@ -56,10 +56,12 @@ internal interface IColumnCodec
     bool CanWrite(IColumn column);
 
     /// <summary>
-    /// Whether <see cref="WriteColumn"/> writes this column from its own storage, with no conversion of its values: a
-    /// column that this client decoded, or a dense column in the wire layout of the type (the raw bytes of a
-    /// <c>String</c>, a LowCardinality dictionary and its keys, the child columns of a composite). Such a write keeps the
-    /// bytes that the server sent. The default is false.
+    /// Whether <see cref="WriteColumn"/> writes this column from its own storage, with no conversion of its values: the
+    /// column that a query of the type reads, or a dense composite column in the wire layout of the type whose child
+    /// columns the codecs of the children write from their storage (an array that
+    /// <see cref="ClickHouseTcpColumn.CreateArray{TElement}"/> builds over a decoded column). Such a write keeps the bytes
+    /// that the server sent (the raw bytes of a <c>String</c>, a LowCardinality dictionary and its keys). The column then
+    /// has the element type of the codec. The default is false.
     /// </summary>
     /// <param name="column">The column to test.</param>
     /// <returns>Whether the codec writes the column from its storage.</returns>
