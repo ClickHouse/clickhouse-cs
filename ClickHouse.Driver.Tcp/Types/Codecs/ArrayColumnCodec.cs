@@ -214,7 +214,8 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
         => TryDense(column, out _) || ResolveWriteShape(column) is not null;
 
     /// <inheritdoc/>
-    public bool WritesFromStorage(IColumn column) => TryDense(column, out _);
+    // A dense array whose inner column the inner codec writes from its storage.
+    public bool WritesFromStorage(IColumn column) => column is IDenseArrayColumn dense && inner.WritesFromStorage(dense.Inner);
 
     /// <summary>
     /// Recognizes a validated dense column whose inner element type this codec can write. Convenience element

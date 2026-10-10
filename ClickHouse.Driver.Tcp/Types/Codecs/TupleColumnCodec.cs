@@ -252,7 +252,24 @@ internal sealed class TupleColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool WritesFromStorage(IColumn column) => column is ITupleColumn && CanWrite(column);
+    // A tuple of this element type whose child columns the child codecs write from their storage.
+    public bool WritesFromStorage(IColumn column)
+    {
+        if (column is not ITupleColumn dense || !icolumnOfTupleType.IsInstanceOfType(column) || dense.Children.Count != children.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < children.Length; i++)
+        {
+            if (!children[i].WritesFromStorage(dense.Children[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <inheritdoc/>
     public bool CanWrite(IColumn column)

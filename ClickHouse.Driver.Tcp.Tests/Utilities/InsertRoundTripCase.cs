@@ -781,8 +781,8 @@ public sealed class InsertRoundTripCase
                 new[] { "a", "b" },
                 new IColumn[]
                 {
-                    new ArrayColumn<byte>(name, "UInt8", new byte[] { 1, 2, 3 }),
-                    new ArrayColumn<string>(name, "String", new[] { "a", "b", "c" }),
+                    DecodedColumns.Of(name, "UInt8", new byte[] { 1, 2, 3 }),
+                    DecodedColumns.Of(name, "String", "a", "b", "c"),
                 },
                 new[] { 0, 2, 2, 3 },
                 rowCount: 3,
@@ -798,7 +798,7 @@ public sealed class InsertRoundTripCase
                 name,
                 "Nested(`a b` UInt8)",
                 new[] { "a b" },
-                new IColumn[] { new ArrayColumn<byte>(name, "UInt8", new byte[] { 1, 2, 3 }) },
+                new IColumn[] { DecodedColumns.Of(name, "UInt8", new byte[] { 1, 2, 3 }) },
                 new[] { 0, 2, 2, 3 },
                 rowCount: 3,
                 pooledOffsets: false,
@@ -816,8 +816,8 @@ public sealed class InsertRoundTripCase
                 new[] { "a", "b" },
                 new IColumn[]
                 {
-                    new ArrayColumn<int?>(name, "Nullable(Int32)", new int?[] { 1, null, -5 }),
-                    new ArrayColumn<string[]>(name, "Array(String)", new[] { new[] { "x" }, new[] { "y", "z" }, Array.Empty<string>() }),
+                    DecodedColumns.Of(name, "Nullable(Int32)", new int?[] { 1, null, -5 }),
+                    DecodedColumns.Of(name, "Array(String)", new[] { new[] { "x" }, new[] { "y", "z" }, Array.Empty<string>() }),
                 },
                 new[] { 0, 2, 2, 3 },
                 rowCount: 3,
@@ -837,8 +837,8 @@ public sealed class InsertRoundTripCase
                 new[] { "a", "b" },
                 new IColumn[]
                 {
-                    new ArrayColumn<(byte, string)>(name, "Tuple(UInt8, String)", new[] { ((byte)1, "p"), ((byte)2, "q"), ((byte)3, "r") }),
-                    new ArrayColumn<KeyValuePair<string, uint>[]>(name, "Map(String, UInt32)", new[]
+                    DecodedColumns.Of(name, "Tuple(UInt8, String)", new[] { ((byte)1, "p"), ((byte)2, "q"), ((byte)3, "r") }),
+                    DecodedColumns.Of(name, "Map(String, UInt32)", new[]
                     {
                         Pairs<string, uint>(("x", 1)),
                         Pairs<string, uint>(("y", 2), ("z", uint.MaxValue)),
@@ -891,7 +891,7 @@ public sealed class InsertRoundTripCase
                 new IColumn[]
                 {
                     ByteNested(name, "a", new byte[] { 1, 2, 3, 4, 5 }, new[] { 0, 2, 2, 5 }),
-                    new ArrayColumn<string>(name, "String", new[] { "first", "empty", "last" }),
+                    DecodedColumns.Of(name, "String", "first", "empty", "last"),
                 },
                 fieldNames: null,
                 ownsChildren: false),
@@ -903,7 +903,7 @@ public sealed class InsertRoundTripCase
             name => new MapColumn<string, object[][]>(
                 name,
                 "Map(String, Nested(a UInt8))",
-                new ArrayColumn<string>(name, "String", new[] { "w", "x", "y", "z" }),
+                (IColumn<string>)DecodedColumns.Of(name, "String", "w", "x", "y", "z"),
                 ByteNested(name, "a", new byte[] { 1, 2, 3, 4, 5, 6 }, new[] { 0, 1, 3, 3, 6 }),
                 new[] { 0, 2, 2, 4 },
                 rowCount: 3,
@@ -919,7 +919,7 @@ public sealed class InsertRoundTripCase
                 name,
                 "Map(Nested(a UInt8), UInt32)",
                 ByteNested(name, "a", new byte[] { 1, 2, 3, 4, 5 }, new[] { 0, 2, 2, 5 }),
-                new ArrayColumn<uint>(name, "UInt32", new uint[] { 7, 8, uint.MaxValue }),
+                (IColumn<uint>)DecodedColumns.Of(name, "UInt32", new uint[] { 7, 8, uint.MaxValue }),
                 new[] { 0, 1, 3, 3 },
                 rowCount: 3,
                 pooledOffsets: false),
@@ -935,7 +935,7 @@ public sealed class InsertRoundTripCase
                 var fields = new IColumn[8];
                 for (int i = 0; i < 8; i++)
                 {
-                    fields[i] = new ArrayColumn<byte>(name, "UInt8", new byte[] { (byte)i, (byte)(i + 10), (byte)(i + 20) });
+                    fields[i] = DecodedColumns.Of(name, "UInt8", new byte[] { (byte)i, (byte)(i + 10), (byte)(i + 20) });
                 }
 
                 return new NestedColumn(
@@ -1373,8 +1373,8 @@ public sealed class InsertRoundTripCase
                 new[] { "a", "b" },
                 new IColumn[]
                 {
-                    new ArrayColumn<object>(name, "Dynamic", new object[] { 1UL, "x", 3UL }),
-                    new ArrayColumn<string>(name, "String", new[] { "a", "b", "c" }),
+                    DecodedColumns.Of(name, "Dynamic", new object[] { 1UL, "x", 3UL }),
+                    DecodedColumns.Of(name, "String", "a", "b", "c"),
                 },
                 new[] { 0, 2, 2, 3 },
                 rowCount: 3,
@@ -1531,8 +1531,8 @@ public sealed class InsertRoundTripCase
                 new[] { "a", "b" },
                 new IColumn[]
                 {
-                    new ArrayColumn<string>(name, "JSON", new[] { "{\"a\":1}", "{}", "{\"b\":\"hi\"}" }),
-                    new ArrayColumn<string>(name, "String", new[] { "a", "b", "c" }),
+                    DecodedColumns.Of(name, "JSON", "{\"a\":1}", "{}", "{\"b\":\"hi\"}"),
+                    DecodedColumns.Of(name, "String", "a", "b", "c"),
                 },
                 new[] { 0, 2, 2, 3 },
                 rowCount: 3,
@@ -1802,18 +1802,19 @@ public sealed class InsertRoundTripCase
     }
 
     // One row per Geometry alternative, in declared discriminator order, plus a NULL. Each alternative column holds
-    // only the rows that selected it — one each here — so every child is a single-row column.
+    // only the rows that selected it — one each here — so every child is a single-row column, in the form that a query
+    // reads it.
     private static IColumn BuildGeometryColumn(string name)
     {
         var square = new[] { (0d, 0d), (2d, 0d), (2d, 2d), (0d, 0d) };
         IColumn[] alternatives =
         {
-            new ArrayColumn<(double, double)[]>(name, "LineString", new[] { new[] { (0d, 0d), (1d, 1d) } }),
-            new ArrayColumn<(double, double)[][]>(name, "MultiLineString", new[] { new[] { new[] { (2d, 2d), (3d, 3d) } } }),
-            new ArrayColumn<(double, double)[][][]>(name, "MultiPolygon", new[] { new[] { new[] { square } } }),
-            new ArrayColumn<(double, double)>(name, "Point", new[] { (1.5d, -2.5d) }),
-            new ArrayColumn<(double, double)[][]>(name, "Polygon", new[] { new[] { square } }),
-            new ArrayColumn<(double, double)[]>(name, "Ring", new[] { square }),
+            DecodedColumns.Of(name, "LineString", new[] { new[] { (0d, 0d), (1d, 1d) } }),
+            DecodedColumns.Of(name, "MultiLineString", new[] { new[] { new[] { (2d, 2d), (3d, 3d) } } }),
+            DecodedColumns.Of(name, "MultiPolygon", new[] { new[] { new[] { square } } }),
+            DecodedColumns.Of(name, "Point", new[] { (1.5d, -2.5d) }),
+            DecodedColumns.Of(name, "Polygon", new[] { new[] { square } }),
+            DecodedColumns.Of(name, "Ring", new[] { square }),
         };
 
         var discriminators = new byte[] { 0, 1, 2, 3, 4, 5, IVariantColumn.NullDiscriminator };
@@ -1862,7 +1863,7 @@ public sealed class InsertRoundTripCase
             name,
             type,
             new[] { fieldName },
-            new IColumn[] { new ArrayColumn<byte>(name, "UInt8", values) },
+            new IColumn[] { DecodedColumns.Of(name, "UInt8", values) },
             offsets,
             rowCount: offsets.Length - 1,
             pooledOffsets: false,

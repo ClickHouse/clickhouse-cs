@@ -203,11 +203,12 @@ internal sealed class MapColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
+    // A decoded Map column whose key and value columns the key and value codecs write from their storage.
     public bool WritesFromStorage(IColumn column)
-    {
-        IMapShape writeShape = WriteShapeFor(column, out bool childrenCanWrite);
-        return writeShape is not null && writeShape.IsDense(column) && writeShape.CanWrite(keyCodec, valueCodec, column, childrenCanWrite);
-    }
+        => shape.IsDense(column)
+            && column is IMapColumn dense
+            && keyCodec.WritesFromStorage(dense.KeyColumn)
+            && valueCodec.WritesFromStorage(dense.ValueColumn);
 
     /// <summary>Parses the CLR map-row shape <c>KeyValuePair&lt;TKey, TValue&gt;[]</c>.</summary>
     private static bool TryPairArguments(Type candidate, out Type pairType, out Type[] arguments)

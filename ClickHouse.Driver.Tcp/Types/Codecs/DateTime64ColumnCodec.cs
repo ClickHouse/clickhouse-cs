@@ -115,6 +115,10 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<long> or IColumn<DateTimeOffset> or IColumn<DateTime>;
 
     /// <inheritdoc/>
+    // The column that a query of the type reads.
+    public bool WritesFromStorage(IColumn column) => column is DateTime64Column;
+
+    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         switch (column)

@@ -152,7 +152,7 @@ internal sealed class NullableColumnCodec : IColumnCodec
         Type type = column.GetType();
         return type.IsGenericType
             && (type.GetGenericTypeDefinition() == typeof(NullableValueColumn<>) || type.GetGenericTypeDefinition() == typeof(NullableReferenceColumn<>))
-            && CanWrite(column);
+            && inner.WritesFromStorage(((INullableColumn)column).Inner);
     }
 
     private static bool TryInnerWriteType(Type elementType, out Type innerType)

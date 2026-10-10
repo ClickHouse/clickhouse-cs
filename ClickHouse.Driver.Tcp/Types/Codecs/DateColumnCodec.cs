@@ -52,6 +52,10 @@ internal sealed class DateColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<DateOnly>;
 
     /// <inheritdoc/>
+    // The column that a query of the type reads.
+    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<DateOnly>;
+
+    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         var typed = (IColumn<DateOnly>)column;
@@ -117,6 +121,10 @@ internal sealed class Date32ColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => column is IColumn<DateOnly>;
+
+    /// <inheritdoc/>
+    // The column that a query of the type reads.
+    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<DateOnly>;
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)

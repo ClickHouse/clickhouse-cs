@@ -91,6 +91,10 @@ internal sealed class FixedWidthColumnCodec<T> : IColumnCodec, ISpanWritableCode
     public bool CanWrite(IColumn column) => column is IColumn<T>;
 
     /// <inheritdoc/>
+    // The column that a query of the type reads.
+    public bool WritesFromStorage(IColumn column) => column is PrimitiveColumn<T>;
+
+    /// <inheritdoc/>
     // A contiguous column (the dense read-back, or a caller's array-backed column) blits its whole slice in one
     // copy; a scattered write-path view (Nullable's substitute, a Tuple field, a Variant alternative) has no span,
     // so each value is written on its own — the per-element cost the scattered fixed-width positions accept.

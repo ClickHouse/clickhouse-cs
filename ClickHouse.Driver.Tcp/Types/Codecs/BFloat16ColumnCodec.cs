@@ -54,6 +54,10 @@ internal sealed class BFloat16ColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<float>;
 
     /// <inheritdoc/>
+    // The column that a query of the type reads.
+    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<float>;
+
+    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         var values = (IColumn<float>)column;
