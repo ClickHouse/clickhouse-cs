@@ -17,8 +17,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 /// <remarks>
 /// <para>
 /// The write arm routes a column as the insert tier does: a column that the codec writes from its own storage (a dense
-/// <c>Tuple</c>, <c>Nested</c> or <c>Variant</c> column that a case builds) goes to the codec, and every other column
-/// through the derived tree (decision D3). The decoded input is not run here: a decoded column is written from its own
+/// <c>Nested</c> or <c>Variant</c> column that a case builds from decoded columns) goes to the codec, and every other
+/// column through the derived tree (decision D3). The decoded input is not run here: a decoded column is written from its own
 /// storage.
 /// </para>
 /// <para>
