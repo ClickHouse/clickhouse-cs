@@ -37,7 +37,7 @@ public class UriBuilderTests
             Assert.That(@params.Get("c"), Is.EqualTo("1"));
             Assert.That(@params.Get("d"), Is.EqualTo("c"));
             Assert.That(@params.Get("session_id"), Is.EqualTo("SESSION"));
-            Assert.That(@params.Get("enable_http_compression"), Is.EqualTo("false"));
+            Assert.That(@params.Get("enable_http_compression"), Is.Null);
             Assert.That(@params.Get("query_id"), Is.EqualTo("QUERY"));
             Assert.That(@params.Get("param_sqlParameterName"), Is.EqualTo("sqlParameterValue"));
         });
@@ -249,6 +249,27 @@ public class UriBuilderTests
             Assert.That(@params.AllKeys, Does.Not.Contain("output_format_binary_write_json_as_string"));
             Assert.That(@params.AllKeys, Does.Not.Contain("input_format_binary_read_json_as_string"));
         });
+    }
+
+    // A readonly user may only send a setting at its effective value, so "false" must never be sent.
+    // withCustomSettings selects the deduplication path; without them the fast path is used.
+    [TestCase(true, false, ExpectedResult = "true")]
+    [TestCase(true, true, ExpectedResult = "true")]
+    [TestCase(false, false, ExpectedResult = null)]
+    [TestCase(false, true, ExpectedResult = null)]
+    public string ToString_EnableHttpCompression_IsSentOnlyWhenCompressionIsRequested(bool useCompression, bool withCustomSettings)
+    {
+        var builder = new ClickHouseUriBuilder(new Uri("http://some.server:123"))
+        {
+            UseCompression = useCompression,
+            CommandQueryStringParameters = withCustomSettings
+                ? new Dictionary<string, object> { { "max_threads", 4 } }
+                : null,
+        };
+
+        var @params = HttpUtility.ParseQueryString(new Uri(builder.ToString()).Query);
+
+        return @params.Get("enable_http_compression");
     }
 
     [Test]
