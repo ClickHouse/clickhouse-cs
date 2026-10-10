@@ -67,7 +67,7 @@ internal static class PocoColumnScatterFactory
         Derivation derived = derivation.Derive(column.TypeName, in context, member.MemberType, ConversionDirection.Read);
         if (!derived.Succeeded)
         {
-            throw PocoReadErrors.NotReadableAs(column, codec, member, typeof(T));
+            throw PocoReadErrors.NotReadableAs(column, derivation.SuggestedTypes(column.TypeName, in context, ConversionDirection.Read), member, typeof(T));
         }
 
         return ForReader<T>((ColumnReader)derived.Converter, column, member, SelectTier(forcedTier));
