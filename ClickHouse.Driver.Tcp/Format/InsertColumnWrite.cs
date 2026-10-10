@@ -79,11 +79,12 @@ internal abstract class InsertColumnWrite
 
     /// <summary>
     /// The write of <paramref name="values"/> as <paramref name="typeName"/>, as the other overload gives it. A column that
-    /// a query read as another type whose canonical values mean other values in the target (a <c>DateTime64</c> or a
-    /// <c>Time64</c> of another scale, an <c>Enum</c> with other members) is written part by part
-    /// (<see cref="ConverterDerivation.PlanDecodedPart"/>): the parts whose values mean other values are converted through
-    /// the meaning of their values, and the codecs write the other parts from their storage. The reason is set when such a
-    /// column cannot be written.
+    /// a query read as another type, where a write through its CLR type would change its values, is written part by part
+    /// (<see cref="ConverterDerivation.PlanDecodedPart"/>). A part whose canonical values mean other values in the target
+    /// (a <c>DateTime64</c> or a <c>Time64</c> of another scale, an <c>Enum</c> with other members) is converted through
+    /// the meaning of its values; a <c>String</c> or <c>FixedString</c> part into another type of a string through its
+    /// bytes; and the codecs write the other parts from their storage. The reason is set when such a column cannot be
+    /// written.
     /// </summary>
     /// <param name="codec">The codec of the target type, resolved with <paramref name="context"/>.</param>
     /// <param name="values">The column that the caller gives.</param>
@@ -104,7 +105,7 @@ internal abstract class InsertColumnWrite
         string source = SourceType(values);
         if (source is not null
             && !string.Equals(source, typeName, StringComparison.Ordinal)
-            && derivation.IsReadColumnOfAnotherMeaning(values, source, typeName, in context))
+            && derivation.IsReadColumnWrittenByParts(values, source, typeName, in context))
         {
             return ReadColumnWrite(codec, values, source, typeName, in context, derivation, nulls: null, out refusal);
         }
@@ -558,9 +559,9 @@ internal abstract class InsertColumnWrite
         }
     }
 
-    // A part of a column that a query read as another type, whose values mean other values in the target: the reader of
-    // the source type converts the rows of a slice into the CLR type that holds their meaning, and the writer of the target
-    // type writes them. The rows keep their numbers in the column, so a refusal names the row of the column. The null map
+    // A part of a column that a query read as another type, whose values mean other values in the target or whose bytes a
+    // string would not keep: the reader of the source type converts the rows of a slice into the CLR type that holds their
+    // meaning (or their bytes), and the writer of the target type writes them. The rows keep their numbers in the column, so a refusal names the row of the column. The null map
     // of an enclosing Nullable marks the rows that hold no value, so the writer writes its placeholder there and does not
     // convert the value under the NULL.
     private sealed class DecodedConversion<T> : InsertColumnWrite

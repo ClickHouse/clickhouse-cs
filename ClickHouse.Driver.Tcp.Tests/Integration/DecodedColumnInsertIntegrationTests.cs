@@ -83,6 +83,34 @@ public class DecodedColumnInsertIntegrationTests
             "2024-01-02 03:04:05.678000 FF C328");
     }
 
+    // A String that a query read, into another type of a string: the SQL literal of the source row, the expression that
+    // the target reads back, and its text.
+    public static IEnumerable<TestCaseData> StringCases()
+    {
+        yield return PartCase("String", "LowCardinality(String)", "unhex('FF')", "hex(value)", "FF");
+        yield return PartCase("String", "LowCardinality(Nullable(String))", "unhex('FF')", "hex(value)", "FF");
+        yield return PartCase("String", "Nullable(String)", "unhex('FF')", "hex(value)", "FF");
+        yield return PartCase("String", "FixedString(1)", "unhex('FF')", "hex(value)", "FF");
+        yield return PartCase("String", "Nullable(FixedString(1))", "unhex('FF')", "hex(value)", "FF");
+        yield return PartCase("String", "LowCardinality(FixedString(1))", "unhex('FF')", "hex(value)", "FF");
+        yield return PartCase("LowCardinality(String)", "String", "unhex('FF')", "hex(value)", "FF");
+        yield return PartCase("Nullable(String)", "LowCardinality(Nullable(String))", "NULL", "ifNull(hex(value), 'NULL')", "NULL");
+        yield return PartCase("Array(String)", "Array(LowCardinality(String))", "[unhex('FF'), unhex('C328')]", "hex(arrayStringConcat(value, ','))", "FF2CC328");
+        yield return PartCase(
+            "Map(String, String)",
+            "Map(LowCardinality(String), Nullable(String))",
+            "map(unhex('FF'), unhex('C328'))",
+            "concat(hex(mapKeys(value)[1]), ' ', hex(mapValues(value)[1]))",
+            "FF C328");
+        yield return PartCase("Tuple(String, Int32)", "Tuple(FixedString(1), Int32)", "(unhex('FF'), 7)", "concat(hex(value.1), ' ', toString(value.2))", "FF 7");
+        yield return PartCase(
+            "Tuple(DateTime64(3, 'UTC'), String)",
+            "Tuple(DateTime64(6, 'UTC'), LowCardinality(String))",
+            "('2024-01-02 03:04:05.678', unhex('FF'))",
+            "concat(toString(value.1), ' ', hex(value.2))",
+            "2024-01-02 03:04:05.678000 FF");
+    }
+
     public static IEnumerable<TestCaseData> TimeCases()
     {
         yield return Case("Time64(3)", "Time64(6)", ("'01:02:03.456'", "01:02:03.456000"), ("'-00:00:00.001'", "-00:00:00.001000"));
@@ -102,7 +130,20 @@ public class DecodedColumnInsertIntegrationTests
     /// are not UTF-8: the server stores the converted values and the bytes of the other parts.
     /// </summary>
     [TestCaseSource(nameof(PartCases))]
-    public async Task InsertAsync_ColumnReadAsARelatedComposite_StoresTheBytesOfTheOtherParts(string source, string target, string literal, string readBack, string expected)
+    public Task InsertAsync_ColumnReadAsARelatedComposite_StoresTheBytesOfTheOtherParts(string source, string target, string literal, string readBack, string expected)
+        => AssertReadsBackAsync(source, target, literal, readBack, expected);
+
+    /// <summary>
+    /// A <c>String</c> column that a query read, or a <c>String</c> part of one, into another type of a string
+    /// (<c>LowCardinality</c>, <c>Nullable</c>, <c>FixedString</c>, also in <c>Array</c>, <c>Map</c> and <c>Tuple</c>): the
+    /// server stores its bytes, also bytes that are not UTF-8.
+    /// </summary>
+    [TestCaseSource(nameof(StringCases))]
+    public Task InsertAsync_StringReadIntoAnotherTypeOfAString_StoresItsBytes(string source, string target, string literal, string readBack, string expected)
+        => AssertReadsBackAsync(source, target, literal, readBack, expected);
+
+    // Reads the source row through one connection, inserts its block through another, and reads back the expression.
+    private static async Task AssertReadsBackAsync(string source, string target, string literal, string readBack, string expected)
     {
         string sourceTable = UniqueTableName();
         string targetTable = UniqueTableName();
