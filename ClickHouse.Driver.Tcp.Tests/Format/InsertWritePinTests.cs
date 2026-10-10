@@ -220,6 +220,8 @@ public class InsertWritePinTests
         ["TwoTyped/DateTime from DateTimeOffset@1"] = "00000000",
         ["TwoTyped/DateTime from both@0"] = "0561936505619365",
         ["TwoTyped/DateTime from both@1"] = "05619365",
+        // A column of no single CLR type is written as the first suggested CLR type of the target that it implements:
+        // int? for Nullable(Int32), string for FixedString(1).
         ["TwoTyped/Nullable(Int32)@0"] = "00010100000000000000",
         ["TwoTyped/Nullable(Int32)@1"] = "0100000000",
         ["TwoTyped/FixedString(1)@0"] = "6162",
@@ -293,6 +295,50 @@ public class InsertWritePinTests
         }
 
         TestContext.Out.WriteLine(text.ToString());
+    }
+
+    public static IEnumerable<TestCaseData> RelatedTypeCases
+    {
+        get
+        {
+            yield return new TestCaseData("Nullable(Int8)", "Nullable(Enum8('a' = 1, 'b' = 2))", "000100010102", new object[] { (sbyte)1, null, (sbyte)2 })
+                .SetArgDisplayNames("Nullable(Int8) into Nullable(Enum8)");
+            yield return new TestCaseData("Nullable(Enum8('a' = 1, 'b' = 2))", "Nullable(Int8)", "000100010002", new object[] { (sbyte)1, null, (sbyte)2 })
+                .SetArgDisplayNames("Nullable(Enum8) into Nullable(Int8)");
+            yield return new TestCaseData("Nullable(FixedString(2))", "Nullable(String)", "00010002616200026300", new object[] { "ab", null, "c\0" })
+                .SetArgDisplayNames("Nullable(FixedString(2)) into Nullable(String)");
+        }
+    }
+
+    /// <summary>
+    /// A decoded Nullable column inserted into a Nullable of a related type goes to the converter tree of the target, so the
+    /// value under each NULL is the placeholder of the target: for <c>Nullable(Enum8)</c> a declared ordinal, not the 0 of
+    /// the <c>Int8</c> source. The values that a query reads back are the values of the source.
+    /// </summary>
+    /// <param name="source">The type that the column is decoded from.</param>
+    /// <param name="target">The type of the insert.</param>
+    /// <param name="bytes">The pinned bytes of the write.</param>
+    /// <param name="values">The values that the bytes decode to.</param>
+    [TestCaseSource(nameof(RelatedTypeCases))]
+    public async Task Write_DecodedNullableIntoARelatedType_HasThePlaceholderOfTheTarget(string source, string target, string bytes, object[] values)
+    {
+        using IColumn decoded = source.Contains("FixedString", StringComparison.Ordinal)
+            ? DecodedColumns.Of("c", source, new[] { new byte[] { 0x61, 0x62 }, null, new byte[] { 0x63, 0x00 } })
+            : DecodedColumns.Of("c", source, new sbyte?[] { 1, null, 2 });
+        IColumnCodec codec = ConverterHarness.Codec(target);
+        InsertColumnWrite write = InsertColumnWrite.For(codec, decoded, target, ConverterHarness.Context, ConverterDerivation.Default);
+
+        byte[] written = await WriteAsync(write, decoded, 0, decoded.RowCount);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(written);
+        await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
+        using IColumn readBack = await codec.ReadColumnAsync(reader, "c", target, decoded.RowCount, CodecTestHarness.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.WritesFromStorage(decoded), Is.False);
+            Assert.That(Convert.ToHexString(written), Is.EqualTo(bytes));
+            Assert.That(Enumerable.Range(0, readBack.RowCount).Select(readBack.GetValue), Is.EqualTo(values));
+        });
     }
 
     public static IEnumerable<string> NullCaseNames => NullCases.Keys;

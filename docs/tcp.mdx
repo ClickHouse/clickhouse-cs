@@ -580,16 +580,23 @@ insert completes before that block is released.
 
 `InsertAsync` writes each column in one of two ways:
 
-- A column that a query read is written from the data it holds, with no conversion. So a `String`
-  value that is not valid UTF-8 goes back to the server with the bytes that the server sent. An
-  array column that `ClickHouseTcpColumn.CreateArray` builds is written in the same way, from its
-  offsets and its inner column.
+- A column that a query of the same type read is written from the data it holds, with no
+  conversion. So a `String` value that is not valid UTF-8 goes back to the server with the bytes
+  that the server sent. An array column that `ClickHouseTcpColumn.CreateArray` builds over such a
+  column is written in the same way.
 - Any other column is converted from the CLR type of its values to the target type, with the
   mappings of [Type mapping: writing to ClickHouse](#type-map-writing) and the
   [write rules](#write-rules). `ClickHouseTcpTypes.CanWrite` gives the answer of this conversion. A
   value that the target type cannot hold (a text that is too long for a `FixedString(N)`, a decimal
   past its precision, a `NULL` in a column that cannot hold it) is refused with its row, and the
   insert stops. The insert then closes its connection; the next operation uses another one.
+  An array column that `ClickHouseTcpColumn.CreateArray` builds over a column of your own is written
+  as its offsets and its inner column, which is converted in the same way, with no copy of the
+  rows into arrays.
+
+A column that implements `IColumn<T>` for more than one `T` has no single CLR type. It is written
+as the first of those types in the list of CLR types that an insert message names for the target
+type.
 
 #### Row inserts {#row-inserts}
 
