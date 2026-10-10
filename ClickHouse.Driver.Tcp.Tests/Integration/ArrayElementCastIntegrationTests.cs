@@ -91,8 +91,9 @@ public class ArrayElementCastIntegrationTests
 
     /// <summary>
     /// A <see cref="T:uint[]"/> is not written into <c>Array(Int32)</c>: the cast would store 3000000000 as -1294967296.
-    /// The columnar insert, the POCO insert and the untyped insert refuse it before they send a block, each message names
-    /// <see cref="T:int[]"/>, and the table stays empty. <c>CanWrite</c> says false.
+    /// The columnar insert (also of an array that <c>CreateArray</c> builds over a column of <see cref="uint"/>), the POCO
+    /// insert and the untyped insert refuse it before they send a block, each message names <see cref="T:int[]"/>, and the
+    /// table stays empty. <c>CanWrite</c> says false.
     /// </summary>
     [Test]
     public async Task InsertAsync_UInt32ArrayIntoArrayOfInt32_IsRefusedInEveryTier()
@@ -108,6 +109,14 @@ public class ArrayElementCastIntegrationTests
             Exception columnar = Assert.CatchAsync(async () => await client.InsertAsync(
                 insert,
                 new IColumn[] { ClickHouseTcpColumn.Create("id", new uint[] { 0, 1 }), ClickHouseTcpColumn.Create("value", values) },
+                cancellationToken: None));
+            Exception dense = Assert.CatchAsync(async () => await client.InsertAsync(
+                insert,
+                new IColumn[]
+                {
+                    ClickHouseTcpColumn.Create("id", new uint[] { 0, 1 }),
+                    ClickHouseTcpColumn.CreateArray("value", ClickHouseTcpColumn.Create("value", new[] { 3_000_000_000u, 7u }), new[] { 0, 1, 2 }),
+                },
                 cancellationToken: None));
             Exception poco = Assert.CatchAsync(async () => await client.InsertRowsAsync(
                 insert,
@@ -131,6 +140,8 @@ public class ArrayElementCastIntegrationTests
                     Is.EqualTo(
                         "Column 'value' (Array(Int32)) was given a column of element type System.UInt32[], which it cannot be written from. It accepts System.Int32[], " +
                         "and an Array, Map or Tuple type also accepts a column whose elements are of the types that its element types accept. (Parameter 'columns')"));
+                Assert.That(dense, Is.TypeOf<ArgumentException>());
+                Assert.That(dense.Message, Is.EqualTo(columnar.Message));
                 Assert.That(poco, Is.TypeOf<InvalidOperationException>());
                 Assert.That(
                     poco.Message,
