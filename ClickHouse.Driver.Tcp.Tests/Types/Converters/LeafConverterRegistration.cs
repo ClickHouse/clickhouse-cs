@@ -44,7 +44,6 @@ internal sealed class LeafConverterRegistration : IDifferentialRegistration
         registry.Add(new WriteLeafArm(), WriteFacets);
         registry.Add(new AnswerLeafArm(Tier.CanRead), CanReadFacets);
         registry.Add(new AnswerLeafArm(Tier.CanWrite), CanWriteFacets);
-
     }
 
     /// <summary>Whether the derivation of <paramref name="columnType"/> ends at a leaf, so a leaf arm runs it.</summary>

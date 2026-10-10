@@ -65,7 +65,7 @@ internal sealed class Expectation
     public static Expectation Fails(Type exceptionType, params string[] messageParts)
         => new(
             $"a failure with {exceptionType.Name} that contains {Quote(messageParts)}",
-            (actual, _, _) => ExceptionDifference(actual, OutcomeKind.Failed, exceptionType, messageParts));
+            (actual, _, _) => FailureDifference(actual, exceptionType, messageParts));
 
     /// <summary>
     /// One expectation for all rows and another for the tail. Each part checks its own range only. A
@@ -92,11 +92,11 @@ internal sealed class Expectation
 
     private static string Quote(string[] parts) => string.Join(" and ", parts.Select(part => $"\"{part}\""));
 
-    private static string ExceptionDifference(Outcome actual, OutcomeKind kind, Type exceptionType, string[] messageParts)
+    private static string FailureDifference(Outcome actual, Type exceptionType, string[] messageParts)
     {
-        if (actual.Kind != kind)
+        if (actual.Kind != OutcomeKind.Failed)
         {
-            return $"the kind is {actual.Kind}, not {kind}";
+            return $"the kind is {actual.Kind}, not {OutcomeKind.Failed}";
         }
 
         if (actual.ExceptionType != exceptionType)

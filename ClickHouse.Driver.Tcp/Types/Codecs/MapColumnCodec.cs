@@ -189,28 +189,6 @@ internal sealed class MapColumnCodec : IColumnCodec
         }
     }
 
-    /// <summary>Pairs one row's slice of the projected key and value columns into a new array.</summary>
-    // Read through the indexers, not Values: an entry belongs to exactly one row, so there is nothing for the rows
-    // to share, and materializing the whole key or value column to read one slice of it would convert every other
-    // row's entries as well.
-    private static KeyValuePair<TKey, TValue>[] Row<TKey, TValue>(ReadOnlySpan<int> offsets, IColumn<TKey> keys, IColumn<TValue> values, int row)
-    {
-        int start = offsets[row];
-        int length = offsets[row + 1] - start;
-        if (length == 0)
-        {
-            return Array.Empty<KeyValuePair<TKey, TValue>>();
-        }
-
-        var pairs = new KeyValuePair<TKey, TValue>[length];
-        for (int i = 0; i < length; i++)
-        {
-            pairs[i] = new KeyValuePair<TKey, TValue>(keys[start + i], values[start + i]);
-        }
-
-        return pairs;
-    }
-
     /// <inheritdoc/>
     public bool CanWriteElementType(Type elementType)
         => TryPairArguments(elementType, out Type _, out Type[] arguments)

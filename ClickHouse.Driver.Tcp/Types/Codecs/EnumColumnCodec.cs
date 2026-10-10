@@ -9,7 +9,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
 /// <summary>
 /// Reads and writes <c>Enum8</c> or <c>Enum16</c> ordinals and their declared labels. Decoded columns expose raw
-/// ordinals through <see cref="IColumn{T}"/> and labels through <see cref="IEnumColumn"/> or string projection.
+/// ordinals through <see cref="IColumn{T}"/> and labels through <see cref="IEnumColumn"/>.
 /// </summary>
 /// <typeparam name="T">The underlying signed integer type (<see cref="sbyte"/> or <see cref="short"/>).</typeparam>
 internal sealed class EnumColumnCodec<T> : IColumnCodec
