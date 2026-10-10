@@ -13,13 +13,16 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// marked row is empty.
 /// </remarks>
 /// <typeparam name="T">The CLR type of one element.</typeparam>
-internal sealed class ArrayWriter<T> : ColumnWriter<T[]>
+internal sealed class ArrayWriter<T> : ColumnWriter<T[]>, IArrayWriter
 {
     private readonly ColumnWriter<T> inner;
 
     /// <summary>Initializes the writer.</summary>
     /// <param name="inner">The writer of the elements.</param>
     public ArrayWriter(ColumnWriter<T> inner) => this.inner = inner;
+
+    /// <inheritdoc/>
+    ColumnWriter IArrayWriter.Elements => inner;
 
     /// <inheritdoc/>
     public override bool HasPrefix => inner.HasPrefix;
@@ -131,4 +134,11 @@ internal sealed class ArrayWriter<T> : ColumnWriter<T[]>
             Rows = null;
         }
     }
+}
+
+/// <summary>An <c>Array(X)</c> writer.</summary>
+internal interface IArrayWriter
+{
+    /// <summary>The writer of the elements.</summary>
+    ColumnWriter Elements { get; }
 }
