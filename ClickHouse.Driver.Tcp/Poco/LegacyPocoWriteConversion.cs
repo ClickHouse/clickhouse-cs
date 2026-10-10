@@ -7,9 +7,10 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// The CLR write type choice and the property conversions of the POCO write plan before it moved onto the converter
-/// derivation: the reference path of the differential tests (<see cref="LegacyPocoColumnBuilderFactory"/>). The converter
-/// derivation has the same rules (<see cref="Types.Converters.WriteRules"/>).
+/// The CLR write type choice and the property conversions of the reference POCO write plan of the differential tests
+/// (<see cref="LegacyPocoColumnBuilderFactory"/>): the enum, nullable and cast rules over the codec's preferred write
+/// types. The converter derivation has the same rules over every CLR type that a column type is written from
+/// (<see cref="Types.Converters.WriteRules"/>).
 /// </summary>
 internal static class LegacyPocoWriteConversion
 {

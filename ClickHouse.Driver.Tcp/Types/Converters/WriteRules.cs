@@ -318,7 +318,9 @@ internal sealed class LiftWriter<T> : ColumnWriter<T>
 
 /// <summary>
 /// A nullable value type written by the writer of its value type, into a type that cannot hold NULL. The first NULL, in
-/// the order of the values, stops the write before the writer of the value type starts.
+/// the order of the values, stops the write before the writer of the value type starts. The message names the row of
+/// the column (<see cref="ValueSource{T}.FirstRow"/> and the position), which is the row of the insert for the whole
+/// column type, the only place where the rule applies.
 /// </summary>
 /// <typeparam name="T">The value type.</typeparam>
 internal sealed class NonNullWriter<T> : ColumnWriter<T?>
@@ -380,8 +382,9 @@ internal delegate ReadOnlySpan<TTarget> Reinterpret<TSource, TTarget>(ReadOnlySp
 
 /// <summary>
 /// The three phases of a rule writer that gives the inner writer its values as another type over the same memory. A
-/// source over one span is read in place. A segmented source is copied run by run into a pooled buffer, so the inner
-/// writer gets one span: its segments are arrays of the source type, which are no arrays of the other type.
+/// source over one span is read in place: the rules apply to the whole column type, whose source is one span. A
+/// segmented source, which only a direct call gives, is copied run by run into a pooled buffer, so the inner writer gets
+/// one span with no list of segments to convert.
 /// </summary>
 internal static class ReinterpretedValues
 {
@@ -424,7 +427,7 @@ internal static class ReinterpretedValues
     /// <typeparam name="TSource">The CLR type of the values.</typeparam>
     /// <typeparam name="TTarget">The CLR type of the inner writer.</typeparam>
     /// <param name="writer">The writer to encode into.</param>
-    /// <param name="values">The values that <see cref="Begin"/> was given.</param>
+    /// <param name="values">The values that the caller gave to <see cref="Begin"/>.</param>
     /// <param name="state">The state from <see cref="Begin"/>.</param>
     /// <param name="inner">The inner writer.</param>
     /// <param name="reinterpret">Reads a span of values as the other type.</param>
@@ -445,7 +448,7 @@ internal static class ReinterpretedValues
     /// <typeparam name="TSource">The CLR type of the values.</typeparam>
     /// <typeparam name="TTarget">The CLR type of the inner writer.</typeparam>
     /// <param name="writer">The writer to encode into.</param>
-    /// <param name="values">The values that <see cref="Begin"/> was given.</param>
+    /// <param name="values">The values that the caller gave to <see cref="Begin"/>.</param>
     /// <param name="state">The state from <see cref="Begin"/>.</param>
     /// <param name="inner">The inner writer.</param>
     /// <param name="reinterpret">Reads a span of values as the other type.</param>
@@ -510,7 +513,7 @@ internal static class CopiedValues<TSource, TTarget>
 
     /// <summary>Writes the inner prefix.</summary>
     /// <param name="writer">The writer to encode into.</param>
-    /// <param name="values">The values that <see cref="Begin"/> was given.</param>
+    /// <param name="values">The values that the caller gave to <see cref="Begin"/>.</param>
     /// <param name="state">The state from <see cref="Begin"/>.</param>
     /// <param name="inner">The inner writer.</param>
     public static void WritePrefix(ClickHouseBinaryWriter writer, ValueSource<TSource> values, IColumnWriteState state, ColumnWriter<TTarget> inner)
@@ -521,7 +524,7 @@ internal static class CopiedValues<TSource, TTarget>
 
     /// <summary>Writes the inner body.</summary>
     /// <param name="writer">The writer to encode into.</param>
-    /// <param name="values">The values that <see cref="Begin"/> was given.</param>
+    /// <param name="values">The values that the caller gave to <see cref="Begin"/>.</param>
     /// <param name="state">The state from <see cref="Begin"/>.</param>
     /// <param name="inner">The inner writer.</param>
     public static void Write(ClickHouseBinaryWriter writer, ValueSource<TSource> values, IColumnWriteState state, ColumnWriter<TTarget> inner)

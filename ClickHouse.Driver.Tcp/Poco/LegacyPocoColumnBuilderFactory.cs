@@ -6,9 +6,9 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// The builders of the POCO write plan before it moved onto the converter derivation: a compiled gather that converts
-/// each property value to a CLR write type that the codec accepts, which the codec then writes. Only the reference path
-/// of the differential tests (<see cref="PocoWritePlan{T}.BuildLegacy"/>) uses it.
+/// The reference path of the POCO write plan for the differential tests (<see cref="PocoWritePlan{T}.BuildLegacy"/>): a
+/// compiled gather that converts each property value to a CLR write type of the codec's preferred write types, which the
+/// codec then writes. Only the tests call it. The client builds its columns through <see cref="PocoColumnBuilderFactory"/>.
 /// </summary>
 internal static class LegacyPocoColumnBuilderFactory
 {

@@ -9,8 +9,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Poco;
 /// Runs the client's row inserts in the differential tests: the POCO write plan of <c>InsertRowsAsync&lt;T&gt;</c> in both
 /// gather tiers and the untyped rows of <c>InsertRowsAsync(object[])</c>, for every write facet, against the old row
 /// inserts (<see cref="LegacyRowWrite"/>), and their answers. <c>ClickHouseTcpTypes.CanWrite</c> runs in the answer
-/// tiers of both, so it gives the answer of the row inserts. It also declares the writes that the row inserts take now
-/// and the old ones refused.
+/// tiers of both, so it gives the answer of the row inserts. It also declares the writes that the row inserts take and
+/// the old ones refused.
 /// </summary>
 internal sealed class RowWriteRegistration : IDifferentialRegistration
 {

@@ -13,7 +13,9 @@ internal enum PocoGatherTier
     Compiled,
 
     /// <summary>
-    /// A getter delegate for each row. It compiles no code, so a runtime without dynamic code uses it.
+    /// A getter delegate for each row. It compiles no code, so a runtime that does not compile expression trees
+    /// (<see cref="System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeCompiled"/> is false) uses it. The plan still
+    /// closes generic types at run time to build the converter trees.
     /// </summary>
     Delegate,
 }

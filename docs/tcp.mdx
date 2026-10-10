@@ -611,9 +611,10 @@ Rows are converted to columns one block at a time. Each row must contain one val
 named in the statement. The CLR type of the first value of a column that is not null selects how
 the column is written, with the mappings of [Type mapping: writing to ClickHouse](#type-map-writing)
 and the [write rules](#write-rules): for example `DateTime[]` values for `Array(DateTime)`, or
-`DateTime` values for `LowCardinality(DateTime)`. The values in one column must use that CLR type,
-except where the target is `Variant` or `Dynamic`, which take a value of any supported type. Do not
-modify the rows until the operation completes.
+`DateTime` values for `LowCardinality(DateTime)`. The other values of the column must have that CLR
+type, or a type that casts to the type that the first value is written as: `Variant` and `Dynamic`
+are written from `object`, so they take a value of any supported type. Do not modify the rows until
+the operation completes.
 
 #### POCO inserts {#poco-inserts}
 
