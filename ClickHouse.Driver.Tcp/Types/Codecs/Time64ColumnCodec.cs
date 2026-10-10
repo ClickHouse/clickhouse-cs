@@ -62,8 +62,9 @@ internal sealed class Time64ColumnCodec : IColumnCodec
         => Time64Column.ReadAsync(reader, columnName, columnType, scale, rowCount, cancellationToken);
 
     /// <inheritdoc/>
-    // The column that a query of the type reads.
-    public bool CanWrite(IColumn column) => column is Time64Column;
+    // The column that a query of the type reads, at the same scale: a stored count is a count at the scale of the column
+    // that holds it.
+    public bool CanWrite(IColumn column) => column is Time64Column stored && stored.Scale == scale;
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)

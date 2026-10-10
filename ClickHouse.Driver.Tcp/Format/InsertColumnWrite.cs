@@ -35,6 +35,8 @@ internal abstract class InsertColumnWrite
 
     private static readonly ConcurrentDictionary<Type, Func<ColumnWriter, InsertColumnWrite>> Factories = new();
 
+    private static readonly ConcurrentDictionary<Type, Func<ColumnReader, ColumnWriter, InsertColumnWrite>> DecodedConversions = new();
+
     /// <summary>Begins the write of rows [<paramref name="start"/>, <paramref name="start"/> + <paramref name="length"/>).</summary>
     /// <param name="values">The column.</param>
     /// <param name="start">The first row.</param>
@@ -72,10 +74,36 @@ internal abstract class InsertColumnWrite
     /// <returns>The write, or <see langword="null"/> when the column cannot be written as the type.</returns>
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     public static InsertColumnWrite For(IColumnCodec codec, IColumn values, string typeName, in ResolveContext context, ConverterDerivation derivation)
+        => For(codec, values, typeName, in context, derivation, out _);
+
+    /// <summary>
+    /// The write of <paramref name="values"/> as <paramref name="typeName"/>, as the other overload gives it. A column that
+    /// a query read as another type whose canonical values mean other values in the target (a <c>DateTime64</c> or a
+    /// <c>Time64</c> of another scale, an <c>Enum</c> with other members) is converted through the meaning of its values
+    /// (<see cref="ConverterDerivation.TryDeriveDecodedConversion"/>); the reason is set when it cannot be.
+    /// </summary>
+    /// <param name="codec">The codec of the target type, resolved with <paramref name="context"/>.</param>
+    /// <param name="values">The column that the caller gives.</param>
+    /// <param name="typeName">The target type.</param>
+    /// <param name="context">The resolution context of the target (its session timezone).</param>
+    /// <param name="derivation">The converter derivation of the codec registry.</param>
+    /// <param name="refusal">Why a column that a query read as another type cannot be converted, or null.</param>
+    /// <returns>The write, or <see langword="null"/> when the column cannot be written as the type.</returns>
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    public static InsertColumnWrite For(IColumnCodec codec, IColumn values, string typeName, in ResolveContext context, ConverterDerivation derivation, out string refusal)
     {
+        refusal = null;
         if (codec.CanWrite(values))
         {
             return new CodecWrite(codec);
+        }
+
+        string source = SourceType(values);
+        if (source is not null
+            && !string.Equals(source, typeName, StringComparison.Ordinal)
+            && derivation.TryDeriveDecodedConversion(values, source, typeName, in context, out ColumnReader reader, out ColumnWriter writer, out refusal))
+        {
+            return reader is null ? null : DecodedConversions.GetOrAdd(reader.ValueType, BuildDecodedConversionFactory)(reader, writer);
         }
 
         Type elementType;
@@ -102,6 +130,29 @@ internal abstract class InsertColumnWrite
 
         return TreeWrite(tree);
     }
+
+    // The type that a column says it holds: its type name, or for an array that CreateArray builds (which has none) the
+    // array of the type of its inner column. Null when the column names no type.
+    private static string SourceType(IColumn values)
+    {
+        if (values.TypeName is { Length: > 0 } typeName)
+        {
+            return typeName;
+        }
+
+        return values is IDenseArrayColumn dense && SourceType(dense.Inner) is string inner ? $"Array({inner})" : null;
+    }
+
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private static Func<ColumnReader, ColumnWriter, InsertColumnWrite> BuildDecodedConversionFactory(Type valueType)
+    {
+        MethodInfo make = typeof(InsertColumnWrite).GetMethod(nameof(MakeDecodedConversion), BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException($"{nameof(MakeDecodedConversion)} was not found.");
+        return make.MakeGenericMethod(valueType).CreateDelegate<Func<ColumnReader, ColumnWriter, InsertColumnWrite>>();
+    }
+
+    private static DecodedConversion<T> MakeDecodedConversion<T>(ColumnReader reader, ColumnWriter writer)
+        => new((ColumnReader<T>)reader, (ColumnWriter<T>)writer);
 
     // A column that implements IColumn<> zero or several times has no single CLR type to derive a tree for.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
@@ -226,6 +277,67 @@ internal abstract class InsertColumnWrite
             {
                 Elements?.Dispose();
                 Elements = null;
+            }
+        }
+    }
+
+    // A column that a query read as another type: the reader of that type converts the rows of a slice into the CLR type
+    // that holds their meaning, and the writer of the target type writes them. The rows keep their numbers in the column,
+    // so a refusal names the row of the column.
+    private sealed class DecodedConversion<T> : InsertColumnWrite
+    {
+        private readonly ColumnReader<T> reader;
+        private readonly ColumnWriter<T> writer;
+
+        public DecodedConversion(ColumnReader<T> reader, ColumnWriter<T> writer)
+        {
+            this.reader = reader;
+            this.writer = writer;
+        }
+
+        public override IColumnWriteState Begin(IColumn values, int start, int length)
+        {
+            var state = new State { Buffer = WriteBuffers.Rent<T>(length) };
+            try
+            {
+                reader.Bind(values).Fill(start, state.Buffer.AsSpan(0, length));
+                state.Inner = writer.Begin(Source(values, start, length, state));
+                return state;
+            }
+            catch
+            {
+                state.Dispose();
+                throw;
+            }
+        }
+
+        public override void WritePrefix(ClickHouseBinaryWriter output, IColumn values, int start, int length, IColumnWriteState state)
+        {
+            var own = (State)state;
+            writer.WritePrefix(output, Source(values, start, length, own), own.Inner);
+        }
+
+        public override void Write(ClickHouseBinaryWriter output, IColumn values, int start, int length, IColumnWriteState state)
+        {
+            var own = (State)state;
+            writer.Write(output, Source(values, start, length, own), own.Inner);
+        }
+
+        private static ValueSource<T> Source(IColumn values, int start, int length, State state)
+            => ValueSource<T>.Of(state.Buffer.AsSpan(0, length), start, values.Name);
+
+        private sealed class State : IColumnWriteState
+        {
+            public T[] Buffer { get; set; }
+
+            public IColumnWriteState Inner { get; set; }
+
+            public void Dispose()
+            {
+                Inner?.Dispose();
+                Inner = null;
+                WriteBuffers.Return(Buffer);
+                Buffer = null;
             }
         }
     }

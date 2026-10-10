@@ -1027,10 +1027,12 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             InsertColumnWrite write = null;
             if (validateWritable)
             {
-                write = InsertColumnWrite.For(codec, slot.Values, slot.TypeName, schema.Context, schema.Codecs.Converters);
+                write = InsertColumnWrite.For(codec, slot.Values, slot.TypeName, schema.Context, schema.Codecs.Converters, out string refusal);
                 if (write is null)
                 {
-                    error = DescribeUnwritableColumn(slot, schema.Codecs.Converters.SuggestedTypes(slot.TypeName, schema.Context, ConversionDirection.Write));
+                    error = refusal is not null
+                        ? DescribeUnconvertedColumn(slot, refusal)
+                        : DescribeUnwritableColumn(slot, schema.Codecs.Converters.SuggestedTypes(slot.TypeName, schema.Context, ConversionDirection.Write));
                     return null;
                 }
             }
@@ -1067,6 +1069,16 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
         return $"Column '{slot.Name}' ({slot.TypeName}) was given a column of element type {present}, which it cannot be written from. " + remedy;
     }
+
+    /// <summary>
+    /// Composes the message for a column that a query read as another type, whose values the insert cannot convert to the
+    /// target type.
+    /// </summary>
+    /// <param name="slot">The plan slot: the target's name and type, and the column the caller supplied.</param>
+    /// <param name="refusal">Why the values cannot be converted.</param>
+    /// <returns>The message.</returns>
+    internal static string DescribeUnconvertedColumn(InsertColumn slot, string refusal)
+        => $"Column '{slot.Name}' ({slot.TypeName}) was given a column that a query read as another type, whose values it converts through their meaning (a time, a duration, a label). {refusal}";
 
     /// <summary>Composes a message naming the columns the caller failed to supply and the ones it supplied in excess.</summary>
     private static string DescribeSchemaMismatch(IReadOnlyList<IColumn> columns, Block schema, List<string> missing)
