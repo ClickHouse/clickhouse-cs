@@ -95,6 +95,31 @@ public class InsertColumnWriteTests
     }
 
     /// <summary>
+    /// A dense array that a caller builds over a column of its own is written as its offsets, then its inner column
+    /// through the element writer of the tree of the array, so its rows are not copied into arrays. The inner column here
+    /// has no <c>Values</c>, which a copy of the rows reads.
+    /// </summary>
+    [Test]
+    public async Task For_DenseArrayOverACallersColumn_WritesTheInnerColumnThroughTheElementWriter()
+    {
+        var instants = new[] { DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddDays(1), DateTimeOffset.UnixEpoch.AddDays(2), DateTimeOffset.UnixEpoch.AddDays(3) };
+        IArrayColumn<DateTimeOffset> column = ClickHouseTcpColumn.CreateArray("c", new IndexerOnlyColumn<DateTimeOffset>(instants), new[] { 0, 1, 1, 4 });
+        DateTimeOffset[][] rows = { new[] { instants[0] }, Array.Empty<DateTimeOffset>(), new[] { instants[1], instants[2], instants[3] } };
+        const string type = "Array(DateTime('UTC'))";
+        IColumnCodec codec = ConverterHarness.Codec(type);
+
+        InsertColumnWrite write = InsertColumnWrite.For(codec, column, type, ConverterHarness.Context, ConverterDerivation.Default);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(codec.WritesFromStorage(column), Is.False);
+            Assert.That(
+                Convert.ToHexString(await WriteAsync(write, column, 1, 2)),
+                Is.EqualTo(Convert.ToHexString(await ConverterHarness.WriteNewAsync(ConverterDerivation.Default.Writer<DateTimeOffset[]>(type, ConverterHarness.Context), rows, 1, 2))));
+        });
+    }
+
+    /// <summary>
     /// The rows of a slice come from the column's span, from its stored values, or through its indexer when its
     /// <c>Values</c> cannot serve; each gives the bytes of the codec for a slice that starts after earlier rows.
     /// </summary>
