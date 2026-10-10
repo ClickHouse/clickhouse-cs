@@ -53,6 +53,28 @@ public class WireBytePinTests
             "0100000000000000000600000000000002000000000000000000000000F1536502000000000000000101",
             "DateTimeOffsets in one second");
 
+        // The stored value of the default shares slot 0, and a repeated value its entry.
+        yield return Case(
+            "LowCardinality(DateTime('UTC'))",
+            new uint[] { 0, 7, 7 },
+            "01000000000000000006000000000000020000000000000000000000070000000300000000000000000101",
+            "the default and a repeated second");
+        yield return Case(
+            "LowCardinality(DateTime64(3, 'UTC'))",
+            new long[] { 0, 7, 7 },
+            "010000000000000000060000000000000200000000000000000000000000000007000000000000000300000000000000000101",
+            "the default and a repeated count");
+        yield return Case(
+            "LowCardinality(Time)",
+            new[] { 0, 7, 7 },
+            "01000000000000000006000000000000020000000000000000000000070000000300000000000000000101",
+            "the default and a repeated second");
+        yield return Case(
+            "LowCardinality(Time64(3))",
+            new long[] { 0, 7, 7 },
+            "010000000000000000060000000000000200000000000000000000000000000007000000000000000300000000000000000101",
+            "the default and a repeated count");
+
         // CLR values that differ below the precision of the type: one entry and the default.
         yield return Case(
             "LowCardinality(BFloat16)",
