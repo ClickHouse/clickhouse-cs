@@ -444,6 +444,20 @@ public class ClickHouseClientSettingsTests
     }
 
     [Test]
+    public void ToString_WithBearerToken_ShouldRedactToken()
+    {
+        var withToken = new ClickHouseClientSettings { BearerToken = "secret-jwt-token" };
+        var withoutToken = new ClickHouseClientSettings();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(withToken.ToString(), Does.Contain("BearerToken=****"));
+            Assert.That(withToken.ToString(), Does.Not.Contain("secret-jwt-token"));
+            Assert.That(withoutToken.ToString(), Does.Not.Contain("BearerToken"));
+        });
+    }
+
+    [Test]
     public void ToConnectionStringBuilder_AndBack_ShouldPreserveAllValues()
     {
         var originalSettings = new ClickHouseClientSettings

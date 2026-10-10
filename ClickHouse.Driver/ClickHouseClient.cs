@@ -162,6 +162,8 @@ public sealed class ClickHouseClient : IClickHouseClient
         {
             var builder = ConnectionStringBuilder;
             builder.Password = "****";
+            if (!string.IsNullOrEmpty(builder.BearerToken))
+                builder.BearerToken = "****";
             return builder.ToString();
         }
     }

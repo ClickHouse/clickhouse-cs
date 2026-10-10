@@ -334,6 +334,32 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task ConnectionString_WithBearerTokenFromSettings_ShouldKeepTokenWhenReapplied()
+    {
+        var settings = new ClickHouseClientSettings
+        {
+            Host = "localhost",
+            Username = "testuser",
+            Password = "testpass",
+            BearerToken = "settings-level-token",
+        };
+        string connectionString;
+        using (var original = new ClickHouseConnection(settings))
+        {
+            connectionString = original.ConnectionString;
+        }
+
+        var trackingHandler = new TrackingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("1") });
+        using var httpClient = new HttpClient(trackingHandler);
+        using var reapplied = new ClickHouseConnection(connectionString, httpClient);
+        await reapplied.ExecuteStatementAsync("SELECT 1");
+
+        var authorization = trackingHandler.Requests.Single().Headers.Authorization;
+        Assert.That(authorization?.Scheme, Is.EqualTo("Bearer"));
+        Assert.That(authorization?.Parameter, Is.EqualTo("settings-level-token"));
+    }
+
+    [Test]
     [Explicit("This test takes 3s, and can be flaky on loaded server")]
     public async Task ReplaceRunningQuerySettingShouldReplace()
     {
