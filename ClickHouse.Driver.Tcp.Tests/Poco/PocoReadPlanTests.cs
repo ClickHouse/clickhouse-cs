@@ -542,8 +542,8 @@ public class PocoReadPlanTests
         Decoded(new ArrayColumn<string[]>("Tags", "Array(String)", new[] { new[] { "x", "y" }, Array.Empty<string>() })),
         PrimitiveColumn<sbyte>.FromValues("Level", "Enum8('low' = -1, 'high' = 127)", new sbyte[] { -1, 127 }));
 
-    // The column that the codec of its type decodes from the bytes that it writes for source: the column that a block
-    // from the server holds. A converter reads the decoded shape of the column type (for example the null map of a
+    // The column that the codec of its type decodes from the bytes that an insert writes for source: the column that a
+    // block from the server holds. A converter reads the decoded shape of the column type (for example the null map of a
     // Nullable column, or the bytes of a String column), which a column that a test builds does not have.
     internal static IColumn Decoded(IColumn source)
     {

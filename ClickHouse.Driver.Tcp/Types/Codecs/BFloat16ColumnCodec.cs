@@ -14,6 +14,9 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </summary>
 internal sealed class BFloat16ColumnCodec : IColumnCodec
 {
+    // The number of values that a write converts on the stack before it gives them to the writer in one copy.
+    private const int ChunkValues = 2048;
+
     /// <summary>The shared, stateless instance.</summary>
     public static readonly BFloat16ColumnCodec Instance = new();
 
@@ -26,14 +29,6 @@ internal sealed class BFloat16ColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public Type ElementType => typeof(float);
-
-    /// <inheritdoc/>
-    public object NullPlaceholder => 0f;
-
-    /// <inheritdoc/>
-    // Only the top 16 bits are written, so floats that differ below them encode identically.
-    public object LowCardinalityKeyWriter(Type writeType)
-        => writeType == typeof(float) ? LowCardinalityKeys.Projected<float, ushort>(ToBFloat16Bits) : null;
 
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
@@ -51,15 +46,26 @@ internal sealed class BFloat16ColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<float>;
+    // The column that a query of the type reads.
+    public bool CanWrite(IColumn column) => column is ArrayColumn<float>;
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        var values = (IColumn<float>)column;
-        for (int i = 0; i < length; i++)
+        // The decoded column holds the floats: their high 16 bits are written a chunk at a time.
+        var stored = (ArrayColumn<float>)column;
+        Span<ushort> chunk = stackalloc ushort[ChunkValues];
+        ReadOnlySpan<float> floats = stored.Values.Slice(start, length);
+        while (!floats.IsEmpty)
         {
-            writer.WriteUInt16(ToBFloat16Bits(values[start + i]));
+            int count = Math.Min(chunk.Length, floats.Length);
+            for (int i = 0; i < count; i++)
+            {
+                chunk[i] = ToBFloat16Bits(floats[i]);
+            }
+
+            writer.WriteBytes(MemoryMarshal.AsBytes(chunk.Slice(0, count)));
+            floats = floats.Slice(count);
         }
     }
 

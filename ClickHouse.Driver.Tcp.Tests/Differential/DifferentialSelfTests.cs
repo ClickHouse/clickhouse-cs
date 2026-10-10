@@ -7,8 +7,8 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
 /// <summary>
-/// Tests of the differential tests themselves: each wrong candidate is reported, a declared outcome is checked for
-/// every candidate, the first candidate is the baseline, and the registry finds its own problems.
+/// Tests of the differential tests themselves: each wrong candidate is reported, a stated outcome is checked for the
+/// baseline, the first candidate is the baseline, and the registry finds its own problems.
 /// </summary>
 [TestFixture]
 public class DifferentialSelfTests
@@ -21,22 +21,6 @@ public class DifferentialSelfTests
 
     // The sample values of the UInt64 case.
     private static readonly object[] UInt64Values = { 0UL, 1UL, ulong.MaxValue, 7UL, 1UL << 40 };
-
-    /// <summary>What <see cref="WrongTailReadArm"/> does for the tail.</summary>
-    public enum TailFault
-    {
-        /// <summary>The tail gives values.</summary>
-        GivesValues,
-
-        /// <summary>The tail fails at row 2, which is not NULL.</summary>
-        FailsAtAnotherRow,
-    }
-
-    // The POCO plan reads a NULL of the Nullable(DateTime('UTC')) sample into DateTime: the first NULL of the sample is
-    // row 1, and the first NULL of the tail [2, 5) is row 4.
-    private static Expectation FailsAtTheFirstNull => Expectation.ForRows(
-        Expectation.Fails<InvalidOperationException>("is NULL at row 1"),
-        Expectation.Fails<InvalidOperationException>("is NULL at row 4"));
 
     [Test]
     public void Run_CandidateThatReadsOtherValues_ReportsTheFirstDifferentValue()
@@ -107,82 +91,6 @@ public class DifferentialSelfTests
         CaseReport report = RunWith(UInt64Case, r => r.Add(new DefaultValuesReadArm(UInt64Case, typeof(DateTime)), expectedFacets: 1));
 
         Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<DateTime> rows [0, 5): Default values gives 5 values").And.Contains("the kind is Values, not Refused"));
-    }
-
-    [Test]
-    public void Run_DeclaredOutcomeThatEveryCandidateGives_ReportsNothing()
-    {
-        CaseReport report = RunWith(UInt64Case, r =>
-        {
-            r.Add(new PocoAsReadAsArm(UInt64Case, typeof(ulong?)), expectedFacets: 1);
-            DeclareOne(r, UInt64Case, Tier.ReadAs, typeof(ulong?), Expectation.Values(UInt64Values));
-        });
-
-        Assert.That(report.Mismatches, Is.Empty);
-    }
-
-    [Test]
-    public void Run_DeclaredOutcomeThatACandidateDoesNotGive_ReportsTheCandidate()
-    {
-        CaseReport report = RunWith(UInt64Case, r => DeclareOne(r, UInt64Case, Tier.ReadAs, typeof(ulong?), Expectation.Values(1UL, 2UL, 3UL, 4UL, 5UL)));
-
-        Assert.That(report.Mismatches, Has.Some.Contains("Client.ReadAs gives").And.Contains("the declared outcome").And.Contains("value 0: 0, not 1"));
-    }
-
-    [Test]
-    public void Run_DeclaredFailureThatEveryCandidateGives_ReportsNothing()
-    {
-        // The POCO plan reads a Nullable(DateTime('UTC')) column as DateTime and uint, and fails at the first NULL.
-        CaseReport report = RunWith(
-            NullableDateTimeCase,
-            r =>
-            {
-                r.Add(new PocoAsReadAsArm(NullableDateTimeCase, typeof(DateTime), typeof(uint)), expectedFacets: 2);
-                DeclareOne(r, NullableDateTimeCase, Tier.ReadAs, typeof(DateTime), FailsAtTheFirstNull);
-                DeclareOne(r, NullableDateTimeCase, Tier.ReadAs, typeof(uint), FailsAtTheFirstNull);
-            },
-            WithTheClientWriteOnly());
-
-        Assert.That(report.Mismatches, Is.Empty);
-    }
-
-    [Test]
-    public void Run_DeclaredFailureWithOneTextForBothRanges_ReportsTheTail()
-    {
-        CaseReport report = RunWith(
-            NullableDateTimeCase,
-            r =>
-            {
-                r.Add(new PocoAsReadAsArm(NullableDateTimeCase, typeof(DateTime)), expectedFacets: 1);
-                DeclareOne(r, NullableDateTimeCase, Tier.ReadAs, typeof(DateTime), Expectation.Fails<InvalidOperationException>("is NULL at row 1"));
-            },
-            WithTheClientWriteOnly());
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<DateTime> rows [2, 5): Poco as ReadAs gives failed").And.Contains("does not contain \"is NULL at row 1\""));
-            Assert.That(report.Mismatches, Has.None.Contains("rows [0, 5)"), "the read of all rows fails at row 1");
-        });
-    }
-
-    [TestCase(TailFault.GivesValues, "the kind is Values, not Failed")]
-    [TestCase(TailFault.FailsAtAnotherRow, "does not contain \"is NULL at row 4\"")]
-    public void Run_DeclaredFailureThatACandidateGivesForAllRowsOnly_ReportsTheTail(TailFault fault, string difference)
-    {
-        CaseReport report = RunWith(
-            NullableDateTimeCase,
-            r =>
-            {
-                r.Add(new WrongTailReadArm(NullableDateTimeCase, typeof(DateTime), fault), expectedFacets: 1);
-                DeclareOne(r, NullableDateTimeCase, Tier.ReadAs, typeof(DateTime), FailsAtTheFirstNull);
-            },
-            WithTheClientWriteOnly());
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<DateTime> rows [2, 5): Wrong tail gives").And.Contains(difference));
-            Assert.That(report.Mismatches, Has.None.Contains("rows [0, 5)"), "the read of all rows fails at row 1");
-        });
     }
 
     [Test]
@@ -265,15 +173,43 @@ public class DifferentialSelfTests
         Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<TimeOnly> rows [0, 1): Client.ReadAs gives").And.Contains("the source test states the values [00:00:01.0000000]").And.Contains("value 0: 00:00:00.0000000, not 00:00:01.0000000"));
     }
 
+    /// <summary>
+    /// A stated failure is checked for the tail too: the text of the POCO failure of all rows (the NULL at row 1) is
+    /// not the failure of the tail, whose first NULL is row 4.
+    /// </summary>
     [Test]
-    public void Run_DeclaredOutcomeWithNoCandidate_ReportsTheFacet()
+    public void Run_StatedFailureWithTheTextOfAllRows_ReportsTheTail()
     {
-        CaseReport report = RunWith(
-            UInt64Case,
-            r => DeclareOne(r, UInt64Case, Tier.ReadAs, typeof(ulong?), Expectation.Values(UInt64Values)),
-            WithTheClientWriteOnly());
+        CaseReport report = DifferentialEngine.Run(
+            WithStated(NullableDateTimeCase, Tier.Poco, typeof(DateTime), Expectation.Fails<InvalidOperationException>("is NULL at row 1")),
+            DifferentialRegistry.WithClientArms());
 
-        Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<ulong?>: the declared outcome").And.Contains("no candidate arm covers it"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Mismatches, Has.Some.Contains("Poco<DateTime> rows [2, 5): Client.Poco gives failed").And.Contains("does not contain \"is NULL at row 1\""));
+            Assert.That(report.Mismatches, Has.None.Contains("rows [0, 5)"), "the read of all rows fails at row 1");
+        });
+    }
+
+    /// <summary>
+    /// A stated failure that the baseline gives for both ranges is met, and a candidate that gives values for the tail
+    /// of that failure differs from the baseline there.
+    /// </summary>
+    [Test]
+    public void Run_StatedFailureAndACandidateWithValuesForTheTail_ReportsTheCandidate()
+    {
+        DifferentialRegistry registry = DifferentialRegistry.WithClientArms();
+        registry.Add(new ValuesTailReadArm(NullableDateTimeCase, typeof(DateTime)), expectedFacets: 1);
+
+        CaseReport report = DifferentialEngine.Run(
+            WithStated(NullableDateTimeCase, Tier.Poco, typeof(DateTime), Expectation.Fails<InvalidOperationException>("is NULL")),
+            registry);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Mismatches, Has.Some.Contains("Poco<DateTime> rows [2, 5): Values tail gives").And.Contains("the kind is Values, not Failed"));
+            Assert.That(report.Mismatches, Has.None.Contains("the source test states"), "the baseline fails at a NULL for both ranges");
+        });
     }
 
     [Test]
@@ -325,36 +261,8 @@ public class DifferentialSelfTests
     }
 
     [Test]
-    public void Validate_DeclaredOutcomeOfAnotherSize_ReportsTheCount()
-    {
-        DifferentialRegistry registry = DifferentialRegistry.WithClientArms();
-        registry.DeclareOutcomes("No such case", f => f.Case.Id == "No such case", _ => Expectation.Values(), "a test", expectedFacets: 1);
-
-        Assert.That(registry.Validate(DifferentialCases.All()), Has.Some.EqualTo("The declared outcome 'No such case' selects 0 facets, not 1."));
-    }
-
-    [Test]
-    public void Validate_DeclaredOutcomeWithNoCandidate_IsReported()
-    {
-        DifferentialRegistry registry = WithTheClientWriteOnly();
-        DeclareOne(registry, UInt64Case, Tier.ReadAs, typeof(ulong?), Expectation.Values(UInt64Values));
-
-        Assert.That(registry.Validate(DifferentialCases.All()), Has.Some.Contains("no candidate arm covers it"));
-    }
-
-    [Test]
-    public void Validate_TwoDeclaredOutcomesOfOneFacet_AreReported()
-    {
-        DifferentialRegistry registry = DifferentialRegistry.WithClientArms();
-        DeclareOne(registry, UInt64Case, Tier.ReadAs, typeof(ulong?), Expectation.Values(UInt64Values));
-        registry.DeclareOutcomes("ReadAs<ulong?> of UInt64", f => f.Case.Id == UInt64Case && f.Tier == Tier.ReadAs && f.Target == typeof(ulong?), _ => Expectation.Values(UInt64Values), "a test", expectedFacets: 1);
-
-        Assert.That(registry.Validate(DifferentialCases.All()), Has.Some.Contains("both select this facet"));
-    }
-
-    [Test]
     public void Current_Registry_HasTheRegistrationsOfTheAssembly()
-        => Assert.That(DifferentialRegistry.Current.Candidates.Select(a => a.Name), Does.Contain("Leaf converters: Fill"));
+        => Assert.That(DifferentialRegistry.Current.Candidates.Select(a => a.Name), Does.Contain("Client.Poco: Fill"));
 
     [TestCase(0f, -0f)]
     [TestCase(double.NaN, 0d)]
@@ -390,22 +298,6 @@ public class DifferentialSelfTests
         });
     }
 
-    [Test]
-    public void Verify_ForRows_ChecksAllRowsAndTheTailApart()
-    {
-        Expectation failure = Expectation.ForRows(Expectation.Fails<InvalidOperationException>("row 1"), Expectation.Fails<InvalidOperationException>("row 4"));
-        Expectation values = Expectation.Values(1, 2, 3);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(failure.Verify(Outcome.Failure(new InvalidOperationException("at row 1")), Rows.All, 1), Is.Null);
-            Assert.That(failure.Verify(Outcome.Failure(new InvalidOperationException("at row 4")), Rows.Tail, 1), Is.Null);
-            Assert.That(failure.Verify(Outcome.Failure(new InvalidOperationException("at row 1")), Rows.Tail, 1), Is.Not.Null);
-            Assert.That(values.Verify(Outcome.OfValues(new[] { 2, 3 }), Rows.Tail, 1), Is.Null, "the tail is the values from row 1");
-            Assert.That(values.Verify(Outcome.OfValues(new[] { 1, 2 }), Rows.Tail, 1), Is.Not.Null);
-        });
-    }
-
     private static CaseReport RunWith(string caseId, Action<DifferentialRegistry> register, DifferentialRegistry registry = null)
     {
         registry ??= DifferentialRegistry.WithClientArms();
@@ -422,13 +314,12 @@ public class DifferentialSelfTests
         return registry;
     }
 
-    private static void DeclareOne(DifferentialRegistry registry, string caseId, Tier tier, Type target, Expectation expected)
-        => registry.DeclareOutcomes(
-            $"{caseId} {tier}<{TypeNames.Of(target)}>",
-            f => f.Case.Id == caseId && f.Tier == tier && f.Target == target,
-            _ => expected,
-            "a test",
-            expectedFacets: 1);
+    // The case with one stated outcome in place of its own.
+    private static DifferentialCase WithStated(string caseId, Tier tier, Type target, Expectation expected)
+    {
+        DifferentialCase source = DifferentialCases.All().Single(c => c.Id == caseId);
+        return new DifferentialCase(source.Id, source.Source, source.ColumnType, source.RowCount, source.ReadTargets, source.WriteInputs, new[] { new StatedOutcome(tier, target, expected) });
+    }
 
     /// <summary>The client's read, with the values in reverse order. Covers ReadAs&lt;byte&gt; of the UInt8 case.</summary>
     private sealed class ReversingReadArm : ReadArm
@@ -442,7 +333,7 @@ public class DifferentialSelfTests
 
         public override RowReader<T> Bind<T>(Block block)
         {
-            RowReader<T> inner = ClientArms.ReadAs.Bind<T>(block);
+            RowReader<T> inner = ClientArms.Poco.Bind<T>(block);
             return (start, count) =>
             {
                 T[] values = inner(start, count);
@@ -464,7 +355,7 @@ public class DifferentialSelfTests
 
         public override RowReader<T> Bind<T>(Block block)
         {
-            RowReader<T> inner = ClientArms.ReadAs.Bind<T>(block);
+            RowReader<T> inner = ClientArms.Poco.Bind<T>(block);
             return (_, count) => inner(0, count);
         }
     }
@@ -515,37 +406,17 @@ public class DifferentialSelfTests
         public override RowReader<T> Bind<T>(Block block) => (_, count) => new T[count];
     }
 
-    /// <summary>The POCO read plan as a ReadAs candidate. Its NULL failure has the text of POCO mapping.</summary>
-    private sealed class PocoAsReadAsArm : ReadArm
-    {
-        private readonly string caseId;
-        private readonly Type[] targets;
-
-        public PocoAsReadAsArm(string caseId, params Type[] targets)
-            : base("Poco as ReadAs", Tier.ReadAs)
-        {
-            this.caseId = caseId;
-            this.targets = targets;
-        }
-
-        public override bool Covers(Facet facet) => facet.Case.Id == caseId && (targets.Length == 0 || targets.Contains(facet.Target));
-
-        public override RowReader<T> Bind<T>(Block block) => ClientArms.Poco.Bind<T>(block);
-    }
-
-    /// <summary>The POCO read plan as a ReadAs candidate, with a wrong tail.</summary>
-    private sealed class WrongTailReadArm : ReadArm
+    /// <summary>The client's POCO read, with default values for the tail.</summary>
+    private sealed class ValuesTailReadArm : ReadArm
     {
         private readonly string caseId;
         private readonly Type target;
-        private readonly TailFault fault;
 
-        public WrongTailReadArm(string caseId, Type target, TailFault fault)
-            : base("Wrong tail", Tier.ReadAs)
+        public ValuesTailReadArm(string caseId, Type target)
+            : base("Values tail", Tier.Poco)
         {
             this.caseId = caseId;
             this.target = target;
-            this.fault = fault;
         }
 
         public override bool Covers(Facet facet) => facet.Case.Id == caseId && facet.Target == target;
@@ -553,9 +424,7 @@ public class DifferentialSelfTests
         public override RowReader<T> Bind<T>(Block block)
         {
             RowReader<T> inner = ClientArms.Poco.Bind<T>(block);
-            return (start, count) => start == 0 ? inner(start, count)
-                : fault == TailFault.GivesValues ? new T[count]
-                : throw new InvalidOperationException("Column 'value' is NULL at row 2 of the result.");
+            return (start, count) => start == 0 ? inner(start, count) : new T[count];
         }
     }
 

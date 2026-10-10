@@ -1,9 +1,9 @@
 using System;
-using System.IO;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
+using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
@@ -57,15 +57,12 @@ public class QBitColumnCodecTests
 
     private static IColumnCodec Codec(string type) => ColumnCodecRegistry.Default.Resolve(type, ResolveContext.ForWrite);
 
-    [Test]
-    public async Task WriteColumn_DocumentedExample_ProducesTheServersOwnBytes()
+    // The column that a query of the type reads, for one row whose bits are all zero. The buffer holds one row of 64
+    // planes of 32 elements, and the read takes only the bytes of one row of the type.
+    private static async Task<IColumn> DecodedRowAsync(string type)
     {
-        IColumnCodec codec = Codec(Float32X4);
-        using var column = new ArrayColumn<float[]>("v", Float32X4, new[] { new[] { 1f, 2f, 3f, 4f } });
-
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column));
-
-        CollectionAssert.AreEqual(DocumentedBytes, bytes);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(new byte[256]);
+        return await Codec(type).ReadColumnAsync(reader, "v", type, 1, CodecTestHarness.None);
     }
 
     [Test]
@@ -84,18 +81,14 @@ public class QBitColumnCodecTests
     {
         const string Type = "QBit(Float32, 16)";
         IColumnCodec codec = Codec(Type);
-        using var source = new ArrayColumn<float[]>("v", Type, new[]
+        using IColumn dense = DecodedColumns.Of("v", Type, new[]
         {
             new float[16],
             new[] { 1f, -2f, 3f, -4f, 5f, -6f, 7f, -8f, 9f, -10f, 11f, -12f, 13f, -14f, 15f, -16f },
             new float[16],
         });
 
-        byte[] dense = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, source));
-        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(dense);
-        using IColumn read = await codec.ReadColumnAsync(reader, "v", Type, 3, CodecTestHarness.None);
-
-        byte[] sliced = await CodecTestHarness.WriteSliceAsync(codec, read, start: 1, length: 1);
+        byte[] sliced = await CodecTestHarness.WriteStoredAsync(codec, dense, start: 1, length: 1);
 
         CollectionAssert.AreEqual(DocumentedBytes16, sliced);
     }
@@ -208,43 +201,52 @@ public class QBitColumnCodecTests
         Assert.That(() => read.GetValue(1), Throws.InstanceOf<IndexOutOfRangeException>());
     }
 
-    [Test]
-    public void Resolve_Float64_SurfacesDoubleVectorsAndSixtyFourPlanes()
+    // Int8 gives sbyte vectors. BFloat16 gives float vectors, which hold each BFloat16 value. Float64 gives double
+    // vectors. The codec has one plane for each bit of the element type.
+    [TestCase("QBit(Int8, 4)", typeof(sbyte[]), 8)]
+    [TestCase("QBit(BFloat16, 4)", typeof(float[]), 16)]
+    [TestCase("QBit(Float64, 3)", typeof(double[]), 64)]
+    public void Resolve_ElementType_SurfacesItsVectorTypeAndOnePlanePerBit(string type, Type elementType, int planes)
     {
-        IColumnCodec codec = Codec("QBit(Float64, 3)");
+        IColumnCodec codec = Codec(type);
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.ElementType, Is.EqualTo(typeof(double[])));
-            Assert.That(codec.TypeName, Is.EqualTo("QBit(Float64, 3)"));
-            Assert.That(codec.NullPlaceholder, Is.EqualTo(new double[3]));
+            Assert.That(codec.ElementType, Is.EqualTo(elementType));
+            Assert.That(codec.TypeName, Is.EqualTo(type));
+            Assert.That(((QBitColumnCodec)codec).BitWidth, Is.EqualTo(planes));
         });
     }
 
-    [Test]
-    public void Resolve_BFloat16_SurfacesWidenedFloatVectors()
+    // The codec writes a decoded column of its own layout only: the same element type, dimension and bit width. Equal
+    // body sizes do not make equal layouts: one row of QBit(Float32, 4) and one row of QBit(Float32, 8) are both 32
+    // bytes.
+    [TestCase(Float32X4, Float32X4, true)]
+    [TestCase(Float32X4, "QBit(Float32, 8)", false)]
+    [TestCase(Float32X4, "QBit(BFloat16, 4)", false)]
+    [TestCase(Float32X4, "QBit(Float64, 4)", false)]
+    [TestCase("QBit(Int8, 4)", "QBit(Int8, 4)", true)]
+    [TestCase("QBit(Int8, 4)", Float32X4, false)]
+    public async Task CanWrite_DecodedColumn_IsTrueOnlyForTheSameLayout(string codecType, string columnType, bool expected)
     {
-        IColumnCodec codec = Codec("QBit(BFloat16, 4)");
+        using IColumn decoded = await DecodedRowAsync(columnType);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.ElementType, Is.EqualTo(typeof(float[])));
-            Assert.That(codec.NullPlaceholder, Is.EqualTo(new float[4]));
-        });
+        Assert.That(Codec(codecType).CanWrite(decoded), Is.EqualTo(expected));
     }
 
+    // An insert gives the vectors that a caller builds to the converter layer.
     [Test]
-    public void CanWrite_ColumnOfAnotherElementType_IsRefused()
+    public void CanWrite_ColumnThatTheCallerBuilt_IsFalse()
     {
-        IColumnCodec codec = Codec(Float32X4);
+        using var floats = new ArrayColumn<float[]>("v", Float32X4, new[] { new[] { 1f, 2f, 3f, 4f } });
+        using var bytes = new ArrayColumn<sbyte[]>("v", "QBit(Int8, 4)", new[] { new sbyte[4] });
+        using IColumn scalars = PrimitiveColumn<float>.FromValues("v", "Float32", new[] { 1f });
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(new ArrayColumn<float[]>("v", Float32X4, new[] { new[] { 1f, 2f, 3f, 4f } })), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<double[]>("v", Float32X4, new[] { new[] { 1d } })), Is.False);
-            Assert.That(codec.CanWrite(PrimitiveColumn<float>.FromValues("v", "Float32", new[] { 1f })), Is.False);
-            Assert.That(codec.CanWriteElementType(typeof(float[])), Is.True);
-            Assert.That(codec.CanWriteElementType(typeof(double[])), Is.False);
+            Assert.That(Codec(Float32X4).CanWrite(floats), Is.False);
+            Assert.That(Codec("QBit(Int8, 4)").CanWrite(bytes), Is.False);
+            Assert.That(Codec(Float32X4).CanWrite(scalars), Is.False);
         });
     }
 
@@ -259,7 +261,7 @@ public class QBitColumnCodecTests
         });
 
         Assert.That(
-            async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)),
+            async () => await CodecTestHarness.WriteSliceAsync(codec, column, 0, column.RowCount),
             Throws.ArgumentException.With.Message.Contains("row 1").And.Message.Contains("exactly 4"));
     }
 
@@ -270,20 +272,8 @@ public class QBitColumnCodecTests
         using var column = new ArrayColumn<float[]>("v", Float32X4, new float[][] { null });
 
         Assert.That(
-            async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)),
+            async () => await CodecTestHarness.WriteSliceAsync(codec, column, 0, column.RowCount),
             Throws.ArgumentException.With.Message.Contains("Nullable"));
-    }
-
-    [Test]
-    public async Task WriteColumn_Int8Vector_ProducesTheServersOwnBytes()
-    {
-        const string Type = "QBit(Int8, 16)";
-        IColumnCodec codec = Codec(Type);
-        using var column = new ArrayColumn<sbyte[]>("v", Type, new[] { DocumentedInt8Vector });
-
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column));
-
-        CollectionAssert.AreEqual(DocumentedInt8Bytes16, bytes);
     }
 
     [Test]
@@ -297,20 +287,6 @@ public class QBitColumnCodecTests
 
         CollectionAssert.AreEqual(DocumentedInt8Vector, (sbyte[])read.GetValue(0));
         Assert.That(((IQBitColumn)read).BitWidth, Is.EqualTo(8));
-    }
-
-    [Test]
-    public void CanWrite_Int8Codec_AcceptsOnlySByteVectors()
-    {
-        IColumnCodec codec = Codec("QBit(Int8, 4)");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.ElementType, Is.EqualTo(typeof(sbyte[])));
-            Assert.That(codec.CanWrite(new ArrayColumn<sbyte[]>("v", "QBit(Int8, 4)", new[] { new sbyte[4] })), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<float[]>("v", "QBit(Int8, 4)", new[] { new float[4] })), Is.False);
-            Assert.That(codec.NullPlaceholder, Is.EqualTo(new sbyte[4]));
-        });
     }
 
     [Test]
@@ -354,7 +330,7 @@ public class QBitColumnCodecTests
         using IColumn dense = await codec.ReadColumnAsync(reader, "v", Float32X4, 1, CodecTestHarness.None);
 
         Assert.That(
-            async () => await CodecTestHarness.WriteSliceAsync(codec, dense, start, length),
+            async () => await CodecTestHarness.WriteStoredAsync(codec, dense, start, length),
             Throws.InstanceOf<ArgumentOutOfRangeException>());
     }
 
@@ -365,7 +341,7 @@ public class QBitColumnCodecTests
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(DocumentedBytes);
         using IColumn dense = await codec.ReadColumnAsync(reader, "v", Float32X4, 1, CodecTestHarness.None);
 
-        byte[] bytes = await CodecTestHarness.WriteSliceAsync(codec, dense, start: 1, length: 0);
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(codec, dense, start: 1, length: 0);
 
         Assert.That(bytes, Is.Empty);
     }

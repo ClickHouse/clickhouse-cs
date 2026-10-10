@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -30,51 +31,6 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     /// <summary>The timezone of the column: from the type string, else from the session, else UTC.</summary>
     internal ResolvedTimeZone TimeZone => timeZone;
 
-    /// <inheritdoc/>
-    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime) };
-
-    /// <inheritdoc/>
-    public object NullPlaceholder => 0u;
-
-    /// <inheritdoc/>
-    public object NullPlaceholderAs(Type writeType)
-    {
-        if (writeType == typeof(uint))
-        {
-            return NullPlaceholder;
-        }
-
-        if (writeType == typeof(DateTimeOffset))
-        {
-            return DateTimeOffset.UnixEpoch;
-        }
-
-        if (writeType == typeof(DateTime))
-        {
-            return DateTime.UnixEpoch;
-        }
-
-        throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
-    }
-
-    /// <inheritdoc/>
-    // Two DateTime values with equal ticks but different Kind are Equals-equal and encode to different instants,
-    // so both surfaces compare on the second they reduce to.
-    public object LowCardinalityKeyWriter(Type writeType)
-    {
-        if (writeType == typeof(uint))
-        {
-            return LowCardinalityKeys.Identity<uint>();
-        }
-
-        if (writeType == typeof(DateTimeOffset))
-        {
-            return LowCardinalityKeys.Projected<DateTimeOffset, uint>(ToWireValue);
-        }
-
-        return writeType == typeof(DateTime) ? LowCardinalityKeys.Projected<DateTime, uint>(ToWireValue) : null;
-    }
-
     /// <summary>Builds a <c>DateTime</c> codec, resolving its timezone from the type string or the session.</summary>
     /// <param name="node">The parsed <c>DateTime</c> type node (its optional argument is the timezone).</param>
     /// <param name="serverTimezone">The session timezone, used when the type string carries none.</param>
@@ -91,39 +47,15 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
         => DateTimeColumn.ReadAsync(reader, columnName, columnType, timeZone, rowCount, cancellationToken);
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<uint> or IColumn<DateTimeOffset> or IColumn<DateTime>;
+    // The column that a query of the type reads.
+    public bool CanWrite(IColumn column) => column is DateTimeColumn;
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        switch (column)
-        {
-            case IColumn<uint> seconds:
-                for (int i = 0; i < length; i++)
-                {
-                    writer.WriteUInt32(seconds[start + i]);
-                }
-
-                break;
-            case IColumn<DateTimeOffset> offsets:
-                for (int i = 0; i < length; i++)
-                {
-                    writer.WriteUInt32(ToWireValue(offsets[start + i]));
-                }
-
-                break;
-            case IColumn<DateTime> dateTimes:
-                for (int i = 0; i < length; i++)
-                {
-                    writer.WriteUInt32(ToWireValue(dateTimes[start + i]));
-                }
-
-                break;
-            default:
-                throw new ArgumentException(
-                    $"A DateTime column must hold uint, DateTimeOffset, or DateTime values, not {column.GetType()}.",
-                    nameof(column));
-        }
+        // The decoded column stores the wire values.
+        var stored = (DateTimeColumn)column;
+        writer.WriteBytes(MemoryMarshal.AsBytes(stored.Values.Slice(start, length)));
     }
 
     // Reduces a DateTime to the UTC instant to encode. Utc and Local already denote an instant; a Local value
@@ -170,25 +102,4 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
 
         return TimeZoneInfo.ConvertTimeToUtc(value, timeZone);
     }
-
-    private static uint ToUnixSeconds(DateTime utc)
-    {
-        // Seconds from ticks (not TotalSeconds, which is a double), then range-check: ClickHouse DateTime is a
-        // UInt32 second count, so anything before the epoch or past 2106-02-07 06:28:15 UTC cannot be
-        // represented and must fail loudly rather than silently wrap.
-        long seconds = (utc - DateTime.UnixEpoch).Ticks / TimeSpan.TicksPerSecond;
-        if (seconds < 0 || seconds > uint.MaxValue)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(utc),
-                utc,
-                "DateTime is outside the range ClickHouse DateTime can hold (1970-01-01 to 2106-02-07 06:28:15 UTC).");
-        }
-
-        return (uint)seconds;
-    }
-
-    private uint ToWireValue(DateTime value) => ToUnixSeconds(ToUtc(value, timeZone));
-
-    private static uint ToWireValue(DateTimeOffset value) => ToUnixSeconds(value.UtcDateTime);
 }

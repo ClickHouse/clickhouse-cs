@@ -41,9 +41,9 @@ public class NestedArrayInsertIntegrationTests
         {
             await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value {shape.ClickHouseType}) ENGINE = Memory");
 
-            // The ergonomic write derives each block's offsets from that block's rows alone, and hands a nested Array
-            // inner a ConcatColumn view over exactly those rows rather than driving it per row. maxRowsPerBlock: 2
-            // makes every block a strict subset, so at depth 5 this stacks four of those views over a two-row window.
+            // The write of a block derives the offsets of each level from the rows of that block alone, and gives the
+            // child of each Array level the arrays of those rows as segments. maxRowsPerBlock: 2 makes every block a
+            // strict subset, so at depth 5 four levels of segments cover a two-row window.
             // The id column pins the read-back order; the Memory engine does not guarantee it across blocks.
             IColumn[] columns = { RowIds(shape.RowCount), shape.BuildColumn("value") };
             await connection.InsertAsync($"INSERT INTO {table} (id, value) VALUES", columns, maxRowsPerBlock: 2, cancellationToken: None);

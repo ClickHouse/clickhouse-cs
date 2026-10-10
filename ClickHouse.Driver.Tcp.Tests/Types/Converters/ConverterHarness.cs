@@ -14,8 +14,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 /// <summary>
 /// Runs a derived converter and another path on the same input, so a test can compare them: reads through
 /// <see cref="Block.ReadAs{T}(string)"/>, <see cref="BoundReader{T}.Fill"/> and a compiled
-/// <see cref="ColumnReader.Emit"/>; writes through <see cref="IColumnCodec.WriteColumn(ClickHouseBinaryWriter, IColumn, int, int, IColumnWriteState)"/>
-/// and <see cref="ColumnWriter{T}.Write"/>.
+/// <see cref="ColumnReader.Emit"/>; writes through <see cref="ColumnWriter{T}.Write"/>, and reads the bytes back through
+/// the codec of the type.
 /// </summary>
 internal static class ConverterHarness
 {
@@ -26,18 +26,32 @@ internal static class ConverterHarness
 
     public static IColumnCodec Codec(string type) => ColumnCodecRegistry.Default.Resolve(type, Context);
 
-    /// <summary>Writes <paramref name="source"/> through the codec of <paramref name="type"/> and decodes it again.</summary>
+    /// <summary>Writes <paramref name="source"/> as an insert of <paramref name="type"/> writes it, and decodes it again.</summary>
     public static async Task<IColumn> DecodeAsync(string type, IColumn source)
     {
         IColumnCodec codec = Codec(type);
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteFull(w, source));
-        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
-        if (source.RowCount > 0)
+        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteFull(w, source, Context));
+        return await ReadBackAsync(type, bytes, source.RowCount, source.Name);
+    }
+
+    /// <summary>
+    /// Decodes <paramref name="rows"/> rows of <paramref name="type"/> from <paramref name="bytes"/> as a query reads a
+    /// column: the state prefix when there are rows, then the body. It fails the test when bytes are left over.
+    /// </summary>
+    public static async Task<IColumn> ReadBackAsync(string type, byte[] bytes, int rows, string name = "c")
+    {
+        IColumnCodec codec = Codec(type);
+        using var stream = new System.IO.MemoryStream(bytes);
+        using var reader = new ClickHouseBinaryReader(stream);
+        if (rows > 0)
         {
             await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
         }
 
-        return await codec.ReadColumnAsync(reader, source.Name, type, source.RowCount, CodecTestHarness.None);
+        IColumn column = await codec.ReadColumnAsync(reader, name, type, rows, CodecTestHarness.None);
+        Exception end = await CatchAsync(async () => await reader.ReadByteAsync(CodecTestHarness.None));
+        Assert.That(end?.InnerException, Is.InstanceOf<System.IO.EndOfStreamException>(), $"{type}: the read leaves bytes after the column");
+        return column;
     }
 
     /// <summary>A decoded <c>Nothing</c> column: the codec reads one byte for each row and keeps no value.</summary>
@@ -100,32 +114,7 @@ internal static class ConverterHarness
         return values;
     }
 
-    /// <summary>The current write of rows [start, start + length) of a column of <paramref name="values"/>.</summary>
-    public static Task<byte[]> WriteOldAsync<T>(string type, T[] values, int start, int length)
-        => WriteOldAsync(type, new ArrayColumn<T>("c", type, values), start, length);
-
-    public static Task<byte[]> WriteOldAsync(string type, IColumn column, int start, int length)
-    {
-        IColumnCodec codec = Codec(type);
-        return CodecTestHarness.WriteAsync(w =>
-        {
-            IColumnWriteState state = codec.BeginWrite(column, start, length);
-            try
-            {
-                codec.WriteStatePrefix(w, column, start, length, state);
-                codec.WriteColumn(w, column, start, length, state);
-            }
-            finally
-            {
-                state?.Dispose();
-            }
-        });
-    }
-
-    /// <summary>
-    /// The derived write of rows [start, start + length) of <paramref name="values"/>, from one span, for a column with
-    /// the name of the column of <see cref="WriteOldAsync{T}(string, T[], int, int)"/>.
-    /// </summary>
+    /// <summary>The derived write of rows [start, start + length) of <paramref name="values"/>, from one span, for a column named <c>c</c>.</summary>
     public static Task<byte[]> WriteNewAsync<T>(ColumnWriter<T> writer, T[] values, int start, int length)
         => CodecTestHarness.WriteAsync(w => WriteAll(writer, w, ValueSource<T>.Of(values.AsSpan(start, length), start, "c")));
 
@@ -208,6 +197,41 @@ internal static class ConverterHarness
             Assert.That(actual.Message, Is.EqualTo(expected.Message), $"{path}: message");
             Assert.That((actual as ArgumentException)?.ParamName, Is.EqualTo((expected as ArgumentException)?.ParamName), $"{path}: parameter name");
         });
+    }
+
+    /// <summary>
+    /// Asserts that a failure is the pinned one: the name of the exception type, the parameter name of an
+    /// <see cref="ArgumentException"/> (null for another exception), and the message.
+    /// </summary>
+    public static void AssertFailure(Exception actual, string exception, string parameter, string message, string path)
+    {
+        Assert.That(actual, Is.Not.Null, $"{path}: the write did not fail.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(actual.GetType().Name, Is.EqualTo(exception), $"{path}: exception type");
+            Assert.That((actual as ArgumentException)?.ParamName, Is.EqualTo(parameter), $"{path}: parameter name");
+            Assert.That(actual.Message, Is.EqualTo(message), $"{path}: message");
+        });
+    }
+
+    /// <summary>
+    /// The cases of <paramref name="cases"/> with the pinned error of each one appended to its arguments. A case is named by
+    /// its first argument and its position in the list.
+    /// </summary>
+    public static IEnumerable<TestCaseData> WithErrors(IEnumerable<TestCaseData> cases, (string Exception, string Parameter, string Message)[] errors)
+    {
+        TestCaseData[] list = cases.ToArray();
+        if (list.Length != errors.Length)
+        {
+            throw new InvalidOperationException($"{list.Length} cases have {errors.Length} pinned errors; pin one error for each case.");
+        }
+
+        for (int i = 0; i < list.Length; i++)
+        {
+            (string exception, string parameter, string message) = errors[i];
+            yield return new TestCaseData(list[i].Arguments.Concat(new object[] { exception, parameter, message }).ToArray())
+                .SetArgDisplayNames(list[i].Arguments[0]?.ToString(), $"case {i}");
+        }
     }
 
     /// <summary>Calls a generic method of <paramref name="owner"/> closed over <paramref name="typeArguments"/>.</summary>

@@ -64,15 +64,6 @@ internal sealed class DecimalColumnCodec<TMantissa, TValue> : IColumnCodec
     internal Func<TValue, int, TMantissa> Encode => encode;
 
     /// <inheritdoc/>
-    public object NullPlaceholder => default(TValue);
-
-    /// <inheritdoc/>
-    // Values that differ only in trailing zeros scale to one mantissa, so the mantissa is the relation rather
-    // than whatever the value type's own equality does with scale.
-    public object LowCardinalityKeyWriter(Type writeType)
-        => writeType == typeof(TValue) ? LowCardinalityKeys.Projected<TValue, TMantissa>(value => encode(value, scale)) : null;
-
-    /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         int s = scale;
@@ -90,26 +81,25 @@ internal sealed class DecimalColumnCodec<TMantissa, TValue> : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<TValue>;
+    // The column that a query of the type reads.
+    public bool CanWrite(IColumn column) => column is ArrayColumn<TValue>;
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
         if (length == 0)
         {
             return;
         }
 
-        // Read per element through the indexer so a scattered write-path view writes with no materialized copy.
-        // Rent the mantissa scratch rather than allocating per call; the rented array may be larger, so only the
-        // populated prefix is written.
-        var typed = (IColumn<TValue>)column;
+        // The mantissa scratch is rented; the rented array may be larger, so only the populated prefix is written.
+        ReadOnlySpan<TValue> values = ((ArrayColumn<TValue>)column).Values.Slice(start, length);
         TMantissa[] mantissas = ArrayPool<TMantissa>.Shared.Rent(length);
         try
         {
             for (int i = 0; i < length; i++)
             {
-                TMantissa mantissa = encode(typed[start + i], scale);
+                TMantissa mantissa = encode(values[i], scale);
                 if (mantissa.CompareTo(minMantissa) < 0 || mantissa.CompareTo(maxMantissa) > 0)
                 {
                     throw new OverflowException($"Value at index {i} exceeds the declared precision {precision} of decimal type '{TypeName}'.");

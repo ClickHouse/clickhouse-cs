@@ -13,9 +13,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 /// <summary>
 /// The differential tests: for every case of <see cref="DifferentialCases"/>, each candidate arm of
 /// <see cref="DifferentialRegistry.Current"/> must give the outcome of the client's entry point of its tier (the
-/// baseline), or the outcome that is declared for the facet. The converter arms run their trees through
-/// <c>Fill</c> and through <c>Emit</c>, so the two paths must give the same outcomes. No server is necessary. See
-/// <see cref="DifferentialEngine"/>.
+/// baseline). The POCO reads run their trees through <c>Emit</c> (the baseline) and through <c>Fill</c>, so the two
+/// paths must give the same outcomes. No server is necessary. See <see cref="DifferentialEngine"/>.
 /// </summary>
 [TestFixture]
 public class DifferentialTests
@@ -28,32 +27,32 @@ public class DifferentialTests
     {
         [(Tier.ReadAs, "Failed")] = 23,
         [(Tier.ReadAs, "Refused")] = 19,
-        [(Tier.ReadAs, "Values")] = 525,
+        [(Tier.ReadAs, "Values")] = 545,
         [(Tier.Poco, "Failed")] = 23,
         [(Tier.Poco, "Refused")] = 19,
-        [(Tier.Poco, "Values")] = 525,
+        [(Tier.Poco, "Values")] = 545,
         [(Tier.CanRead, "Answer False")] = 19,
-        [(Tier.CanRead, "Answer True")] = 548,
-        [(Tier.Write, "Bytes")] = 789,
+        [(Tier.CanRead, "Answer True")] = 568,
+        [(Tier.Write, "Bytes")] = 815,
         [(Tier.Write, "Unavailable")] = 42,
         [(Tier.CanWrite, "Answer False")] = 43,
-        [(Tier.CanWrite, "Answer True")] = 788,
-        [(Tier.PocoWrite, "Bytes")] = 763,
+        [(Tier.CanWrite, "Answer True")] = 814,
+        [(Tier.PocoWrite, "Bytes")] = 789,
         [(Tier.PocoWrite, "Failed")] = 2,
         [(Tier.PocoWrite, "Refused")] = 24,
         [(Tier.PocoWrite, "Unavailable")] = 42,
         [(Tier.PocoCanWrite, "Answer False")] = 43,
-        [(Tier.PocoCanWrite, "Answer True")] = 788,
-        [(Tier.UntypedWrite, "Bytes")] = 763,
+        [(Tier.PocoCanWrite, "Answer True")] = 814,
+        [(Tier.UntypedWrite, "Bytes")] = 789,
         [(Tier.UntypedWrite, "Failed")] = 2,
         [(Tier.UntypedWrite, "Refused")] = 24,
         [(Tier.UntypedWrite, "Unavailable")] = 42,
         [(Tier.UntypedCanWrite, "Answer False")] = 43,
-        [(Tier.UntypedCanWrite, "Answer True")] = 788,
+        [(Tier.UntypedCanWrite, "Answer True")] = 814,
     };
 
     [TestCaseSource(typeof(DifferentialCases), nameof(DifferentialCases.All))]
-    public void Run_Case_EveryCandidateGivesTheBaselineOutcomeOrTheDeclaredOne(DifferentialCase testCase)
+    public void Run_Case_EveryCandidateGivesTheBaselineOutcome(DifferentialCase testCase)
     {
         CaseReport report = DifferentialEngine.ForCurrentRegistry(testCase);
 
@@ -70,7 +69,7 @@ public class DifferentialTests
             Assert.That(bySource[CaseSource.InsertRoundTrip].Count(), Is.EqualTo(DifferentialCases.InsertRoundTripCount), "InsertRoundTripCase.CasesFor(TcpFeature.All)");
             Assert.That(bySource[CaseSource.CompositeLiftMatrix].Count(), Is.EqualTo(DifferentialCases.CompositeLiftMatrixCount), "CompositeLiftMatrixTests.Cases()");
             Assert.That(bySource[CaseSource.ColumnReadProjection].Count(), Is.EqualTo(DifferentialCases.ColumnReadProjectionCount), "the read targets table of DifferentialCases");
-            Assert.That(bySource[CaseSource.ColumnReadScenario].Count(), Is.EqualTo(DifferentialCases.ColumnReadScenarioCount), "the scenarios of ColumnReadProjectionTests");
+            Assert.That(bySource[CaseSource.ColumnReadScenario].Count(), Is.EqualTo(DifferentialCases.ColumnReadScenarioCount), "the scenarios of DifferentialCases");
             Assert.That(bySource.Sum(g => g.Count()), Is.EqualTo(DifferentialCases.All().Count()), "every case has one of these sources");
         });
     }
@@ -186,6 +185,22 @@ public class DifferentialTests
         Assert.That(differences, Is.Empty);
     }
 
+    // A decoded column is a column that its codec writes from its storage (decision D3): the insert gives it to the codec,
+    // with no converter tree. Its element type is the canonical CLR type of the codec.
+    [Test]
+    public void Run_EveryCase_TheCodecWritesTheDecodedColumnFromItsStorage()
+    {
+        string[] failures = DifferentialCases.All()
+            .Select(DifferentialEngine.ForCurrentRegistry)
+            .Select(report => (report.Case, Source: Baseline(report, Tier.Write, report.Case.WriteInputs[0].Label).All))
+            .Where(x => x.Source?.Kind == OutcomeKind.Bytes)
+            .Select(x => StorageFailure(x.Case, x.Source.Bytes))
+            .Where(failure => failure is not null)
+            .ToArray();
+
+        Assert.That(failures, Is.Empty);
+    }
+
     [Test]
     public void Run_EveryCase_EveryWriteOfTheDecodedColumnGivesTheValuesOfTheSourceRows()
     {
@@ -240,12 +255,33 @@ public class DifferentialTests
     // The values of the rows that the bytes of a column write hold (the state prefix and the body).
     private static object[] DecodeValues(string columnType, byte[] bytes, int rows)
     {
+        using IColumn column = Decode(columnType, bytes, rows);
+        return Enumerable.Range(0, rows).Select(column.GetValue).ToArray();
+    }
+
+    // Why the codec of the case does not write the column that it decodes from the bytes from its storage, or null.
+    private static string StorageFailure(DifferentialCase testCase, byte[] bytes)
+    {
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(testCase.ColumnType, DifferentialEngine.Context);
+        using IColumn column = Decode(testCase.ColumnType, bytes, testCase.RowCount);
+        if (!codec.CanWrite(column))
+        {
+            return $"{testCase.Id}: the codec does not write the decoded {column.GetType().Name} from its storage.";
+        }
+
+        return column.ElementType == codec.ElementType
+            ? null
+            : $"{testCase.Id}: the decoded column has the element type {column.ElementType}, and the codec {codec.ElementType}.";
+    }
+
+    // The column that a query reads from the bytes of a column write (the state prefix and the body).
+    private static IColumn Decode(string columnType, byte[] bytes, int rows)
+    {
         IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(columnType, DifferentialEngine.Context);
         using var stream = new MemoryStream(bytes);
         using var reader = new ClickHouseBinaryReader(stream);
         codec.ReadStatePrefixAsync(reader, CancellationToken.None).AsTask().GetAwaiter().GetResult();
-        using IColumn column = codec.ReadColumnAsync(reader, "value", columnType, rows, CancellationToken.None).AsTask().GetAwaiter().GetResult();
-        return Enumerable.Range(0, rows).Select(column.GetValue).ToArray();
+        return codec.ReadColumnAsync(reader, "value", columnType, rows, CancellationToken.None).AsTask().GetAwaiter().GetResult();
     }
 
     [Test]

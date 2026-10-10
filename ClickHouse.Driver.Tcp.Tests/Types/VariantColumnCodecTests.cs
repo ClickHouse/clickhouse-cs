@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Net;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -27,21 +26,6 @@ public class VariantColumnCodecTests
         0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // UInt64 run, rows 0 and 3: 42
         0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //                           7
     };
-
-    [Test]
-    public async Task WriteStatePrefixAndColumn_DocumentedExample_ProducesTheDocumentedBytes()
-    {
-        IColumnCodec codec = Resolve(StringUInt64);
-        var column = new ArrayColumn<object>("v", StringUInt64, new object[] { 42UL, "hi", null, 7UL, "yo" });
-
-        byte[] bytes = await CodecTestHarness.WriteAsync(w =>
-        {
-            codec.WriteStatePrefix(w, column);
-            codec.WriteColumn(w, column);
-        });
-
-        CollectionAssert.AreEqual(DocumentedBytes, bytes);
-    }
 
     [Test]
     public async Task ReadColumn_DocumentedBytes_ReconstructsValuesAndNull()
@@ -72,11 +56,7 @@ public class VariantColumnCodecTests
         using IColumn dense = await codec.ReadColumnAsync(reader, "v", StringUInt64, 5, CodecTestHarness.None);
 
         // The read-back VariantColumn is the zero-copy write source: writing it must reproduce the exact bytes.
-        byte[] bytes = await CodecTestHarness.WriteAsync(w =>
-        {
-            codec.WriteStatePrefix(w, dense);
-            codec.WriteColumn(w, dense);
-        });
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(codec, dense, 0, 5, prefix: true);
 
         CollectionAssert.AreEqual(DocumentedBytes, bytes);
     }
@@ -117,40 +97,9 @@ public class VariantColumnCodecTests
     public void Create_DynamicAlternative_Throws()
         => Assert.Throws<FormatException>(() => Resolve("Variant(String, Dynamic)"));
 
-    [Test]
-    public void WriteColumn_ValueWithNoMatchingAlternative_Throws()
-    {
-        IColumnCodec codec = Resolve(StringUInt64);
-        var column = new ArrayColumn<object>("v", StringUInt64, new object[] { 3.14 }); // double matches neither String nor UInt64
-
-        Assert.ThrowsAsync<ArgumentException>(async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
-    }
-
-    // The refusal lists what the variant does take, so it must include a type a collision settles: IPv4 and IPv6
-    // both surface IPAddress, and Variant(IPv4, IPv6, String) does write an address of either family. Listing only
-    // the alternatives that own their CLR type outright would report IPAddress as unsupported.
-    [Test]
-    public void WriteColumn_ValueWithNoMatchingAlternative_NamesTheTypesACollisionSettles()
-    {
-        const string type = "Variant(IPv4, IPv6, String)";
-        IColumnCodec codec = Resolve(type);
-        var column = new ArrayColumn<object>("v", type, new object[] { 3.14 });
-
-        ArgumentException refusal = Assert.ThrowsAsync<ArgumentException>(
-            async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
-        Assert.Multiple(() =>
-        {
-            Assert.That(refusal.Message, Does.Contain(typeof(IPAddress).ToString()));
-            Assert.That(refusal.Message, Does.Contain(typeof(string).ToString()));
-        });
-    }
-
-    // Several alternatives can share a CLR element type even though the server forbids duplicate alternative types
-    // — they only have to surface the same one. JSON and String are both string; Int64, DateTime64 and Time64 are
-    // all long; Geometry collides twice over (Ring/LineString, Polygon/MultiLineString). No alternative claims
-    // such a value, and picking one would store it as the wrong type with no error. The message names the
-    // alternatives it could not choose between, and prescribes nothing: there is no way for a caller to say which
-    // one is meant.
+    // Two or more alternatives can take the same CLR type: JSON and String both take a string, and DateTime64, Int64 and
+    // Time64 all take a long. No alternative claims such a value, so the insert refuses it. The message names the
+    // alternatives and does not tell the caller what to use, because the caller cannot say which alternative is meant.
     [TestCaseSource(nameof(AmbiguousAlternativeCases))]
     public void WriteColumn_ValueWhoseClrTypeSeveralAlternativesShare_ThrowsNamingThem(string type, object ambiguous, string[] expectedNames)
     {
@@ -158,7 +107,7 @@ public class VariantColumnCodecTests
         var column = new ArrayColumn<object>("v", type, new[] { ambiguous });
 
         ArgumentException refusal = Assert.ThrowsAsync<ArgumentException>(
-            async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
+            async () => await CodecTestHarness.WriteSliceAsync(codec, column, 0, column.RowCount));
         Assert.Multiple(() =>
         {
             foreach (string name in expectedNames)
@@ -170,88 +119,73 @@ public class VariantColumnCodecTests
         });
     }
 
-    // A collision the value itself settles: IPv4 and IPv6 both surface IPAddress, but an address carries its
-    // family, so exactly one alternative claims it and the write goes through. This is the only one of the four
-    // collision families a value-level test can resolve — a string says nothing about JSON versus String, a long
-    // nothing about Int64 versus DateTime64, and a Ring nothing about LineString.
-    [TestCase("127.0.0.1", 0, TestName = "An IPv4 address goes to the IPv4 alternative")]
-    [TestCase("::1", 1, TestName = "An IPv6 address goes to the IPv6 alternative")]
-    public async Task WriteColumn_IpValueWhoseFamilyNamesOneAlternative_WritesThatDiscriminator(string address, byte expectedDiscriminator)
-    {
-        const string Type = "Variant(IPv4, IPv6, String)";
-        IColumnCodec codec = Resolve(Type);
-        var column = new ArrayColumn<object>("v", Type, new object[] { IPAddress.Parse(address) });
-
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column));
-        Assert.That(bytes[0], Is.EqualTo(expectedDiscriminator));
-    }
-
-    // The refusal above is per value, not per column: an IColumn<object> says nothing about the runtime types it
-    // holds, so refusing the whole column would also reject every unambiguous value in it. A string is unambiguous
-    // in Variant(IPv4, IPv6, String) and a UInt64 is in Variant(JSON, String, UInt64), and both still write.
+    // The refusal above is per value, not per column: a column of object values does not tell the runtime types that it
+    // holds, so a refusal of the column would also refuse each value that only one alternative takes. A UInt64 in
+    // Variant(JSON, String, UInt64) and a string in Variant(DateTime64(3), Int64, String, Time64(3)) are written.
     [TestCaseSource(nameof(UnambiguousAlternativeCases))]
     public async Task WriteColumn_ValueWhoseClrTypeOneAlternativeHas_WritesEvenWhenOthersCollide(string type, object unambiguous)
     {
         IColumnCodec codec = Resolve(type);
         var column = new ArrayColumn<object>("v", type, new[] { unambiguous });
 
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column));
+        byte[] bytes = await CodecTestHarness.WriteSliceAsync(codec, column, 0, column.RowCount);
         Assert.That(bytes, Is.Not.Empty);
     }
 
-    // Dense discriminators are reusable only when both Variant types have the same ordered alternatives.
+    // The codec writes a dense column only when its discriminators name the same alternatives in the same order, and
+    // the codec of each alternative writes the child column from its storage. An insert gives each other column to the
+    // converter layer.
     [Test]
-    public async Task WriteColumn_DenseColumnOfAnotherVariant_WritesThisCodecsDiscriminatorsAndNotTheColumnsOwn()
+    public void CanWrite_DenseColumn_IsTrueOnlyForTheSameAlternativesWithStoredChildren()
     {
         IColumnCodec codec = Resolve(StringUInt64);
-        using var numbers = new ArrayColumn<ulong>("v", "UInt64", new ulong[] { 42 });
-        using var text = new ArrayColumn<string>("v", "String", new[] { "hi" });
+        using IColumn text = DecodedColumns.Of("v", "String", "hi");
+        using IColumn numbers = DecodedColumns.Of("v", "UInt64", 42UL);
+        using var callerNumbers = new ArrayColumn<ulong>("v", "UInt64", new ulong[] { 42 });
 
-        // Source and target assign opposite indices to UInt64 and String.
-        using var dense = new VariantColumn(
-            "v", "Variant(UInt64, String)", new byte[] { 0, 1 }, new IColumn[] { numbers, text },
+        using var same = new VariantColumn(
+            "v", StringUInt64, new byte[] { 1, 0 }, new[] { text, numbers },
+            rowCount: 2, pooledDiscriminators: false, ownsColumns: false);
+        using var otherOrder = new VariantColumn(
+            "v", "Variant(UInt64, String)", new byte[] { 0, 1 }, new[] { numbers, text },
+            rowCount: 2, pooledDiscriminators: false, ownsColumns: false);
+        using var callerChild = new VariantColumn(
+            "v", StringUInt64, new byte[] { 1, 0 }, new IColumn[] { text, callerNumbers },
             rowCount: 2, pooledDiscriminators: false, ownsColumns: false);
 
-        byte[] bytes = await CodecTestHarness.WriteAsync(w =>
+        Assert.Multiple(() =>
         {
-            codec.WriteStatePrefix(w, dense);
-            codec.WriteColumn(w, dense);
+            Assert.That(codec.CanWrite(same), Is.True, "the decoded children in the order of the type");
+            Assert.That(codec.CanWrite(otherOrder), Is.False, "the same alternatives in another order");
+            Assert.That(codec.CanWrite(callerChild), Is.False, "a child column that the caller built");
         });
-
-        Assert.That(bytes, Is.EqualTo(new byte[]
-        {
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // state prefix: discriminators mode = 0 (BASIC)
-            0x01, 0x00,                                     // row 0 is the UInt64 (1 here), row 1 the String (0)
-            0x02, 0x68, 0x69,                               // String run: len = 2, "hi"
-            0x2A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // UInt64 run: 42
-        }));
     }
 
-    // Matching dense columns retain their discriminator when CLR types cannot distinguish alternatives.
+    // A dense column of the same alternatives keeps its discriminators, so the codec writes a value that the converter
+    // layer cannot place by its CLR type: JSON and String both take a string.
     [Test]
-    public void WriteColumn_DenseColumnOfThisVariant_WritesWhereScatteringTheSameValuesCouldNotChoose()
+    public async Task WriteColumn_DenseColumnOfThisVariant_WritesWhereScatteringTheSameValuesCouldNotChoose()
     {
         const string type = "Variant(JSON, String, UInt64)";
         IColumnCodec codec = Resolve(type);
-        using var json = new ArrayColumn<string>("v", "JSON", Array.Empty<string>());
-        using var text = new ArrayColumn<string>("v", "String", new[] { "hi" });
-        using var numbers = new ArrayColumn<ulong>("v", "UInt64", Array.Empty<ulong>());
+        using IColumn json = DecodedColumns.Of("v", "JSON", Array.Empty<string>());
+        using IColumn text = DecodedColumns.Of("v", "String", "hi");
+        using IColumn numbers = DecodedColumns.Of("v", "UInt64", Array.Empty<ulong>());
         using var dense = new VariantColumn(
-            "v", type, new byte[] { 1 }, new IColumn[] { json, text, numbers },
+            "v", type, new byte[] { 1 }, new[] { json, text, numbers },
             rowCount: 1, pooledDiscriminators: false, ownsColumns: false);
 
         var boxed = new ArrayColumn<object>("v", type, new object[] { "hi" });
 
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(codec, dense, 0, 1, prefix: true);
+
         Assert.Multiple(() =>
         {
-            Assert.DoesNotThrowAsync(async () => await CodecTestHarness.WriteAsync(w =>
-            {
-                codec.WriteStatePrefix(w, dense);
-                codec.WriteColumn(w, dense);
-            }));
+            // The discriminators mode, the JSON version, the discriminator of String (1), the String run "hi".
+            Assert.That(Convert.ToHexString(bytes), Is.EqualTo("0000000000000000" + "0100000000000000" + "01" + "026869"));
 
             Assert.ThrowsAsync<ArgumentException>(
-                async () => await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, boxed)),
+                async () => await CodecTestHarness.WriteSliceAsync(codec, boxed, 0, boxed.RowCount),
                 "the same value boxed is ambiguous between JSON and String, which is what makes the dense path observable");
         });
     }
@@ -261,20 +195,14 @@ public class VariantColumnCodecTests
         yield return new TestCaseData("Variant(JSON, String, UInt64)", (object)"{}", new[] { "JSON", "String" })
             .SetName("JSON and String are both string");
 
-        // Three, not two. Striking a colliding type from the map must not free the key for the next alternative to
-        // claim: an odd-sized collision group would then resolve to its last member and write every such value as
-        // that alternative. All three of these surface the raw long the wire carries.
+        // Three alternatives, not two: an odd number of alternatives that take the same CLR type is also a refusal, and
+        // the value does not go to the last of them.
         yield return new TestCaseData("Variant(DateTime64(3), Int64, Time64(3))", (object)5L, new[] { "DateTime64(3)", "Int64", "Time64(3)" })
             .SetName("Int64, DateTime64 and Time64 are all long");
-
-        // The structural pairs inside Geometry, which no value-level test can separate.
-        yield return new TestCaseData("Geometry", (object)new[] { (0d, 0d), (1d, 1d) }, new[] { "LineString", "Ring" })
-            .SetName("LineString and Ring are both Array(Point)");
     }
 
     private static IEnumerable<TestCaseData> UnambiguousAlternativeCases()
     {
-        yield return new TestCaseData("Variant(IPv4, IPv6, String)", (object)"abc").SetName("String beside the colliding IP pair");
         yield return new TestCaseData("Variant(JSON, String, UInt64)", (object)7UL).SetName("UInt64 beside the colliding text pair");
         yield return new TestCaseData("Variant(DateTime64(3), Int64, String, Time64(3))", (object)"abc").SetName("String beside the colliding long trio");
     }
@@ -288,10 +216,10 @@ public class VariantColumnCodecTests
         await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
         using IColumn dense = await codec.ReadColumnAsync(reader, "v", StringUInt64, 5, CodecTestHarness.None);
 
-        // Slice rows [1, 3): "hi" (String) and NULL. The discriminators are 00 FF; the String run is cut to just
-        // the in-slice value ("hi", leaving out "yo" at row 4), and the UInt64 run is empty because both its rows
-        // (0 and 3) fall outside the slice.
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, dense, 1, 2));
+        // Slice rows [1, 3): "hi" (String) and NULL. The discriminators are 00 FF. The String run holds only the value
+        // in the slice ("hi", not "yo" of row 4). The UInt64 run is empty, because its rows (0 and 3) are outside the
+        // slice.
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(codec, dense, 1, 2);
 
         byte[] expected = { 0x00, 0xFF, 0x02, 0x68, 0x69 };
         CollectionAssert.AreEqual(expected, bytes);
@@ -306,9 +234,9 @@ public class VariantColumnCodecTests
         await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
         using IColumn dense = await codec.ReadColumnAsync(reader, "v", StringUInt64, 5, CodecTestHarness.None);
 
-        // Slice rows [3, 5): 7 (UInt64) and "yo" (String). Both rows are the *second* value of their run, so each
-        // run must be written from offset 1 — the case a slice starting at row 0 cannot catch.
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, dense, 3, 2));
+        // Slice rows [3, 5): 7 (UInt64) and "yo" (String). Each row is the second value of its run, so each run starts
+        // at offset 1. A slice that starts at row 0 cannot show this.
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(codec, dense, 3, 2);
 
         byte[] expected =
         {

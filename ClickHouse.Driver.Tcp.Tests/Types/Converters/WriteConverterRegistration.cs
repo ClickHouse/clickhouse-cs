@@ -9,52 +9,45 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// Runs the write combinators in the differential tests, for every case whose column type is not a leaf
-/// (<see cref="LeafConverterRegistration"/> runs the leaf cases): writes from the built and read-back columns, for all
-/// rows and for a tail that starts above row 0, and the answer of the derivation. Each arm must give the bytes and
-/// answers of the client's insert write and of <c>ClickHouseTcpTypes.CanWrite</c>.
+/// Runs an independent insert write in the differential tests, for every case: the write of the built and read-back
+/// columns, for all rows and for a tail that starts above row 0. Each must give the bytes of the client's insert write.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The write arm routes a column as the insert tier does: a column that the codec writes from its own storage (a dense
-/// <c>Tuple</c>, <c>Nested</c> or <c>Variant</c> column that a case builds) goes to the codec, and every other column
-/// through the derived tree (decision D3). The decoded input is not run here: a decoded column is written from its own
-/// storage.
+/// The arm routes a column as the insert does: a column that the codec writes from its own storage (a dense
+/// <c>Nested</c> or <c>Variant</c> column that a case builds from decoded columns) goes to the codec, and every other
+/// column through the derived tree (decision D3). It gathers the values of the slice through the indexer of the column,
+/// and not through the source of <see cref="Format.InsertColumnWrite"/> (a span, the stored values, or the indexer,
+/// with the start, the length and the first row), so it checks the slicing of the insert. The decoded input is not run
+/// here: a decoded column is written from its own storage.
 /// </para>
 /// <para>
-/// A refusal of the derivation is an <see cref="ArmRefusal"/>, as in <see cref="LeafConverterRegistration"/>.
+/// A refusal of the derivation is an <see cref="ArmRefusal"/>: its message has another text than the refusal of the
+/// client's insert, and the refusal texts have their own tests.
 /// </para>
 /// </remarks>
 internal sealed class WriteConverterRegistration : IDifferentialRegistration
 {
-    // The Write facets of the case list whose column type is not a leaf, without the decoded inputs, and the CanWrite
-    // facets of those cases. A new case changes these counts.
-    internal const int CompositeWriteFacets = 349;
-    internal const int CompositeCanWriteFacets = 573;
+    // The Write facets of the case list, without the decoded inputs. A new case changes this count.
+    internal const int WriteFacets = 559;
 
     /// <inheritdoc/>
-    public void Register(DifferentialRegistry registry)
-    {
-        registry.Add(new CompositeWriteArm(), CompositeWriteFacets);
-        registry.Add(new CanWriteArm(), CompositeCanWriteFacets);
-    }
+    public void Register(DifferentialRegistry registry) => registry.Add(new IndexerWriteArm(), WriteFacets);
 
-    private static bool IsComposite(Facet facet) => !LeafConverterRegistration.IsLeafType(facet.Case.ColumnType);
-
-    // Writes a slice through Begin, WritePrefix and Write, from one span of the column's values.
-    private sealed class CompositeWriteArm : WriteArm
+    // Writes a slice through Begin, WritePrefix and Write, from one span of the values of the slice.
+    private sealed class IndexerWriteArm : WriteArm
     {
-        public CompositeWriteArm()
-            : base("Composite write converters: Write")
+        public IndexerWriteArm()
+            : base("Insert write through the indexer")
         {
         }
 
-        public override bool Covers(Facet facet) => facet.Input.Kind != WriteInputKind.Decoded && IsComposite(facet);
+        public override bool Covers(Facet facet) => facet.Input.Kind != WriteInputKind.Decoded;
 
         public override SliceWriter Bind<T>(IColumn<T> column, string columnType, ResolveContext context)
         {
             IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(columnType, context);
-            if (codec.WritesFromStorage(column))
+            if (codec.CanWrite(column))
             {
                 return (output, start, length) => WriteThroughCodec(codec, column, output, start, length);
             }
@@ -99,19 +92,5 @@ internal sealed class WriteConverterRegistration : IDifferentialRegistration
                 state?.Dispose();
             }
         }
-    }
-
-    // CanWrite: whether the derivation succeeds, with the context of ClickHouseTcpTypes.
-    private sealed class CanWriteArm : AnswerArm
-    {
-        public CanWriteArm()
-            : base("Composite write converters: CanWrite", Tier.CanWrite)
-        {
-        }
-
-        public override bool Covers(Facet facet) => IsComposite(facet);
-
-        public override bool Answer(string columnType, Type elementType)
-            => ConverterDerivation.Default.Derive(columnType, ResolveContext.ForWrite, elementType, ConversionDirection.Write).Succeeded;
     }
 }

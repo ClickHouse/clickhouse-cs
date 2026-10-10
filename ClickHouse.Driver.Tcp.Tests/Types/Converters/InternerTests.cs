@@ -13,8 +13,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
 /// Covers the LowCardinality interners: the reserved slots, the float bit patterns, growth, the lone-surrogate case
-/// and the CLR-key fast path with its probe. A dictionary that an interner builds and a leaf encodes gives the bytes
-/// of the current LowCardinality write.
+/// and the CLR-key fast path with its probe. A dictionary that an interner builds and a leaf encodes gives pinned bytes:
+/// the entries in the order of first use, and the key width of the dictionary size.
 /// </summary>
 [TestFixture]
 public class InternerTests
@@ -164,44 +164,47 @@ public class InternerTests
 
     /// <summary>
     /// Each lone surrogate encodes as EF BF BD, so two different strings have the same canonical bytes and share one
-    /// entry. The current writer keys on the string and gives them two entries. Both dictionaries read back the same.
+    /// entry.
     /// </summary>
     [Test]
-    public async Task ClrKeyedByteInterner_TwoLoneSurrogates_ShareOneEntry()
+    public void ClrKeyedByteInterner_TwoLoneSurrogates_ShareOneEntry()
     {
         string[] values = { "\uD800", "\uDBFF", "\uD800" };
         using var interner = new ClrKeyedByteInterner<string>((BytesLeafWriter<string>)Leaf<string>("String"), nullable: false);
 
         int[] keys = values.Select(value => interner.Intern(value)).ToArray();
-        byte[] current = await ConverterHarness.WriteOldAsync("LowCardinality(String)", values, 0, values.Length);
 
         Assert.Multiple(() =>
         {
             Assert.That(keys, Is.EqualTo(new[] { 1, 1, 1 }));
             Assert.That(interner.Entries.Count, Is.EqualTo(2));
             Assert.That(interner.Entries.Entry(1).ToArray(), Is.EqualTo(new byte[] { 0xEF, 0xBF, 0xBD }));
-            Assert.That(DictionarySize(current), Is.EqualTo(3), "the current writer keeps an entry for each string");
         });
     }
 
     /// <summary>When the first values do not repeat, the probe turns the CLR lookup off. The keys stay correct after it.</summary>
+    /// <summary>
+    /// Distinct values: the CLR lookup stops at the miss that passes half of the probe, as no later lookup of the probe can
+    /// keep it, and the keys go on in order.
+    /// </summary>
     [Test]
-    public void ClrKeyedByteInterner_DistinctValues_TurnsTheClrLookupOffAfterTheProbe()
+    public void ClrKeyedByteInterner_DistinctValues_TurnsTheClrLookupOffAtTheMissThatPassesHalfOfTheProbe()
     {
         using var interner = new ClrKeyedByteInterner<string>((BytesLeafWriter<string>)Leaf<string>("String"), nullable: false);
-        int probe = ClrKeyedByteInterner<string>.ProbeValues;
+        int half = ClrKeyedByteInterner<string>.ProbeValues / 2;
 
-        int[] first = Enumerable.Range(0, probe - 1).Select(i => interner.Intern($"v{i}")).ToArray();
-        bool onBefore = interner.UsesClrKeys;
-        int last = interner.Intern($"v{probe - 1}");
+        int[] first = Enumerable.Range(0, half).Select(i => interner.Intern($"v{i}")).ToArray();
+        bool onAtHalf = interner.UsesClrKeys;
+        int next = interner.Intern($"v{half}");
         bool onAfter = interner.UsesClrKeys;
+        int[] later = Enumerable.Range(half + 1, half).Select(i => interner.Intern($"v{i}")).ToArray();
         int repeated = interner.Intern("v7");
 
         Assert.Multiple(() =>
         {
-            Assert.That(onBefore, Is.True);
+            Assert.That(onAtHalf, Is.True);
             Assert.That(onAfter, Is.False);
-            Assert.That(first.Append(last), Is.EqualTo(Enumerable.Range(1, probe)));
+            Assert.That(first.Append(next).Concat(later), Is.EqualTo(Enumerable.Range(1, (2 * half) + 1)));
             Assert.That(repeated, Is.EqualTo(8), "the byte interner still finds a value that the CLR lookup knew");
         });
     }
@@ -265,6 +268,30 @@ public class InternerTests
         });
     }
 
+    /// <summary>
+    /// After a probe of repeating values the CLR lookup stays on. A value that the leaf refuses then leaves no key behind,
+    /// a repeated value is found, and a new value takes the next key.
+    /// </summary>
+    [Test]
+    public void ClrKeyedByteInterner_RefusedValueAfterTheProbe_LeavesNoClrKey()
+    {
+        using var interner = new ClrKeyedByteInterner<string>(new RefusingLeaf("bad"), nullable: false);
+        for (int i = 0; i < ClrKeyedByteInterner<string>.ProbeValues; i++)
+        {
+            interner.Intern("good");
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(interner.UsesClrKeys, Is.True);
+            Assert.Throws<ArgumentException>(() => interner.Intern("bad"));
+            Assert.Throws<ArgumentException>(() => interner.Intern("bad"));
+            Assert.That(interner.Intern("good"), Is.EqualTo(1));
+            Assert.That(interner.Intern("other"), Is.EqualTo(2));
+            Assert.That(interner.Intern("other"), Is.EqualTo(2));
+        });
+    }
+
     [Test]
     public void ClrKeyedByteInterner_NullString_ThrowsAsTheStringWriteDoes()
     {
@@ -274,101 +301,240 @@ public class InternerTests
         Assert.That(thrown.ParamName, Is.EqualTo("value"));
     }
 
-    // The dictionary that an interner builds and a leaf encodes gives the bytes of the current LowCardinality write:
-    // the same entries, in the same order, with the same key width.
+    /// <summary>
+    /// A Guid is looked up by itself, and converted to its wire bytes once for each distinct value. The keys are the keys
+    /// of the canonical interner, which also holds the entries.
+    /// </summary>
     [Test]
-    public async Task Dictionary_StringsFromText_GiveTheCurrentLowCardinalityBytes()
+    public void ClrKeyedFixedInterner_RepeatingGuids_KeepsTheClrLookupAndTheCanonicalEntries()
+    {
+        var leaf = (FixedLeafWriter<Guid, UInt128>)Leaf<Guid>("UUID");
+        using var interner = new ClrKeyedFixedInterner<Guid, UInt128>(leaf, nullable: false);
+        Guid[] distinct = Enumerable.Range(1, 100).Select(i => new Guid(i, 0, 0, new byte[8])).ToArray();
+
+        int[] keys = Enumerable.Range(0, 5_000).Select(i => interner.Intern(distinct[i % 100])).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(interner.UsesClrKeys, Is.True);
+            Assert.That(keys, Is.EqualTo(Enumerable.Range(0, 5_000).Select(i => (i % 100) + 1)));
+            Assert.That(interner.Entries.Entries.ToArray(), Is.EqualTo(new[] { UInt128.Zero }.Concat(distinct.Select((g, i) => leaf.ToCanonical(g, i)))));
+        });
+    }
+
+    /// <summary>When the first values do not repeat, the probe turns the CLR lookup off. The keys stay correct after it.</summary>
+    [Test]
+    public void ClrKeyedFixedInterner_DistinctValues_TurnsTheClrLookupOffAtTheMissThatPassesHalfOfTheProbe()
+    {
+        using var interner = new ClrKeyedFixedInterner<Guid, UInt128>((FixedLeafWriter<Guid, UInt128>)Leaf<Guid>("UUID"), nullable: false);
+        int half = ClrKeyedFixedInterner<Guid, UInt128>.ProbeValues / 2;
+        Guid[] values = Enumerable.Range(1, (2 * half) + 1).Select(i => new Guid(i, 0, 0, new byte[8])).ToArray();
+
+        int[] first = values.Take(half).Select(interner.Intern).ToArray();
+        bool onAtHalf = interner.UsesClrKeys;
+        int next = interner.Intern(values[half]);
+        bool onAfter = interner.UsesClrKeys;
+        int[] later = values.Skip(half + 1).Select(interner.Intern).ToArray();
+        int repeated = interner.Intern(values[7]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(onAtHalf, Is.True);
+            Assert.That(onAfter, Is.False);
+            Assert.That(first.Append(next).Concat(later), Is.EqualTo(Enumerable.Range(1, (2 * half) + 1)));
+            Assert.That(repeated, Is.EqualTo(8), "the canonical interner still finds a value that the CLR lookup knew");
+        });
+    }
+
+    /// <summary>
+    /// A leaf whose equal values can have other canonical values (a DateTime of another Kind, a float of another sign),
+    /// and a leaf whose CLR value is its canonical value, have no CLR lookup.
+    /// </summary>
+    [TestCase("DateTime('UTC')", typeof(DateTime), typeof(uint))]
+    [TestCase("Float64", typeof(double), typeof(ulong))]
+    [TestCase("Int32", typeof(int), typeof(int))]
+    public void ClrKeyedFixedInterner_LeafWithNoClrLookup_KeysOnTheCanonicalValue(string type, Type clrType, Type canonical)
+        => ConverterHarness.InvokeGeneric(typeof(InternerTests), nameof(AssertNoClrLookup), new[] { clrType, canonical }, type);
+
+    /// <summary>A value that the leaf refuses leaves no CLR key behind, so the next lookup of it fails again.</summary>
+    [Test]
+    public void ClrKeyedFixedInterner_RefusedValue_LeavesNoClrKey()
+    {
+        using var interner = new ClrKeyedFixedInterner<decimal, int>((FixedLeafWriter<decimal, int>)Leaf<decimal>("Decimal(3, 2)"), nullable: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.Throws<OverflowException>(() => interner.Intern(100m));
+            Assert.Throws<OverflowException>(() => interner.Intern(100m));
+            Assert.That(interner.Intern(1.25m), Is.EqualTo(1));
+            Assert.That(interner.Intern(1.250m), Is.EqualTo(1), "equal decimals of other scales share an entry");
+            Assert.That(interner.UsesClrKeys, Is.True);
+        });
+    }
+
+    /// <summary>
+    /// After a probe of repeating values the CLR lookup stays on. A value out of the range of the leaf then leaves no key
+    /// behind, a repeated value is found, and a new value takes the next key.
+    /// </summary>
+    [Test]
+    public void ClrKeyedFixedInterner_RefusedValueAfterTheProbe_LeavesNoClrKey()
+    {
+        using var interner = new ClrKeyedFixedInterner<decimal, int>((FixedLeafWriter<decimal, int>)Leaf<decimal>("Decimal(3, 2)"), nullable: false);
+        for (int i = 0; i < ClrKeyedFixedInterner<decimal, int>.ProbeValues; i++)
+        {
+            interner.Intern(1.25m);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(interner.UsesClrKeys, Is.True);
+            Assert.Throws<OverflowException>(() => interner.Intern(100m));
+            Assert.Throws<OverflowException>(() => interner.Intern(100m));
+            Assert.That(interner.Intern(1.25m), Is.EqualTo(1));
+            Assert.That(interner.Intern(2.5m), Is.EqualTo(2));
+            Assert.That(interner.Intern(2.50m), Is.EqualTo(2), "equal decimals of other scales share an entry");
+        });
+    }
+
+    /// <summary>
+    /// A 16-byte canonical value is keyed by its bits: values that differ in one half get an entry each, and equal values
+    /// share one.
+    /// </summary>
+    [Test]
+    public void FixedInterner_WideValues_KeyOnBothHalves()
+    {
+        using var interner = new FixedInterner<UInt128>(UInt128.Zero, nullable: false);
+        var values = new[] { new UInt128(1, 2), new UInt128(2, 1), new UInt128(1, 2), new UInt128(0, 2), UInt128.Zero, UInt128.MaxValue };
+
+        int[] keys = values.Select(interner.Intern).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(keys, Is.EqualTo(new[] { 1, 2, 1, 3, 0, 4 }));
+            Assert.That(interner.Entries.ToArray(), Is.EqualTo(new[] { UInt128.Zero, new UInt128(1, 2), new UInt128(2, 1), new UInt128(0, 2), UInt128.MaxValue }));
+        });
+    }
+
+    // The dictionary that an interner builds and a leaf encodes, as a LowCardinality write gives it: the version, the
+    // metadata word with the key width, the entries in the order of first use after the reserved slots, and the keys.
+    // The pinned bytes are those of the LowCardinality write of the same values.
+
+    /// <summary>
+    /// 600 strings of 300 distinct values and the placeholder: 301 entries, so the keys take two bytes. The entries are
+    /// the placeholder, then each value at its first use; each key is the slot of its value.
+    /// </summary>
+    [Test]
+    public async Task Dictionary_ManyStringsFromText_GiveTheEntriesInTheOrderOfFirstUse()
     {
         string[] values = Enumerable.Range(0, 600).Select(i => i % 7 == 0 ? string.Empty : $"value {i % 300}").ToArray();
         var leaf = (BytesLeafWriter<string>)Leaf<string>("String");
         using var interner = new ClrKeyedByteInterner<string>(leaf, nullable: false);
         int[] keys = values.Select(value => interner.Intern(value)).ToArray();
+        (List<string> entries, int[] expectedKeys) = FirstUse(values, string.Empty);
 
-        byte[] expected = await ConverterHarness.WriteOldAsync("LowCardinality(String)", values, 0, values.Length);
         byte[] actual = await CodecTestHarness.WriteAsync(w => WriteBytesDictionary(w, leaf, interner.Entries, keys));
 
-        Assert.That(actual, Is.EqualTo(expected));
+        Assert.Multiple(() =>
+        {
+            Assert.That(Convert.ToHexString(actual, 0, 24), Is.EqualTo("0100000000000000" + "0106000000000000" + "2D01000000000000"), "version, two-byte keys, 301 entries");
+            Assert.That(actual, Has.Length.EqualTo(4123));
+            Assert.That(Enumerable.Range(0, interner.Entries.Count).Select(i => Encoding.UTF8.GetString(interner.Entries.Entry(i))), Is.EqualTo(entries));
+            Assert.That(keys, Is.EqualTo(expectedKeys));
+        });
+    }
+
+    /// <summary>
+    /// 300 distinct numbers, the first of them the placeholder 0: 300 entries, so the keys take two bytes, in the order of
+    /// first use.
+    /// </summary>
+    [Test]
+    public async Task Dictionary_ManyNumbers_GiveTwoByteKeysAndTheEntriesInTheOrderOfFirstUse()
+    {
+        uint[] values = Enumerable.Range(0, 300).Select(i => (uint)(i * 7)).ToArray();
+        var leaf = (FixedLeafWriter<uint, uint>)Leaf<uint>("UInt32");
+        using var interner = new FixedInterner<uint>(leaf.Placeholder, nullable: false);
+        int[] keys = values.Select(interner.Intern).ToArray();
+        (List<uint> entries, int[] expectedKeys) = FirstUse(values, 0u);
+
+        byte[] actual = await CodecTestHarness.WriteAsync(w => WriteFixedDictionary<uint, uint>(w, interner, keys));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Convert.ToHexString(actual, 0, 24), Is.EqualTo("0100000000000000" + "0106000000000000" + "2C01000000000000"), "version, two-byte keys, 300 entries");
+            Assert.That(actual, Has.Length.EqualTo(1832));
+            Assert.That(interner.Entries.ToArray(), Is.EqualTo(entries));
+            Assert.That(keys, Is.EqualTo(expectedKeys));
+        });
     }
 
     [Test]
-    public async Task Dictionary_NullableStrings_GiveTheCurrentLowCardinalityBytes()
+    public async Task Dictionary_NullableStrings_GiveThePinnedBytes()
     {
         string[] values = { "a", null, string.Empty, "a", null, "b" };
         var leaf = (BytesLeafWriter<string>)Leaf<string>("String");
         using var interner = new ClrKeyedByteInterner<string>(leaf, nullable: true);
         int[] keys = values.Select(value => value is null ? 0 : interner.Intern(value)).ToArray();
 
-        byte[] expected = await ConverterHarness.WriteOldAsync("LowCardinality(Nullable(String))", values, 0, values.Length);
         byte[] actual = await CodecTestHarness.WriteAsync(w => WriteBytesDictionary(w, leaf, interner.Entries, keys));
 
-        Assert.That(actual, Is.EqualTo(expected));
+        // The NULL slot and the placeholder are empty strings.
+        Assert.That(Convert.ToHexString(actual), Is.EqualTo("0100000000000000" + "0006000000000000" + "0400000000000000" + "00" + "00" + "0161" + "0162" + "0600000000000000" + "020001020003"));
     }
 
     [Test]
-    public async Task Dictionary_FixedStringBytes_GiveTheCurrentLowCardinalityBytes()
+    public async Task Dictionary_FixedStringBytes_GiveThePinnedBytes()
     {
         byte[][] values = { "ab"u8.ToArray(), new byte[2], "ab"u8.ToArray(), "cd"u8.ToArray() };
         var leaf = (BytesLeafWriter<byte[]>)Leaf<byte[]>("FixedString(2)");
         using var interner = new ClrKeyedByteInterner<byte[]>(leaf, nullable: false);
         int[] keys = values.Select(value => interner.Intern(value)).ToArray();
 
-        byte[] expected = await ConverterHarness.WriteOldAsync("LowCardinality(FixedString(2))", values, 0, values.Length);
         byte[] actual = await CodecTestHarness.WriteAsync(w => WriteBytesDictionary(w, leaf, interner.Entries, keys));
 
-        Assert.That(actual, Is.EqualTo(expected));
+        // Two zero bytes are the placeholder in slot 0.
+        Assert.That(Convert.ToHexString(actual), Is.EqualTo("0100000000000000" + "0006000000000000" + "0300000000000000" + "0000" + "6162" + "6364" + "0400000000000000" + "01000102"));
     }
 
     /// <summary>
-    /// <c>FixedString</c> from text keys on the padded bytes, with the CLR lookup: the bytes of the current write of
-    /// the padded bytes.
+    /// <c>FixedString</c> from text keys on the padded bytes, with the CLR lookup: <c>""</c> is the placeholder, two lone
+    /// surrogates share the entry EF BF BD.
     /// </summary>
     [Test]
-    public async Task Dictionary_FixedStringFromText_GivesTheBytesOfThePaddedBytes()
+    public async Task Dictionary_FixedStringFromText_KeysOnThePaddedBytes()
     {
         string[] values = { "ab", string.Empty, "ab", "é", "\uD800", "\uDBFF", "é" };
         var leaf = (BytesLeafWriter<string>)Leaf<string>("FixedString(3)");
         using var interner = new ClrKeyedByteInterner<string>(leaf, nullable: false);
         int[] keys = values.Select(value => interner.Intern(value)).ToArray();
 
-        byte[] expected = await ConverterHarness.WriteOldAsync(
-            "LowCardinality(FixedString(3))",
-            values.Select(text =>
-            {
-                var bytes = new byte[3];
-                Encoding.UTF8.GetBytes(text, bytes);
-                return bytes;
-            }).ToArray(),
-            0,
-            values.Length);
         byte[] actual = await CodecTestHarness.WriteAsync(w => WriteBytesDictionary(w, leaf, interner.Entries, keys));
 
         Assert.Multiple(() =>
         {
             Assert.That(interner.UsesClrKeys, Is.True);
-            Assert.That(actual, Is.EqualTo(expected));
+            Assert.That(
+                Convert.ToHexString(actual),
+                Is.EqualTo("0100000000000000" + "0006000000000000" + "0400000000000000" + "000000" + "616200" + "C3A900" + "EFBFBD" + "0700000000000000" + "01000102030302"));
         });
     }
 
-    /// <summary>The placeholder of a wide FixedString is made for the write; the dictionary is the current one.</summary>
+    /// <summary>
+    /// The placeholder of a wide FixedString is made for the write: the NULL slot and the placeholder are N zero bytes,
+    /// then each text padded to N.
+    /// </summary>
     [Test]
-    public async Task Dictionary_WideFixedStringFromText_GivesTheBytesOfThePaddedBytes()
+    public async Task Dictionary_WideFixedStringFromText_GivesThePaddedEntries()
     {
         const int size = 5_000;
         string[] values = { "a", new string('y', size), "a", string.Empty };
         var leaf = (BytesLeafWriter<string>)Leaf<string>($"FixedString({size})");
         using var interner = new ClrKeyedByteInterner<string>(leaf, nullable: true);
         int[] keys = values.Select(value => interner.Intern(value)).ToArray();
+        byte[] expected = Header(4, code: 0)
+            .Concat(new byte[size]).Concat(new byte[size]).Concat(Padded("a", size)).Concat(Encoding.UTF8.GetBytes(new string('y', size)))
+            .Concat(BitConverter.GetBytes(4UL)).Concat(new byte[] { 2, 3, 2, 1 })
+            .ToArray();
 
-        byte[] expected = await ConverterHarness.WriteOldAsync(
-            $"LowCardinality(Nullable(FixedString({size})))",
-            values.Select(text =>
-            {
-                var bytes = new byte[size];
-                Encoding.UTF8.GetBytes(text, bytes);
-                return bytes;
-            }).ToArray(),
-            0,
-            values.Length);
         byte[] actual = await CodecTestHarness.WriteAsync(w => WriteBytesDictionary(w, leaf, interner.Entries, keys));
 
         Assert.Multiple(() =>
@@ -378,46 +544,51 @@ public class InternerTests
         });
     }
 
+    /// <summary>
+    /// Floats key on their bits: 0 (the placeholder), -0, the default NaN, a NaN with another payload and 1.5 are five
+    /// entries.
+    /// </summary>
     [Test]
-    public Task Dictionary_FloatsWithSignedZerosAndNaNPayloads_GiveTheCurrentLowCardinalityBytes()
+    public Task Dictionary_FloatsWithSignedZerosAndNaNPayloads_GiveThePinnedBytes()
         => AssertFixedDictionaryAsync(
             "Float64",
-            new[] { 0.0, -0.0, double.NaN, BitConverter.UInt64BitsToDouble(0x7FF8_0000_0000_0001), -0.0, double.NaN, 1.5 });
+            new[] { 0.0, -0.0, double.NaN, BitConverter.UInt64BitsToDouble(0x7FF8_0000_0000_0001), -0.0, double.NaN, 1.5 },
+            "0100000000000000" + "0006000000000000" + "0500000000000000"
+            + "0000000000000000" + "0000000000000080" + "000000000000F8FF" + "010000000000F87F" + "000000000000F83F"
+            + "0700000000000000" + "00010203010204");
 
+    /// <summary>Two instants of the same second share an entry: the keys are on the seconds, not on the offsets.</summary>
     [Test]
-    public Task Dictionary_InstantsConvertedToSeconds_GiveTheCurrentLowCardinalityBytes()
+    public Task Dictionary_InstantsConvertedToSeconds_GiveThePinnedBytes()
         => AssertFixedDictionaryAsync(
             "DateTime('UTC')",
-            new[] { DateTimeOffset.UnixEpoch, new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(2)), new DateTimeOffset(2024, 1, 15, 8, 30, 0, TimeSpan.Zero) });
-
-    /// <summary>A dictionary of 300 entries needs two-byte keys, as the current writer chooses.</summary>
-    [Test]
-    public Task Dictionary_ManyEntries_GiveTheCurrentKeyWidth()
-        => AssertFixedDictionaryAsync("UInt32", Enumerable.Range(0, 300).Select(i => (uint)(i * 7)).ToArray());
+            new[] { DateTimeOffset.UnixEpoch, new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(2)), new DateTimeOffset(2024, 1, 15, 8, 30, 0, TimeSpan.Zero) },
+            "0100000000000000" + "0006000000000000" + "0200000000000000" + "00000000" + "08EDA465" + "0300000000000000" + "000101");
 
     [Test]
-    public async Task Dictionary_NullableBytes_GiveTheCurrentLowCardinalityBytes()
+    public async Task Dictionary_NullableBytes_GiveThePinnedBytes()
     {
         byte?[] values = { 3, null, 0, 3, null, 9 };
         var leaf = (FixedLeafWriter<byte, byte>)Leaf<byte>("UInt8");
         using var interner = new FixedInterner<byte>(leaf.Placeholder, nullable: true);
         int[] keys = values.Select((value, i) => value is null ? 0 : interner.Intern(leaf.ToCanonical(value.Value, i))).ToArray();
 
-        byte[] expected = await ConverterHarness.WriteOldAsync("LowCardinality(Nullable(UInt8))", values, 0, values.Length);
         byte[] actual = await CodecTestHarness.WriteAsync(w => WriteFixedDictionary<byte, byte>(w, interner, keys));
 
-        Assert.That(actual, Is.EqualTo(expected));
+        // The NULL slot and the placeholder are zero bytes.
+        Assert.That(Convert.ToHexString(actual), Is.EqualTo("0100000000000000" + "0006000000000000" + "0400000000000000" + "00" + "00" + "03" + "09" + "0600000000000000" + "020001020003"));
     }
 
-    private static Task AssertFixedDictionaryAsync<T>(string type, T[] values)
+    private static Task AssertFixedDictionaryAsync<T>(string type, T[] values, string expected)
         => (Task)ConverterHarness.InvokeGeneric(
             typeof(InternerTests),
             nameof(AssertFixedDictionaryCoreAsync),
             new[] { typeof(T), Leaf<T>(type).GetType().BaseType.GenericTypeArguments[1] },
             type,
-            values);
+            values,
+            expected);
 
-    private static async Task AssertFixedDictionaryCoreAsync<T, TCanon>(string type, T[] values)
+    private static async Task AssertFixedDictionaryCoreAsync<T, TCanon>(string type, T[] values, string expected)
         where TCanon : unmanaged, IEquatable<TCanon>
     {
         var leaf = (FixedLeafWriter<T, TCanon>)Leaf<T>(type);
@@ -426,10 +597,38 @@ public class InternerTests
         leaf.ToCanonical(values, canonical, 0);
         int[] keys = canonical.Select(interner.Intern).ToArray();
 
-        byte[] expected = await ConverterHarness.WriteOldAsync($"LowCardinality({type})", values, 0, values.Length);
         byte[] actual = await CodecTestHarness.WriteAsync(w => WriteFixedDictionary<T, TCanon>(w, interner, keys));
 
-        Assert.That(actual, Is.EqualTo(expected));
+        Assert.That(Convert.ToHexString(actual), Is.EqualTo(expected));
+    }
+
+    // The entries of a dictionary without NULL in the order of first use, the placeholder first, and the slot of each value.
+    private static (List<T> Entries, int[] Keys) FirstUse<T>(T[] values, T placeholder)
+    {
+        var entries = new List<T> { placeholder };
+        int[] keys = values.Select(value =>
+        {
+            int slot = entries.IndexOf(value);
+            if (slot < 0)
+            {
+                entries.Add(value);
+                slot = entries.Count - 1;
+            }
+
+            return slot;
+        }).ToArray();
+        return (entries, keys);
+    }
+
+    // The version, the metadata word with the key width code, and the dictionary size.
+    private static byte[] Header(int size, int code)
+        => BitConverter.GetBytes(1L).Concat(BitConverter.GetBytes(0x0600UL | (ulong)code)).Concat(BitConverter.GetBytes((ulong)size)).ToArray();
+
+    private static byte[] Padded(string text, int size)
+    {
+        var bytes = new byte[size];
+        Encoding.UTF8.GetBytes(text, bytes);
+        return bytes;
     }
 
     // The LowCardinality prefix and body around a dictionary: the version, the metadata word, the entries, the keys.
@@ -470,10 +669,14 @@ public class InternerTests
         }
     }
 
-    // The dictionary size of a LowCardinality write: after the version (8 bytes) and the metadata word (8 bytes).
-    private static long DictionarySize(byte[] bytes) => BitConverter.ToInt64(bytes, 16);
-
     // A leaf that refuses one value, to show that the interner keeps no key for a refused value.
+    private static void AssertNoClrLookup<T, TCanon>(string type)
+        where TCanon : unmanaged, IEquatable<TCanon>
+    {
+        using var interner = new ClrKeyedFixedInterner<T, TCanon>((FixedLeafWriter<T, TCanon>)Leaf<T>(type), nullable: false);
+        Assert.That(interner.UsesClrKeys, Is.False);
+    }
+
     private sealed class RefusingLeaf : BytesLeafWriter<string>
     {
         private readonly string refused;

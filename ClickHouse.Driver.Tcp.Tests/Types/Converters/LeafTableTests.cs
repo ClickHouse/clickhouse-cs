@@ -9,10 +9,8 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// Pins the leaf table: the counts of its pairs, every registered name as a leaf or a composite, the read pairs of each
-/// leaf, and each leaf writes from exactly the CLR types that its codec writes
-/// (<see cref="IColumnCodec.CanWriteElementType"/>). The one write pair that the table adds is <c>FixedString</c> from
-/// <see cref="string"/> (<see cref="Additions"/>).
+/// Pins the leaf table: the counts of its pairs, every registered name as a leaf or a composite, and the read pairs and
+/// the write pairs of each leaf.
 /// </summary>
 [TestFixture]
 public class LeafTableTests
@@ -25,23 +23,6 @@ public class LeafTableTests
         "Point", "Ring", "LineString", "Polygon", "MultiLineString", "MultiPolygon", "Geometry",
         "SimpleAggregateFunction", "AggregateFunction",
     };
-
-    // CLR types to ask about: every type in the table, and types that no leaf offers.
-    private static readonly Type[] Candidates = LeafTable.All
-        .SelectMany(leaf => leaf.Reads.Concat(leaf.Writes))
-        .Select(pair => pair.ClrType)
-        .Concat(new[]
-        {
-            typeof(int?), typeof(DateTime?), typeof(string[]), typeof(object), typeof(ValueType), typeof(Enum),
-            typeof(DayOfWeek), typeof(char), typeof(Half), typeof(ReadOnlyMemory<byte>), typeof(System.Numerics.BigInteger),
-        })
-        .Distinct()
-        .ToArray();
-
-    public static IEnumerable<string> SampleTypes => LeafSamples.Types;
-
-    /// <summary>The write pairs of the table that no codec writes today: <c>FixedString</c> from text.</summary>
-    internal static readonly (string Leaf, Type ClrType)[] Additions = { ("FixedString", typeof(string)) };
 
     /// <summary>The leaf of a type string, as the derivation finds it.</summary>
     internal static Leaf LeafOf(string type)
@@ -164,42 +145,71 @@ public class LeafTableTests
     public void ReadTypes_SampleType_AreTheListedTypes(string type, string readTypes)
         => Assert.That(string.Join(", ", LeafOf(type).ReadTypes(ConverterHarness.Codec(type)).Select(TypeNames.Of)), Is.EqualTo(readTypes));
 
-    [TestCaseSource(nameof(SampleTypes))]
-    public void WriteTypes_SampleType_AreTheWritableTypesOfItsCodec(string type)
-    {
-        IColumnCodec codec = ConverterHarness.Codec(type);
-        Leaf leaf = LeafOf(type);
-        Type[] writable = codec.WritableElementTypes.Where(codec.CanWriteElementType)
-            .Concat(Additions.Where(addition => addition.Leaf == leaf.Name).Select(addition => addition.ClrType))
-            .ToArray();
-
-        Assert.That(leaf.WriteTypes(codec), Is.EquivalentTo(writable));
-    }
-
     /// <summary>
-    /// The derivation writes from exactly the CLR types that the codec writes and the <see cref="Additions"/>. These are
-    /// the leaf's own writes (<see cref="ConverterDerivation.DeriveNode"/>), without the rules of D6, which apply to every
-    /// column type (<see cref="WriteRulesTests"/>).
+    /// The write pairs of the leaf of each sample type, in table order: the type that the decoded column stores, then the
+    /// conversions. They are the CLR types that the client writes each leaf from, without the rules of D6, which apply to
+    /// every column type (<see cref="WriteRulesTests"/>). <c>Nothing</c> is written from no type.
     /// </summary>
-    [TestCaseSource(nameof(SampleTypes))]
-    public void Derive_EveryCandidateType_WritesFromWhatTheCodecWrites(string type)
-    {
-        IColumnCodec codec = ConverterHarness.Codec(type);
-        string leaf = LeafOf(type).Name;
-        TypeNode root = TypeParser.Parse(type);
-        var disagreements = new List<string>();
-        foreach (Type candidate in Candidates)
-        {
-            bool writes = ConverterDerivation.Default.DeriveNode(root, root, ConverterHarness.Context, candidate, ConversionDirection.Write).Succeeded;
-            bool added = Additions.Contains((leaf, candidate));
-            if (writes != (codec.CanWriteElementType(candidate) || added))
-            {
-                disagreements.Add($"write from {candidate}: derived {writes}");
-            }
-        }
-
-        Assert.That(disagreements, Is.Empty);
-    }
+    [TestCase("UInt8", "byte")]
+    [TestCase("Int8", "sbyte")]
+    [TestCase("UInt16", "ushort")]
+    [TestCase("Int16", "short")]
+    [TestCase("UInt32", "uint")]
+    [TestCase("Int32", "int")]
+    [TestCase("UInt64", "ulong")]
+    [TestCase("Int64", "long")]
+    [TestCase("UInt128", "UInt128")]
+    [TestCase("Int128", "Int128")]
+    [TestCase("UInt256", "UInt256")]
+    [TestCase("Int256", "Int256")]
+    [TestCase("Bool", "bool")]
+    [TestCase("Float32", "float")]
+    [TestCase("Float64", "double")]
+    [TestCase("BFloat16", "float")]
+    [TestCase("String", "string, byte[]")]
+    [TestCase("FixedString(4)", "byte[], string")]
+    [TestCase("JSON", "string")]
+    [TestCase("Date", "DateOnly")]
+    [TestCase("Date32", "DateOnly")]
+    [TestCase("UUID", "Guid")]
+    [TestCase("IPv4", "IPAddress")]
+    [TestCase("IPv6", "IPAddress")]
+    [TestCase("Nothing", "")]
+    [TestCase("Time", "int, TimeSpan, TimeOnly")]
+    [TestCase("Time64(0)", "long, TimeSpan, TimeOnly")]
+    [TestCase("Time64(3)", "long, TimeSpan, TimeOnly")]
+    [TestCase("Time64(9)", "long, TimeSpan, TimeOnly")]
+    [TestCase("DateTime", "uint, DateTimeOffset, DateTime")]
+    [TestCase("DateTime('UTC')", "uint, DateTimeOffset, DateTime")]
+    [TestCase("DateTime('Asia/Kolkata')", "uint, DateTimeOffset, DateTime")]
+    [TestCase("DateTime64(0, 'Europe/Berlin')", "long, DateTimeOffset, DateTime")]
+    [TestCase("DateTime64(3)", "long, DateTimeOffset, DateTime")]
+    [TestCase("DateTime64(9, 'UTC')", "long, DateTimeOffset, DateTime")]
+    [TestCase("Enum8('a' = -1, 'b' = 127, 'c' = 5)", "sbyte, string")]
+    [TestCase("Enum16('x' = -32768, 'y' = 32767)", "short, string")]
+    [TestCase("Enum('p' = 1, 'q' = 2)", "sbyte, string")]
+    [TestCase("Enum('big' = 1000, 'small' = -1)", "short, string")]
+    [TestCase("Decimal(9, 2)", "decimal")]
+    [TestCase("Decimal(18, 4)", "decimal")]
+    [TestCase("Decimal(38, 10)", "ClickHouseTcpDecimal")]
+    [TestCase("Decimal(76, 20)", "ClickHouseTcpDecimal")]
+    [TestCase("Decimal32(3)", "decimal")]
+    [TestCase("Decimal64(6)", "decimal")]
+    [TestCase("Decimal128(10)", "ClickHouseTcpDecimal")]
+    [TestCase("Decimal256(20)", "ClickHouseTcpDecimal")]
+    [TestCase("IntervalNanosecond", "long")]
+    [TestCase("IntervalMicrosecond", "long")]
+    [TestCase("IntervalMillisecond", "long")]
+    [TestCase("IntervalSecond", "long")]
+    [TestCase("IntervalMinute", "long")]
+    [TestCase("IntervalHour", "long")]
+    [TestCase("IntervalDay", "long")]
+    [TestCase("IntervalWeek", "long")]
+    [TestCase("IntervalMonth", "long")]
+    [TestCase("IntervalQuarter", "long")]
+    [TestCase("IntervalYear", "long")]
+    public void WriteTypes_SampleType_AreTheListedTypes(string type, string writeTypes)
+        => Assert.That(string.Join(", ", LeafOf(type).WriteTypes(ConverterHarness.Codec(type)).Select(TypeNames.Of)), Is.EqualTo(writeTypes));
 
     /// <summary>Lists each leaf with its read and write types, as a Markdown table.</summary>
     internal static string Describe()

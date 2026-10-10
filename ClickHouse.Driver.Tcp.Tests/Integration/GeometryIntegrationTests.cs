@@ -120,12 +120,13 @@ public class GeometryIntegrationTests
     }
 
     // A one-row column of the shape the named geo alias surfaces as.
+    // The column of one value of the alternative, in the form that a query reads it.
     private static IColumn SampleFor(string alias) => alias switch
     {
-        "Point" => new ArrayColumn<(double, double)>("value", alias, new[] { (1.5d, -2.5d) }),
-        "Ring" or "LineString" => new ArrayColumn<(double, double)[]>("value", alias, new[] { Square }),
-        "Polygon" or "MultiLineString" => new ArrayColumn<(double, double)[][]>("value", alias, new[] { new[] { Square } }),
-        "MultiPolygon" => new ArrayColumn<(double, double)[][][]>("value", alias, new[] { new[] { new[] { Square } } }),
+        "Point" => DecodedColumns.Of("value", alias, new[] { (1.5d, -2.5d) }),
+        "Ring" or "LineString" => DecodedColumns.Of("value", alias, new[] { Square }),
+        "Polygon" or "MultiLineString" => DecodedColumns.Of("value", alias, new[] { new[] { Square } }),
+        "MultiPolygon" => DecodedColumns.Of("value", alias, new[] { new[] { new[] { Square } } }),
         _ => throw new ArgumentException($"Geometry gained an alternative this test does not know: '{alias}'.", nameof(alias)),
     };
 

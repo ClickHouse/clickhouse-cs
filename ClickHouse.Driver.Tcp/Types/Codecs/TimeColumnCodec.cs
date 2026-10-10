@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -9,8 +10,8 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// <summary>
 /// A codec for the ClickHouse <c>Time</c> column: a little-endian <c>Int32</c> second count (a signed
 /// time-of-day/duration, not tied to a date), surfaced as the raw <see cref="int"/> second count. The
-/// representable range is [-999:59:59, 999:59:59]. A <see cref="TimeSpan"/> or a <see cref="TimeOnly"/> can also
-/// be written for convenience.
+/// representable range is [-999:59:59, 999:59:59]. The converter layer also writes the type from a
+/// <see cref="TimeSpan"/> or a <see cref="TimeOnly"/>.
 /// <para>
 /// Reading as a <see cref="TimeOnly"/> is a narrowing: a column value may be negative or past 24 hours, which no
 /// time of day is, and such a row is refused rather than reduced modulo a day.
@@ -20,10 +21,6 @@ internal sealed class TimeColumnCodec : IColumnCodec
 {
     /// <summary>The shared, stateless instance.</summary>
     public static readonly TimeColumnCodec Instance = new();
-
-    // ClickHouse Time range: ±999 hours 59 minutes 59 seconds.
-    private const int MaxSeconds = (999 * 3600) + (59 * 60) + 59;
-    private const int MinSeconds = -MaxSeconds;
 
     private TimeColumnCodec()
     {
@@ -36,98 +33,18 @@ internal sealed class TimeColumnCodec : IColumnCodec
     public Type ElementType => typeof(int);
 
     /// <inheritdoc/>
-    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(int), typeof(TimeSpan), typeof(TimeOnly) };
-
-    /// <inheritdoc/>
-    public object NullPlaceholder => 0;
-
-    /// <inheritdoc/>
-    public object NullPlaceholderAs(Type writeType)
-    {
-        if (writeType == typeof(int))
-        {
-            return NullPlaceholder;
-        }
-
-        if (writeType == typeof(TimeSpan))
-        {
-            return TimeSpan.Zero;
-        }
-
-        if (writeType == typeof(TimeOnly))
-        {
-            return TimeOnly.MinValue;
-        }
-
-        throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
-    }
-
-    /// <inheritdoc/>
-    // Both clock surfaces are encoded as whole seconds, so two values inside one second encode identically.
-    public object LowCardinalityKeyWriter(Type writeType)
-    {
-        if (writeType == typeof(int))
-        {
-            return LowCardinalityKeys.Identity<int>();
-        }
-
-        if (writeType == typeof(TimeSpan))
-        {
-            return LowCardinalityKeys.Projected<TimeSpan, int>(ToSeconds);
-        }
-
-        return writeType == typeof(TimeOnly) ? LowCardinalityKeys.Projected<TimeOnly, int>(ToSeconds) : null;
-    }
-
-    /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
         => TimeColumn.ReadAsync(reader, columnName, columnType, rowCount, cancellationToken);
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IColumn<int> or IColumn<TimeSpan> or IColumn<TimeOnly>;
+    // The column that a query of the type reads.
+    public bool CanWrite(IColumn column) => column is TimeColumn;
 
     /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
-        switch (column)
-        {
-            case IColumn<int> seconds:
-                for (int i = 0; i < length; i++)
-                {
-                    writer.WriteInt32(seconds[start + i]);
-                }
-
-                break;
-            case IColumn<TimeSpan> spans:
-                for (int i = 0; i < length; i++)
-                {
-                    writer.WriteInt32(ToSeconds(spans[start + i]));
-                }
-
-                break;
-            case IColumn<TimeOnly> times:
-                for (int i = 0; i < length; i++)
-                {
-                    writer.WriteInt32(ToSeconds(times[start + i]));
-                }
-
-                break;
-            default:
-                throw new ArgumentException($"A Time column must hold int, TimeSpan or TimeOnly values, not {column.GetType()}.", nameof(column));
-        }
-    }
-
-    // TimeOnly always fits the column range.
-    private static int ToSeconds(TimeOnly value) => (int)(value.Ticks / TimeSpan.TicksPerSecond);
-
-    private static int ToSeconds(TimeSpan value)
-    {
-        long seconds = value.Ticks / TimeSpan.TicksPerSecond;
-        if (seconds is < MinSeconds or > MaxSeconds)
-        {
-            throw new ArgumentOutOfRangeException(nameof(value), value, "Time is outside the range ClickHouse Time can hold ([-999:59:59, 999:59:59]).");
-        }
-
-        return (int)seconds;
+        // The decoded column stores the wire values.
+        var stored = (TimeColumn)column;
+        writer.WriteBytes(MemoryMarshal.AsBytes(stored.Values.Slice(start, length)));
     }
 }

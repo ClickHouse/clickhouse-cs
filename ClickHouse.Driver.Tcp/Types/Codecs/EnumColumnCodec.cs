@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -42,22 +43,12 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
     /// <inheritdoc/>
     public Type ElementType => typeof(T);
 
-    /// <inheritdoc/>
-    // A declared member ordinal, not default(T): the ordinal 0 need not be a member, and the server can reject
-    // an undeclared ordinal even at a Nullable(Enum) null position where it is only a placeholder.
-    public object NullPlaceholder => nullPlaceholder;
-
-    /// <inheritdoc/>
-    // Labels project to their encoded ordinal so LowCardinality keys agree with the wire.
-    public object LowCardinalityKeyWriter(Type writeType)
-    {
-        if (writeType == typeof(T))
-        {
-            return LowCardinalityKeys.Identity<T>();
-        }
-
-        return writeType == typeof(string) ? LowCardinalityKeys.Projected<string, T>(ToOrdinal) : null;
-    }
+    /// <summary>
+    /// The ordinal that the converter writes at a <c>Nullable(Enum)</c> NULL: the first declared member, and not
+    /// default(T). The ordinal 0 need not be a member, and the server can reject an undeclared ordinal even at a NULL,
+    /// where it is only a placeholder.
+    /// </summary>
+    internal T NullPlaceholder => nullPlaceholder;
 
     /// <summary>The enum's declared members, mapping each label to its underlying ordinal.</summary>
     public IReadOnlyDictionary<string, T> LabelToOrdinal { get; }
@@ -67,9 +58,6 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
 
     /// <summary>The declared members, in declaration order, and the messages for an unknown ordinal or label.</summary>
     internal EnumMemberTable Members => members;
-
-    /// <summary>A column of labels writes as well as a column of ordinals.</summary>
-    public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(T), typeof(string) };
 
     /// <summary>
     /// Builds an enum codec by parsing the <c>'label' = ordinal</c> members from the type node's arguments.
@@ -135,39 +123,14 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // The labels are a placeholder shape too, so a Nullable(Enum) written from labels has one for its null rows.
-    public object NullPlaceholderAs(Type writeType)
-    {
-        if (writeType == typeof(T))
-        {
-            return nullPlaceholder;
-        }
-
-        return writeType == typeof(string)
-            ? OrdinalToLabel[nullPlaceholder]
-            : throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
-    }
+    // The column that a query of the type reads. A stored ordinal means its label only in a type that declares the same
+    // members, so a column of another enum type goes to the converter layer, which writes it by label.
+    public bool CanWrite(IColumn column) => column is EnumColumn<T> stored && stored.MemberTable.HasTheSameMembers(members);
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => underlying.CanWrite(column) || column is IColumn<string>;
-
-    // A column of labels reaches the underlying ordinal codec as a borrowed view that resolves each label on
-    // access, so no converted array is materialized.
-    private IColumn AsOrdinals(IColumn column)
-        => column is IColumn<string> labels && column is not IColumn<T>
-            ? new ProjectedColumn<string, T>(TypeName, labels, ToOrdinal)
-            : column;
-
-    /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-        => underlying.WriteColumn(writer, AsOrdinals(column), start, length);
-
-    /// <summary>The ordinal a label is declared with.</summary>
-    /// <exception cref="ArgumentException">The type declares no member with that label, or the label is null.</exception>
-    private T ToOrdinal(string label)
-        => label is not null && LabelToOrdinal.TryGetValue(label, out T ordinal)
-            ? ordinal
-            : throw members.NoSuchLabel(label, nameof(label));
+    // The stored ordinals are the wire bytes, so the slice is one copy.
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
+        => writer.WriteBytes(MemoryMarshal.AsBytes(((EnumColumn<T>)column).Values.Slice(start, length)));
 }
 
 /// <summary>Creates bare enums and parses enum members.</summary>

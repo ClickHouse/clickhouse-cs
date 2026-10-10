@@ -18,8 +18,8 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// before, so the interner can stop it at any value with no change to the result.
 /// </para>
 /// <para>
-/// The CLR lookup costs a hash and an insert for each new value. So after <see cref="ProbeValues"/> lookups, the
-/// interner stops it when more than half of them failed (the values do not repeat much). This is a heuristic: a
+/// The CLR lookup costs a hash and an insert for each new value. So the interner stops it when more than half of the
+/// first <see cref="ProbeValues"/> lookups fail (the values do not repeat much), at the lookup that passes the half. This is a heuristic: a
 /// column whose first values are distinct and whose later values repeat keeps the slower path.
 /// </para>
 /// <para>
@@ -64,8 +64,10 @@ internal sealed class ClrKeyedByteInterner<T> : IDisposable
 
     /// <summary>The key of <paramref name="value"/>.</summary>
     /// <remarks>
-    /// A value that the CLR lookup finds costs one lookup and one decrement. A new value, and every value when there is no
-    /// CLR lookup, go to a method that is not inlined, as does the end of the probe, so this method stays small enough to
+    /// A value that the CLR lookup finds costs one lookup and one decrement. A lookup that only reads is cheaper than one
+    /// that can also add (<see cref="CollectionsMarshal.GetValueRefOrAddDefault{TKey, TValue}"/>), and most lookups find
+    /// their value, so a new value costs a second lookup, which adds it. A new value, and every value when there is no CLR
+    /// lookup, go to a method that is not inlined, as does the end of the probe, so this method stays small enough to
     /// inline.
     /// </remarks>
     /// <param name="value">The value. The caller handles a NULL of a nullable column before it calls this.</param>
@@ -81,21 +83,20 @@ internal sealed class ClrKeyedByteInterner<T> : IDisposable
         // A null has no CLR key. The leaf decides what a null means, and usually refuses it.
         if (map is not null && value is not null)
         {
-            ref int slot = ref CollectionsMarshal.GetValueRefOrAddDefault(map, value, out bool exists);
-            if (exists)
+            if (map.TryGetValue(value, out int key))
             {
                 if (--probeLeft == 0)
                 {
                     EndProbe();
                 }
 
-                return slot;
+                return key;
             }
 
-            return InternNew(value, map, ref slot);
+            return InternNew(value, map);
         }
 
-        return InternNew(value, null, ref Unsafe.NullRef<int>());
+        return InternNew(value, null);
     }
 
     /// <summary>Returns the buffers to the pool. The interner cannot be used after this.</summary>
@@ -111,38 +112,41 @@ internal sealed class ClrKeyedByteInterner<T> : IDisposable
         clrKeys = null;
     }
 
-    // The key of the canonical bytes of a value that the CLR lookup does not find (map is the lookup, and slot is the
-    // slot that it added for the value), or of a value with no CLR lookup (map is null). A refused value is named by the
-    // dictionary slot that it would take, and leaves no slot in the CLR lookup. Both cases are in this one method, with
-    // the conversion and the byte lookup written in it, so that the JIT can inline them here: for a column of many
-    // distinct values, almost every value comes here.
+    // The key of the canonical bytes of a value that the CLR lookup does not find (map is the lookup), or of a value with
+    // no CLR lookup (map is null). A refused value is named by the dictionary slot that it would take, and the CLR lookup
+    // gets no entry for it. Both cases are in this one method, with the conversion and the byte lookup written in it, so
+    // that the JIT can inline them here: for a column of many distinct values, almost every value comes here.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private int InternNew(T value, Dictionary<T, int> map, ref int slot)
+    private int InternNew(T value, Dictionary<T, int> map)
     {
+        int key = canonical.Intern(leaf.ToCanonical(value, canonical.Count, ref scratch));
         if (map is null)
         {
-            return canonical.Intern(leaf.ToCanonical(value, canonical.Count, ref scratch));
+            return key;
         }
 
-        int key;
-        try
+        map.Add(value, key);
+        if (probeLeft > 0)
         {
-            key = canonical.Intern(leaf.ToCanonical(value, canonical.Count, ref scratch));
-        }
-        catch
-        {
-            map.Remove(value);
-            throw;
-        }
-
-        slot = key;
-        misses++;
-        if (--probeLeft == 0)
-        {
-            EndProbe();
+            EndProbeOnMiss();
         }
 
         return key;
+    }
+
+    // A miss during the probe. When more than half of the probe has missed, the end of the probe can only stop the CLR
+    // lookup, so it stops at this miss and the values after it cost no CLR lookup.
+    private void EndProbeOnMiss()
+    {
+        if (++misses * 2 > ProbeValues)
+        {
+            clrKeys = null;
+            probeLeft = 0;
+        }
+        else if (--probeLeft == 0)
+        {
+            EndProbe();
+        }
     }
 
     // The end of the probe: the CLR lookup stops when more than half of the probe lookups failed.

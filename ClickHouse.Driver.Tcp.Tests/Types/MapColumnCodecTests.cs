@@ -50,7 +50,7 @@ public class MapColumnCodecTests
         IColumnCodec codec = Resolve("Map(String, UInt32)");
         var column = new ArrayColumn<KeyValuePair<string, uint>[]>("c", "Map(String, UInt32)", Array.Empty<KeyValuePair<string, uint>[]>());
 
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column, 0, 0));
+        byte[] bytes = await CodecTestHarness.WriteSliceAsync(codec, column, 0, 0);
         Assert.That(bytes, Is.Empty, "an empty map column writes no offsets and no streams");
 
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
@@ -64,7 +64,7 @@ public class MapColumnCodecTests
         // Writing only rows [1, 3) of a four-row column (the insert splitter's per-block path) must emit offsets
         // relative to that block's own streams, not the full column.
         IColumnCodec codec = Resolve("Map(String, UInt8)");
-        var full = new ArrayColumn<KeyValuePair<string, byte>[]>("c", "Map(String, UInt8)", new[]
+        using IColumn full = DecodedColumns.Of("c", "Map(String, UInt8)", new[]
         {
             Row<string, byte>(("a", 1)),
             Row<string, byte>(("b", 2), ("c", 3)),
@@ -72,7 +72,7 @@ public class MapColumnCodecTests
             Row<string, byte>(("d", 4), ("e", 5), ("f", 6)),
         });
 
-        byte[] bytes = await CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, full, start: 1, length: 2));
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(codec, full, start: 1, length: 2);
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
         using IColumn read = await codec.ReadColumnAsync(reader, "c", "Map(String, UInt8)", 2, CodecTestHarness.None);
 
@@ -83,28 +83,13 @@ public class MapColumnCodecTests
         }));
     }
 
-    [Test]
-    public void WriteColumn_NullRow_ThrowsArgumentException()
-    {
-        // Map(K, V) rows are non-nullable, so a null row is rejected rather than silently written as an empty map.
-        IColumnCodec codec = Resolve("Map(String, UInt8)");
-        var column = new ArrayColumn<KeyValuePair<string, byte>[]>("c", "Map(String, UInt8)", new[]
-        {
-            Row<string, byte>(("a", 1)),
-            null,
-        });
-
-        Assert.ThrowsAsync<ArgumentException>(() => CodecTestHarness.WriteAsync(w => codec.WriteColumn(w, column)));
-    }
-
-    // The state-aware overloads take the state this codec's own BeginWrite returned, and nothing else. They used to
-    // treat null as "the caller has none to share" and rebuild one, which meant a caller that lost or never opened
-    // the state still got correct bytes, so the mistake could not be seen.
+    // The write members take only the state that BeginWrite of the same codec returned. They do not make a state
+    // when they get null, so a write with no state fails and does not give bytes.
     [Test]
     public async Task WriteColumn_StateAwareOverloadGivenNoState_ThrowsArgument()
     {
         IColumnCodec codec = Resolve("Map(String, UInt8)");
-        var column = new ArrayColumn<KeyValuePair<string, byte>[]>("c", "Map(String, UInt8)", new[]
+        using IColumn column = DecodedColumns.Of("c", "Map(String, UInt8)", new[]
         {
             Row<string, byte>(("a", 1)),
         });
@@ -120,7 +105,7 @@ public class MapColumnCodecTests
     public async Task WriteStatePrefix_StateAwareOverloadGivenNoState_ThrowsArgument()
     {
         IColumnCodec codec = Resolve("Map(String, UInt8)");
-        var column = new ArrayColumn<KeyValuePair<string, byte>[]>("c", "Map(String, UInt8)", new[]
+        using IColumn column = DecodedColumns.Of("c", "Map(String, UInt8)", new[]
         {
             Row<string, byte>(("a", 1)),
         });
@@ -130,26 +115,15 @@ public class MapColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_AcceptsOnlyMatchingMapColumn()
+    public async Task CanWrite_NestedValueWithoutDenseNamedFieldColumn_ReturnsFalse()
     {
-        IColumnCodec codec = Resolve("Map(String, UInt32)");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWrite(new ArrayColumn<KeyValuePair<string, uint>[]>("c", "Map(String, UInt32)", new[] { Row<string, uint>(("a", 1)) })), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<KeyValuePair<string, int>[]>("c", "Map(String, Int32)", new[] { Row<string, int>(("a", 1)) })), Is.False);
-            Assert.That(codec.CanWrite(PrimitiveColumn<uint>.FromValues("c", "UInt32", new uint[] { 1 })), Is.False);
-        });
-    }
-
-    [Test]
-    public void CanWrite_NestedValueWithoutDenseNamedFieldColumn_ReturnsFalse()
-    {
+        // The converter layer writes no Nested column. Thus an insert writes the map only through the codec, and
+        // only when the Nested value column is the NestedColumn that a query reads.
         const string type = "Map(String, Nested(a UInt8))";
         const string nestedType = "Nested(a UInt8)";
         IColumnCodec codec = Resolve(type);
-
-        // Flattening the ergonomic pairs would leave object[][] values, not Nested's named field columns.
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(Array.Empty<byte>());
+        using IColumn decoded = await codec.ReadColumnAsync(reader, "c", type, 0, CodecTestHarness.None);
         var ergonomic = new ArrayColumn<KeyValuePair<string, object[][]>[]>(
             "c",
             type,
@@ -157,7 +131,7 @@ public class MapColumnCodecTests
         var wrongDense = new MapColumn<string, object[][]>(
             "c",
             type,
-            new ArrayColumn<string>("c", "String", Array.Empty<string>()),
+            (IColumn<string>)DecodedColumns.Of<string>("c", "String"),
             new ArrayColumn<object[][]>("c", nestedType, Array.Empty<object[][]>()),
             new[] { 0 },
             rowCount: 0,
@@ -165,8 +139,9 @@ public class MapColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(ergonomic), Is.False, "the row-oriented projection has lost the named fields");
-            Assert.That(codec.CanWrite(wrongDense), Is.False, "a dense map still needs a real NestedColumn value");
+            Assert.That(codec.CanWrite(decoded), Is.True, "the column that a query of the type reads");
+            Assert.That(codec.CanWrite(ergonomic), Is.False, "a column of pair arrays has no named field columns");
+            Assert.That(codec.CanWrite(wrongDense), Is.False, "the Nested value column is not a NestedColumn");
         });
     }
 
@@ -181,10 +156,6 @@ public class MapColumnCodecTests
             Assert.That(Resolve("Map(String, Array(Int32))").ElementType, Is.EqualTo(typeof(KeyValuePair<string, int[]>[])));
         });
     }
-
-    [Test]
-    public void NullPlaceholder_IsEmptyPairArray()
-        => Assert.That(Resolve("Map(String, UInt32)").NullPlaceholder, Is.EqualTo(Array.Empty<KeyValuePair<string, uint>>()));
 
     [Test]
     public async Task ReadColumn_NonMonotonicOffsets_ThrowsProtocol()

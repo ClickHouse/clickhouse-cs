@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Converters;
@@ -9,102 +8,13 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// The write derivation of the composite types: it succeeds for exactly the CLR types that the codecs write today
-/// (<see cref="IColumnCodec.CanWriteElementType"/>), and for the writes that it adds (<see cref="Additions"/>); a cached
-/// tree keeps no buffer sized by a type parameter; one tree serves concurrent writes.
+/// The write derivation of the composite types: a cached tree keeps no buffer sized by a type parameter; one tree serves
+/// concurrent writes. What each type is written from is pinned by <see cref="WriteRulesTests"/> and
+/// <see cref="SuggestedTypesTests"/>.
 /// </summary>
 [TestFixture]
 public class WriteDerivationTests
 {
-    // Composite types, with leaves of every kind of canonical value under them.
-    private static readonly string[] Types =
-    {
-        "Nullable(Int32)", "Nullable(String)", "Nullable(FixedString(4))", "Nullable(DateTime('UTC'))", "Nullable(Enum8('a' = 1))",
-        "Nullable(Tuple(Int32, String))", "Nullable(Decimal(9, 2))",
-        "Array(Int32)", "Array(String)", "Array(Nullable(String))", "Array(Array(DateTime('UTC')))", "Array(LowCardinality(String))",
-        "Array(FixedString(4))", "Array(Tuple(Int32, String))", "Array(Nested(a Int32))",
-        "LowCardinality(String)", "LowCardinality(Nullable(String))", "LowCardinality(FixedString(4))", "LowCardinality(Nullable(FixedString(4)))",
-        "LowCardinality(Int32)", "LowCardinality(Nullable(Int32))", "LowCardinality(DateTime('UTC'))", "LowCardinality(Nullable(Enum8('a' = 1)))",
-        "LowCardinality(UUID)", "LowCardinality(IPv6)", "LowCardinality(Decimal(9, 2))", "LowCardinality(Float32)", "LowCardinality(Bool)",
-        "LowCardinality(Date32)", "LowCardinality(Nullable(DateTime64(3)))", "LowCardinality(Time)", "LowCardinality(BFloat16)", "LowCardinality(JSON)",
-        "Map(String, Int32)", "Map(String, Nullable(String))", "Map(LowCardinality(String), Array(FixedString(4)))",
-        "Tuple(Int32)", "Tuple(Int32, String)", "Tuple(a DateTime('UTC'), b FixedString(4))", "Tuple(Int32, Tuple())",
-        "Variant(String, UInt64)", "Variant(Nothing, String)", "Dynamic", "Nested(a Int32, b String)", "QBit(Float32, 4)",
-        "Point", "Ring", "Polygon", "Geometry", "Tuple()", "SimpleAggregateFunction(anyLast, Nullable(String))",
-    };
-
-    // CLR types of every shape that the composites take: leaves, nullable values, arrays, pairs and tuples.
-    private static readonly Type[] Candidates =
-    {
-        typeof(int), typeof(int?), typeof(string), typeof(byte[]), typeof(uint), typeof(uint?), typeof(DateTimeOffset), typeof(DateTimeOffset?),
-        typeof(DateTime), typeof(DateTime?), typeof(sbyte), typeof(sbyte?), typeof(Guid), typeof(IPAddress), typeof(decimal), typeof(decimal?),
-        typeof(float), typeof(float?), typeof(bool), typeof(DateOnly), typeof(DateOnly?), typeof(long), typeof(long?), typeof(TimeSpan), typeof(object),
-        typeof(int[]), typeof(int?[]), typeof(string[]), typeof(byte[][]), typeof(DateTimeOffset[]), typeof(DateTimeOffset[][]), typeof(uint[][]),
-        typeof(object[]), typeof(object[][]), typeof(float[]), typeof(double[]), typeof(sbyte[]),
-        typeof(KeyValuePair<string, int>[]), typeof(KeyValuePair<string, string>[]), typeof(KeyValuePair<string, int?>[]),
-        typeof(KeyValuePair<string, byte[][]>[]), typeof(KeyValuePair<string, string[]>[]), typeof(KeyValuePair<byte[], byte[][]>[]),
-        typeof(KeyValuePair<byte[], string[]>[]), typeof(KeyValuePair<object, object>[]),
-        typeof(ValueTuple), typeof(ValueTuple<int>), typeof((int, string)), typeof((int, byte[])), typeof((int, string)?), typeof((int, string)[]),
-        typeof((DateTimeOffset, byte[])), typeof((DateTimeOffset, string)), typeof((uint, byte[])), typeof((int, ValueTuple)), typeof((int, object)),
-        typeof((double, double)), typeof((double, double)[]), typeof((double, double)[][]),
-    };
-
-    /// <summary>
-    /// The writes that the derivation adds to the current codecs (decision D7): <c>LowCardinality(String)</c> from
-    /// <see cref="T:byte[]"/> (ClickHouse/integrations#792), and <c>FixedString</c> from <see cref="string"/> in every
-    /// position.
-    /// </summary>
-    internal static readonly (string Type, Type ClrType)[] Additions =
-    {
-        ("LowCardinality(String)", typeof(byte[])),
-        ("LowCardinality(Nullable(String))", typeof(byte[])),
-        ("Array(LowCardinality(String))", typeof(byte[][])),
-        ("Map(LowCardinality(String), Array(FixedString(4)))", typeof(KeyValuePair<byte[], byte[][]>[])),
-        ("Map(LowCardinality(String), Array(FixedString(4)))", typeof(KeyValuePair<byte[], string[]>[])),
-        ("Map(LowCardinality(String), Array(FixedString(4)))", typeof(KeyValuePair<string, string[]>[])),
-        ("Nullable(FixedString(4))", typeof(string)),
-        ("Array(FixedString(4))", typeof(string[])),
-        ("LowCardinality(FixedString(4))", typeof(string)),
-        ("LowCardinality(Nullable(FixedString(4)))", typeof(string)),
-        ("Tuple(a DateTime('UTC'), b FixedString(4))", typeof((DateTimeOffset, string))),
-    };
-
-    public static IEnumerable<string> CompositeTypes => Types;
-
-    /// <summary>
-    /// The derivation writes a composite type from exactly the CLR types that its codec writes today, and from the
-    /// <see cref="Additions"/>: the column type's own writes, with no write rule of D6 at the root
-    /// (<see cref="WriteRules"/>), which inside a composite type apply nowhere.
-    /// </summary>
-    [TestCaseSource(nameof(CompositeTypes))]
-    public void Derive_EveryCandidateType_AgreesWithTheCurrentCodec(string type)
-    {
-        IColumnCodec codec = ConverterHarness.Codec(type);
-        TypeNode root = TypeParser.Parse(type);
-        var disagreements = new List<string>();
-        foreach (Type candidate in Candidates)
-        {
-            bool derived = ConverterDerivation.Default.DeriveNode(root, root, ConverterHarness.Context, candidate, ConversionDirection.Write).Succeeded;
-            bool expected = codec.CanWriteElementType(candidate) || Additions.Contains((type, candidate));
-            if (derived != expected)
-            {
-                disagreements.Add($"write from {candidate}: derived {derived}");
-            }
-        }
-
-        Assert.That(disagreements, Is.Empty);
-    }
-
-    [Test]
-    public void Additions_EveryEntry_IsATypeAndCandidateOfTheMatrix()
-    {
-        foreach ((string type, Type clrType) in Additions)
-        {
-            Assert.That(Types, Does.Contain(type));
-            Assert.That(Candidates, Does.Contain(clrType));
-        }
-    }
-
     /// <summary>
     /// A cached tree keeps the width of a <c>FixedString</c>, not a buffer of that width, also under a composite, so
     /// deriving a very wide one allocates little.

@@ -3,11 +3,10 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Protocol;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
-using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
@@ -15,25 +14,6 @@ namespace ClickHouse.Driver.Tcp.Tests.Types;
 public class StringColumnCodecTests
 {
     private static readonly CancellationToken None = CancellationToken.None;
-
-    [Test]
-    public async Task WriteColumn_SingleValue_IsVarUIntLengthThenBytes()
-    {
-        byte[] bytes = await WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, new ArrayColumn<string>("c", "String", new[] { "hello" })));
-        CollectionAssert.AreEqual(new byte[] { 0x05, 0x68, 0x65, 0x6C, 0x6C, 0x6F }, bytes);
-    }
-
-    [Test]
-    public async Task RoundTrip_EmptyUnicodeAndEmbeddedNul_Preserved()
-    {
-        var values = new[] { string.Empty, "hello", "héllo✓", "a\0b", new string('x', 500) };
-
-        byte[] bytes = await WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, new ArrayColumn<string>("c", "String", values)));
-        using var reader = ReaderOver(bytes);
-        using var column = (IColumn<string>)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", values.Length, None);
-
-        CollectionAssert.AreEqual(values, column.Values.ToArray());
-    }
 
     [Test]
     public async Task ReadColumn_ZeroRows_ReturnsEmptyColumn()
@@ -64,7 +44,7 @@ public class StringColumnCodecTests
     {
         var values = new[] { string.Empty, "a", "bcd", "héllo" };
 
-        byte[] bytes = await WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, new ArrayColumn<string>("c", "String", values)));
+        byte[] bytes = await CodecTestHarness.WriteSliceAsync(StringColumnCodec.Instance, new ArrayColumn<string>("c", "String", values), 0, values.Length);
         using var reader = ReaderOver(bytes);
         using var column = (StringColumn)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", values.Length, None);
 
@@ -84,7 +64,7 @@ public class StringColumnCodecTests
         // row count. Access beyond RowCount must still fail fast rather than return a stale pooled slot — both
         // before the UTF-8 cache is built and after it is materialized by touching Values.
         var values = new[] { "a", "bcd" };
-        byte[] bytes = await WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, new ArrayColumn<string>("c", "String", values)));
+        byte[] bytes = await CodecTestHarness.WriteSliceAsync(StringColumnCodec.Instance, new ArrayColumn<string>("c", "String", values), 0, values.Length);
         using var reader = ReaderOver(bytes);
         using var column = (StringColumn)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", values.Length, None);
 
@@ -107,52 +87,6 @@ public class StringColumnCodecTests
         Assert.Throws<ArgumentNullException>(() => column.GetString(0, null));
     }
 
-    [Test]
-    public void CanWrite_AcceptsStringOrByteColumn_RejectsOthers()
-    {
-        IColumnCodec codec = StringColumnCodec.Instance;
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWrite(new ArrayColumn<string>("c", "String", new[] { "x" })), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<byte[]>("c", "String", new[] { new byte[] { 1 } })), Is.True);
-            Assert.That(codec.CanWrite(PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 1 })), Is.False);
-            Assert.That(codec.CanWriteElementType(typeof(byte[])), Is.True);
-            Assert.That(codec.NullPlaceholderAs(typeof(byte[])), Is.EqualTo(Array.Empty<byte>()));
-            Assert.Throws<NotSupportedException>(() => codec.NullPlaceholderAs(typeof(int)));
-        });
-    }
-
-    /// <summary>
-    /// Raw bytes are no LowCardinality dictionary key of the String codec, so the codec's own LowCardinality write still
-    /// refuses them; the converter derivation, which interns their bytes, writes them (ClickHouse/integrations#792), and
-    /// that is what an insert and <see cref="ClickHouseTcpTypes.CanWrite"/> use.
-    /// </summary>
-    [Test]
-    public void LowCardinalityKeyWriter_Bytes_IsUnavailableButTheDerivationWritesThem()
-    {
-        IColumnCodec codec = StringColumnCodec.Instance;
-        IColumnCodec lowCardinality = ColumnCodecRegistry.Default.Resolve("LowCardinality(String)", ResolveContext.ForWrite);
-        IColumnCodec nullableLowCardinality = ColumnCodecRegistry.Default.Resolve("LowCardinality(Nullable(String))", ResolveContext.ForWrite);
-        var bytes = new ArrayColumn<byte[]>("c", null, new[] { new byte[] { 0xFF } });
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.LowCardinalityKeyWriter(typeof(byte[])), Is.Null);
-            Assert.That(codec.LowCardinalityKeyWriter(typeof(string)), Is.Not.Null);
-
-            Assert.That(lowCardinality.CanWriteElementType(typeof(byte[])), Is.False);
-            Assert.That(lowCardinality.CanWrite(bytes), Is.False);
-            Assert.That(nullableLowCardinality.CanWriteElementType(typeof(byte[])), Is.False);
-            Assert.Throws<NotSupportedException>(() => lowCardinality.NullPlaceholderAs(typeof(byte[])));
-
-            Assert.That(InsertColumnWrite.For(lowCardinality, bytes, "LowCardinality(String)", ResolveContext.ForWrite, ConverterDerivation.Default), Is.Not.Null);
-            Assert.That(ClickHouseTcpTypes.CanWrite("LowCardinality(String)", typeof(byte[])), Is.True);
-            Assert.That(ClickHouseTcpTypes.CanWrite("LowCardinality(Nullable(String))", typeof(byte[])), Is.True);
-            Assert.That(ClickHouseTcpTypes.CanWrite("Array(LowCardinality(String))", typeof(byte[][])), Is.True);
-        });
-    }
-
     /// <summary>
     /// The layout <see cref="IStringColumn"/> exposes has to be sliced to the rows, not to the pooled buffers the
     /// read path rents — a blob is normally longer than the data, and an offsets array longer than the row count.
@@ -161,7 +95,7 @@ public class StringColumnCodecTests
     public async Task ReadColumn_TheBlobAndOffsets_AreSlicedToTheRowsRatherThanThePooledBuffers()
     {
         var values = new[] { "a", string.Empty, "bcd" };
-        byte[] bytes = await WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, new ArrayColumn<string>("c", "String", values)));
+        byte[] bytes = await CodecTestHarness.WriteSliceAsync(StringColumnCodec.Instance, new ArrayColumn<string>("c", "String", values), 0, values.Length);
         using var reader = ReaderOver(bytes);
         using var column = (IStringColumn)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", values.Length, None);
 
@@ -171,29 +105,6 @@ public class StringColumnCodecTests
             Assert.That(column.Bytes.ToArray(), Is.EqualTo(new byte[] { (byte)'a', (byte)'b', (byte)'c', (byte)'d' }));
             Assert.That(column.Bytes.Length, Is.EqualTo(column.Offsets[column.RowCount]));
             Assert.That(column.GetBytes(1).Length, Is.EqualTo(0), "an empty row is two equal offsets");
-        });
-    }
-
-    [Test]
-    public async Task WriteColumn_ByteColumn_StoresTheBytesVerbatim()
-    {
-        // The bytes are not text, so a null row is refused rather than written as anything, and 0xFF 0xFE goes out
-        // as itself: routing it through the string surface would spell it U+FFFD U+FFFD instead.
-        var rows = new[] { new byte[] { 0x41 }, new byte[] { 0xFF, 0xFE }, Array.Empty<byte>() };
-
-        byte[] bytes = await WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, new ArrayColumn<byte[]>("c", "String", rows)));
-        using var reader = ReaderOver(bytes);
-        using var column = (IStringColumn)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", rows.Length, None);
-
-        var withNull = new ArrayColumn<byte[]>("c", "String", new[] { new byte[] { 0x41 }, null });
-        ArgumentException thrown = Assert.ThrowsAsync<ArgumentException>(
-            () => WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, withNull)));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(bytes, Is.EqualTo(new byte[] { 0x01, 0x41, 0x02, 0xFF, 0xFE, 0x00 }), "each row is a VarUInt length then its bytes");
-            Assert.That(column.GetBytes(1).ToArray(), Is.EqualTo(new byte[] { 0xFF, 0xFE }));
-            Assert.That(thrown.Message, Does.Contain("null value (at row 1)"));
         });
     }
 
@@ -207,7 +118,7 @@ public class StringColumnCodecTests
         using var reader = ReaderOver(wire);
         using var decoded = (IStringColumn)await StringColumnCodec.Instance.ReadColumnAsync(reader, "c", "String", 1, None);
 
-        byte[] reEmitted = await WriteAsync(w => StringColumnCodec.Instance.WriteColumn(w, decoded));
+        byte[] reEmitted = await CodecTestHarness.WriteStoredAsync(StringColumnCodec.Instance, decoded, 0, decoded.RowCount);
 
         Assert.Multiple(() =>
         {
@@ -235,7 +146,7 @@ public class StringColumnCodecTests
             Assert.That(bytes[0], Is.EqualTo(new byte[] { 0x41, 0xFF, 0x42 }));
             Assert.That(bytes[1], Is.EqualTo(Array.Empty<byte>()));
             Assert.That(bytes.Values.ToArray(), Is.EqualTo(new[] { new byte[] { 0x41, 0xFF, 0x42 }, Array.Empty<byte>() }));
-            Assert.That(((IColumn<string>)column)[0], Is.EqualTo("A\uFFFDB"), "the reading the bytes exist to avoid");
+            Assert.That(((IColumn<string>)column)[0], Is.EqualTo("A�B"), "the reading the bytes exist to avoid");
             Assert.Throws<IndexOutOfRangeException>(() => _ = bytes[2]);
         });
     }
@@ -275,18 +186,6 @@ public class StringColumnCodecTests
 
     private static IColumn<T> ReadAs<T>(IColumn column)
         => ColumnCodecRegistry.Default.Projections.ReadAs<T>(column, new ResolveContext { ServerTimezone = "UTC" });
-
-    private static async Task<byte[]> WriteAsync(Action<ClickHouseBinaryWriter> write)
-    {
-        using var ms = new MemoryStream();
-        using (var writer = new ClickHouseBinaryWriter(ms))
-        {
-            write(writer);
-            await writer.FlushAsync(None);
-        }
-
-        return ms.ToArray();
-    }
 
     private static ClickHouseBinaryReader ReaderOver(byte[] bytes) => new(new MemoryStream(bytes));
 }

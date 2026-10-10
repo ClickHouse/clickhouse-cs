@@ -485,15 +485,17 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         {
             await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Variant(String, UInt64)) ENGINE = Memory", settings);
 
-            // Interleave alternatives so later blocks start at non-zero offsets in both child columns.
+            // Interleave alternatives so later blocks start at non-zero offsets in both child columns. The child columns
+            // are decoded columns, so the codec writes the dense column from its storage.
             object[] expected = { 100UL, "a", null, 200UL, "b", 300UL, "c" };
             var discriminators = new byte[] { 1, 0, 255, 1, 0, 1, 0 };
             IColumn[] typeColumns =
             {
-                new ArrayColumn<string>("value", "String", new[] { "a", "b", "c" }),
+                DecodedColumns.Of("value", "String", "a", "b", "c"),
                 PrimitiveColumn<ulong>.FromValues("value", "UInt64", new ulong[] { 100, 200, 300 }),
             };
             var dense = new VariantColumn("value", "Variant(String, UInt64)", discriminators, typeColumns, expected.Length, pooledDiscriminators: false, ownsColumns: false);
+            Assert.That(ColumnCodecRegistry.Default.Resolve("Variant(String, UInt64)", default).CanWrite(dense), Is.True, "the codec writes the column from its storage");
 
             IColumn[] columns = { PrimitiveColumn<uint>.FromValues("id", "UInt32", RowIds(expected.Length)), dense };
             await connection.InsertAsync($"INSERT INTO {table} (id, value) VALUES", columns, maxRowsPerBlock: 2, settings: settings, cancellationToken: None);
@@ -629,12 +631,13 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         {
             await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Dynamic) ENGINE = Memory", DynamicSplitSettings);
 
-            // Interleave Dynamic types so later blocks start at non-zero offsets in both child columns.
+            // Interleave Dynamic types so later blocks start at non-zero offsets in both child columns. The child columns
+            // are decoded columns, so the codec writes the dense column from its storage.
             object[] expected = { 100UL, "a", null, 200UL, "b", 300UL, "c" };
             var discriminators = new[] { 1, 0, 2, 1, 0, 1, 0 };
             IColumn[] typeColumns =
             {
-                new ArrayColumn<string>("value", "String", new[] { "a", "b", "c" }),
+                DecodedColumns.Of("value", "String", "a", "b", "c"),
                 PrimitiveColumn<ulong>.FromValues("value", "UInt64", new ulong[] { 100, 200, 300 }),
             };
             var dense = new DynamicColumn(
@@ -646,6 +649,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
                 expected.Length,
                 pooledDiscriminators: false,
                 ownsColumns: false);
+            Assert.That(ColumnCodecRegistry.Default.Resolve("Dynamic", default).CanWrite(dense), Is.True, "the codec writes the column from its storage");
 
             IColumn[] columns = { PrimitiveColumn<uint>.FromValues("id", "UInt32", RowIds(expected.Length)), dense };
             await connection.InsertAsync(

@@ -971,7 +971,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <param name="validateWritable">
     /// Whether to confirm each value column is writable as its target type. A column is then written through
     /// <see cref="InsertColumnWrite.For"/>: by its codec when the codec writes it from its storage, else by the converter
-    /// tree of its CLR type. Otherwise the codec writes every column.
+    /// tree of its CLR type. Otherwise the insert has no rows, no column is written, and the plan holds no writes.
     /// </param>
     /// <param name="error">Set to a human-readable message on mismatch; null on success.</param>
     /// <returns>The per-column write plan in schema order, or null when <paramref name="error"/> is set.</returns>
@@ -995,7 +995,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
             if (byName.TryGetValue(schemaColumn.Name, out IColumn value))
             {
                 matched++;
-                plan[i] = new InsertColumn(schemaColumn.Name, schemaColumn.TypeName, codec: null, value);
+                plan[i] = new InsertColumn(schemaColumn.Name, schemaColumn.TypeName, codec: null, value, write: null);
             }
             else
             {
@@ -1024,13 +1024,17 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                 return null;
             }
 
-            InsertColumnWrite write = validateWritable
-                ? InsertColumnWrite.For(codec, slot.Values, slot.TypeName, schema.Context, schema.Codecs.Converters)
-                : InsertColumnWrite.ThroughCodec(codec);
-            if (write is null)
+            InsertColumnWrite write = null;
+            if (validateWritable)
             {
-                error = DescribeUnwritableColumn(slot, schema.Codecs.Converters.SuggestedTypes(slot.TypeName, schema.Context, ConversionDirection.Write));
-                return null;
+                write = InsertColumnWrite.For(codec, slot.Values, slot.TypeName, schema.Context, schema.Codecs.Converters, out string refusal);
+                if (write is null)
+                {
+                    error = refusal is not null
+                        ? DescribeUnconvertedColumn(slot, refusal)
+                        : DescribeUnwritableColumn(slot, schema.Codecs.Converters.SuggestedTypes(slot.TypeName, schema.Context, ConversionDirection.Write));
+                    return null;
+                }
             }
 
             plan[i] = new InsertColumn(slot.Name, slot.TypeName, codec, slot.Values, write);
@@ -1065,6 +1069,16 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
         return $"Column '{slot.Name}' ({slot.TypeName}) was given a column of element type {present}, which it cannot be written from. " + remedy;
     }
+
+    /// <summary>
+    /// Composes the message for a column that a query read as another type, whose values the insert cannot convert to the
+    /// target type.
+    /// </summary>
+    /// <param name="slot">The plan slot: the target's name and type, and the column the caller supplied.</param>
+    /// <param name="refusal">Why the values cannot be converted.</param>
+    /// <returns>The message.</returns>
+    internal static string DescribeUnconvertedColumn(InsertColumn slot, string refusal)
+        => $"Column '{slot.Name}' ({slot.TypeName}) was given a column that a query read as another type, whose values it converts through their meaning (a time, a duration, a label). {refusal}";
 
     /// <summary>Composes a message naming the columns the caller failed to supply and the ones it supplied in excess.</summary>
     private static string DescribeSchemaMismatch(IReadOnlyList<IColumn> columns, Block schema, List<string> missing)

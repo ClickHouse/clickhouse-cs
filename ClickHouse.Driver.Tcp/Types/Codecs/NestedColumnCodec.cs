@@ -46,15 +46,9 @@ internal sealed class NestedColumnCodec : IColumnCodec
     /// <summary>
     /// A <c>Nested</c> column surfaces as an array of records (<c>object[][]</c>). With
     /// <c>flatten_nested = 0</c>, ClickHouse supports arbitrary nesting, so another composite can use this as its
-    /// element type while retaining the dense <see cref="NestedColumn"/> as the write source.
+    /// element type, with the decoded <see cref="NestedColumn"/> as the column that the codec writes.
     /// </summary>
     public Type ElementType => typeof(object[][]);
-
-    /// <summary>
-    /// The placeholder for an absent <c>Nested</c> value is the empty row (no elements). A <c>Nested</c> is never
-    /// wrapped in <c>Nullable</c> (the server rejects it), so this is a formality the interface requires.
-    /// </summary>
-    public object NullPlaceholder => Array.Empty<object[]>();
 
     /// <summary>Builds a <c>Nested(...)</c> codec, resolving each field's codec through the registry.</summary>
     /// <param name="node">The parsed <c>Nested</c> node; each argument is a named field (<c>name Type</c>).</param>
@@ -201,14 +195,7 @@ internal sealed class NestedColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // Nested requires its specialized column shape.
-    public bool CanWriteElementType(Type elementType) => false;
-
-    /// <inheritdoc/>
-    // The only column that a Nested type writes is its own dense column.
-    public bool WritesFromStorage(IColumn column) => CanWrite(column);
-
-    /// <inheritdoc/>
+    // The only column that the codec writes is its own decoded column, whose field columns the field codecs write.
     public bool CanWrite(IColumn column)
     {
         if (column is not NestedColumn nested || nested.FieldCount != children.Length)
@@ -228,28 +215,14 @@ internal sealed class NestedColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    // Project each field's flat column and slice once and create each field codec's own write state over it, so a
-    // data-dependent field (Dynamic) sees its real values at prefix time and the projection spans both phases.
+    // The element range of the slice, and the write state of each field codec over its field column, which the prefix
+    // and the body share: a field with a prefix that depends on the data (Dynamic) gets the values of the slice.
     public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildState(column, start, length);
-
-    /// <inheritdoc/>
-    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        using NestedWriteState state = BuildState(column, start, length);
-        WriteStatePrefixCore(writer, state);
-    }
 
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
     {
         WriteStatePrefixCore(writer, state.Expect<NestedWriteState>(TypeName));
-    }
-
-    /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        using NestedWriteState state = BuildState(column, start, length);
-        WriteBodyCore(writer, column, start, length, state);
     }
 
     /// <inheritdoc/>
@@ -268,7 +241,7 @@ internal sealed class NestedColumnCodec : IColumnCodec
 
     private void WriteBodyCore(ClickHouseBinaryWriter writer, IColumn column, int start, int length, NestedWriteState state)
     {
-        var nested = AsNested(column);
+        var nested = (NestedColumn)column;
         ReadOnlySpan<int> offsets = nested.Offsets;
 
         // The wire offsets are relative to this slice's own field streams, so subtract the slice's first element
@@ -285,11 +258,11 @@ internal sealed class NestedColumnCodec : IColumnCodec
         }
     }
 
-    // Builds the per-field projection state for a slice: each field's flat column with the slice's element range,
-    // plus each field codec's own write state over it.
+    // Builds the state of a slice: each field column with the element range of the slice, and the write state of each
+    // field codec over it.
     private NestedWriteState BuildState(IColumn column, int start, int length)
     {
-        var nested = AsNested(column);
+        var nested = (NestedColumn)column;
         ReadOnlySpan<int> offsets = nested.Offsets;
         int elementBase = offsets[start];
         int elementCount = offsets[start + length] - elementBase;
@@ -321,22 +294,8 @@ internal sealed class NestedColumnCodec : IColumnCodec
         return new NestedWriteState { FieldColumns = fieldColumns, ElementBase = elementBase, ElementCount = elementCount, FieldStates = fieldStates };
     }
 
-    // A Nested column has no jagged/row-oriented write form (that would need a per-row record type and reintroduce
-    // an arity cap); the dense NestedColumn is the only write source, so anything else is a caller error.
-    private NestedColumn AsNested(IColumn column)
-    {
-        if (column is NestedColumn nested && nested.FieldCount == children.Length)
-        {
-            return nested;
-        }
-
-        throw new ArgumentException(
-            $"The '{TypeName}' codec writes a NestedColumn with {children.Length} field(s); got '{column?.GetType().Name ?? "null"}'.",
-            nameof(column));
-    }
-
-    // The per-field projection of one slice, shared across the prefix and body phases: each field's (borrowed)
-    // flat column, the shared element range, and each field codec's own state.
+    // The state of one slice, which the prefix and the body share: each field column (borrowed), the element range,
+    // and the write state of each field codec.
     private sealed class NestedWriteState : IColumnWriteState
     {
         public IColumn[] FieldColumns;

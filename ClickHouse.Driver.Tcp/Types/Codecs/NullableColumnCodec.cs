@@ -9,23 +9,19 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// <summary>
 /// A codec for the ClickHouse <c>Nullable(T)</c> column. It owns no bytes of its own beyond the null-map: it
 /// delegates the serialization-state prefix to the inner codec, then reads/writes a per-row null-map (one
-/// <c>UInt8</c> each: non-zero means NULL) followed by the inner type's encoding for <em>all</em> rows —
+/// <c>UInt8</c> each: non-zero means NULL) followed by the inner type's encoding for <em>all</em> rows,
 /// placeholders included at the null positions. The decoded column surfaces each row as the inner CLR value or
 /// <see langword="null"/>: a value type as <c>T?</c> (<see cref="NullableValueColumn{T}"/>), a reference type as the
 /// nullable reference (<see cref="NullableReferenceColumn{T}"/>).
 ///
 /// <para>
-/// The codec itself stays non-generic; the generic work — building the typed wrapper column, and reading and
-/// filling a caller's column — is delegated to a cached, per-element-type <see cref="INullableShape"/>.
+/// The codec itself stays non-generic; the generic work, building the typed wrapper column, is delegated to a
+/// cached, per-element-type <see cref="INullableShape"/>.
 /// </para>
 ///
 /// <para>
-/// On the write path a Nullable column may be supplied in any of the CLR write types the inner codec accepts
-/// (<see cref="IColumnCodec.WritableElementTypes"/>), each made nullable — so <c>Nullable(DateTime)</c> takes
-/// either <c>DateTimeOffset?</c> or <c>DateTime?</c>. One <see cref="INullableShape"/> is built per write type;
-/// the supplied column picks its shape, which fills the placeholder buffer in that same write type via the inner
-/// codec's <see cref="IColumnCodec.NullPlaceholderAs"/>. Reads always produce the canonical
-/// <see cref="IColumnCodec.ElementType"/> made nullable.
+/// The codec writes the decoded column only (<see cref="CanWrite"/>): its null map, then its inner column through the
+/// inner codec. The converter layer writes every other column.
 /// </para>
 /// </summary>
 internal sealed class NullableColumnCodec : IColumnCodec
@@ -48,27 +44,6 @@ internal sealed class NullableColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public Type ElementType => canonicalShape.NullableElementType;
-
-    /// <summary>
-    /// The placeholder for an absent value.
-    /// </summary>
-    public object NullPlaceholder => null;
-
-    /// <summary>
-    /// Returns <see langword="null"/> for any writable CLR type.
-    /// </summary>
-    /// <param name="writeType">The CLR write type to express the placeholder in.</param>
-    /// <returns><see langword="null"/>.</returns>
-    /// <exception cref="NotSupportedException"><paramref name="writeType"/> is not a writable element type.</exception>
-    public object NullPlaceholderAs(Type writeType)
-    {
-        if (TryInnerWriteType(writeType, out Type innerType) && inner.CanWriteElementType(innerType))
-        {
-            return null;
-        }
-
-        throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
-    }
 
     /// <summary>Builds a <c>Nullable(T)</c> codec, resolving the inner type <c>T</c> through the registry.</summary>
     /// <param name="node">The parsed <c>Nullable</c> type node; its single argument is the inner type.</param>
@@ -139,111 +114,29 @@ internal sealed class NullableColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWriteElementType(Type elementType)
-        => TryInnerWriteType(elementType, out Type innerType) && inner.CanWriteElementType(innerType);
-
-    /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => ResolveWriteShape(column) is not null;
-
-    /// <inheritdoc/>
     // A decoded Nullable column: the null map and the inner column that the inner codec writes.
-    public bool WritesFromStorage(IColumn column)
+    public bool CanWrite(IColumn column)
     {
         Type type = column.GetType();
         return type.IsGenericType
             && (type.GetGenericTypeDefinition() == typeof(NullableValueColumn<>) || type.GetGenericTypeDefinition() == typeof(NullableReferenceColumn<>))
-            && CanWrite(column);
-    }
-
-    private static bool TryInnerWriteType(Type elementType, out Type innerType)
-    {
-        innerType = Nullable.GetUnderlyingType(elementType);
-        if (innerType is not null)
-        {
-            return true;
-        }
-
-        if (elementType.IsValueType)
-        {
-            return false;
-        }
-
-        innerType = elementType;
-        return true;
+            && inner.CanWrite(((INullableColumn)column).Inner);
     }
 
     /// <inheritdoc/>
-    public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildState(column, start, length);
-
-    /// <inheritdoc/>
-    public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        using NullableWriteState state = BuildState(column, start, length);
-        WriteStatePrefixCore(writer, state);
-    }
+    // The state is the state of the inner column.
+    public IColumnWriteState BeginWrite(IColumn column, int start, int length)
+        => inner.BeginWrite(((INullableColumn)column).Inner, start, length);
 
     /// <inheritdoc/>
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
-        => WriteStatePrefixCore(writer, state.Expect<NullableWriteState>(TypeName));
-
-    /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
-    {
-        using NullableWriteState state = BuildState(column, start, length);
-        WriteBody(writer, column, start, length, state);
-    }
+        => inner.WriteStatePrefix(writer, ((INullableColumn)column).Inner, start, length, state);
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
-        => WriteBody(writer, column, start, length, state.Expect<NullableWriteState>(TypeName));
-
-    private INullableShape ResolveWriteShape(IColumn column)
     {
-        if (!TryInnerWriteType(column.ElementType, out Type innerType))
-        {
-            return null;
-        }
-
-        INullableShape shape = NullableShapes.For(innerType);
-        return shape.CanWrite(inner, column) ? shape : null;
-    }
-
-    private NullableWriteState BuildState(IColumn column, int start, int length)
-    {
-        INullableShape shape = ResolveWriteShape(column)
-            ?? throw new ArgumentException(
-                $"A {TypeName} column must hold a nullable CLR type its inner codec accepts, not {column.GetType()}.",
-                nameof(column));
-
-        IColumn innerColumn = shape.GetInnerColumn(inner, column);
-        IColumnWriteState innerState = inner.BeginWrite(innerColumn, start, length);
-        return new NullableWriteState
-        {
-            Shape = shape,
-            InnerColumn = innerColumn,
-            InnerState = innerState,
-            Start = start,
-            Length = length,
-        };
-    }
-
-    private void WriteStatePrefixCore(ClickHouseBinaryWriter writer, NullableWriteState state)
-        => inner.WriteStatePrefix(writer, state.InnerColumn, state.Start, state.Length, state.InnerState);
-
-    private void WriteBody(ClickHouseBinaryWriter writer, IColumn column, int start, int length, NullableWriteState state)
-    {
-        state.Shape.WriteNullMap(writer, column, start, length);
-        inner.WriteColumn(writer, state.InnerColumn, state.Start, state.Length, state.InnerState);
-    }
-
-    private sealed class NullableWriteState : IColumnWriteState
-    {
-        public INullableShape Shape;
-        public IColumn InnerColumn;
-        public IColumnWriteState InnerState;
-        public int Start;
-        public int Length;
-
-        public void Dispose() => InnerState?.Dispose();
+        var nullable = (INullableColumn)column;
+        writer.WriteBytes(nullable.NullMap.Slice(start, length));
+        inner.WriteColumn(writer, nullable.Inner, start, length, state);
     }
 }

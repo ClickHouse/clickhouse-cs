@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
+using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Format;
 
@@ -85,7 +86,12 @@ internal static class BlockWriter
         for (int i = 0; i < columns.Count; i++)
         {
             IColumn column = columns[i];
-            planned[i] = new InsertColumn(column.Name, column.TypeName, registry.Resolve(column.TypeName, in context), column);
+            IColumnCodec codec = registry.Resolve(column.TypeName, in context);
+            InsertColumnWrite write = InsertColumnWrite.For(codec, column, column.TypeName, in context, registry.Converters)
+                ?? throw new ArgumentException(
+                    $"Column '{column.Name}' cannot be written as {column.TypeName}: {registry.Converters.Derive(column.TypeName, in context, column.ElementType, ConversionDirection.Write).Refusal}",
+                    nameof(columns));
+            planned[i] = new InsertColumn(column.Name, column.TypeName, codec, column, write);
         }
 
         return WriteDataBlockAsync(writer, negotiated, planned, start: 0, rowCount, flushThresholdBytes, cancellationToken);

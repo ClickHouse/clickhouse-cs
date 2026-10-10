@@ -11,49 +11,6 @@ public class DateTime64ColumnCodecTests
 {
     private static DateTime64ColumnCodec Codec(string type, string tz = null) => DateTime64ColumnCodec.Create(TypeParser.Parse(type), tz);
 
-    // Scales 8 and 9 exceed a .NET tick (100 ns), but a write scales up, so it stays exact. The lossy direction is
-    // the read, pinned below.
-    [TestCase("DateTime64(0)")]
-    [TestCase("DateTime64(3)")]
-    [TestCase("DateTime64(6)")]
-    [TestCase("DateTime64(7)")]
-    [TestCase("DateTime64(8)")]
-    [TestCase("DateTime64(9)")]
-    public async Task RoundTrip_PreservesInstantAtScale(string type)
-    {
-        DateTime64ColumnCodec codec = Codec(type, "UTC");
-        var values = new[]
-        {
-            DateTimeOffset.FromUnixTimeSeconds(0),
-            DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000),
-            DateTimeOffset.FromUnixTimeSeconds(-1_000_000),
-        };
-
-        using var column = (DateTime64Column)await RoundTripAsync(codec, new ArrayColumn<DateTimeOffset>("c", type, values), type, values.Length);
-
-        Assert.Multiple(() =>
-        {
-            for (int i = 0; i < values.Length; i++)
-            {
-                Assert.That(column.GetDateTimeOffset(i), Is.EqualTo(values[i]));
-            }
-        });
-    }
-
-    [TestCase(0L)]
-    [TestCase(1500L)]
-    [TestCase(-2500L)]
-    public async Task WriteColumn_RawCount_WrittenVerbatim(long count)
-    {
-        // A raw long is assumed already at the column's scale, so it is written to the wire unchanged.
-        DateTime64ColumnCodec codec = Codec("DateTime64(3)", "UTC");
-        var column = new ArrayColumn<long>("c", "DateTime64(3)", new[] { count });
-
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, column));
-
-        Assert.That(BitConverter.ToInt64(bytes), Is.EqualTo(count));
-    }
-
     [Test]
     public async Task ReadColumn_ZeroRows_ReturnsEmptyColumn()
     {
@@ -62,42 +19,13 @@ public class DateTime64ColumnCodecTests
         Assert.That(column.RowCount, Is.EqualTo(0));
     }
 
-    [Test]
-    public void WriteColumn_DateTimeOffsetSubScalePrecision_Throws()
-    {
-        // A DateTimeOffset (100 ns ticks) whose instant is not a whole millisecond cannot be written to a
-        // scale-3 column without dropping non-zero digits.
-        DateTime64ColumnCodec codec = Codec("DateTime64(3)", "UTC");
-        DateTimeOffset value = DateTimeOffset.FromUnixTimeMilliseconds(1500).AddTicks(1234);
-        var column = new ArrayColumn<DateTimeOffset>("c", "DateTime64(3)", new[] { value });
-
-        Assert.ThrowsAsync<ArgumentException>(async () => await WriteAsync(w => codec.WriteColumn(w, column)));
-    }
-
-    [Test]
-    public void WriteColumn_DateTimeOffsetPastTheScalesRange_ThrowsNamingTheValueAndTheColumn()
-    {
-        // DateTime64(9) reaches its Int64 limit in 2262, before DateTimeOffset's limit.
-        const string type = "DateTime64(9)";
-        DateTime64ColumnCodec codec = Codec(type, "UTC");
-        var column = new ArrayColumn<DateTimeOffset>("c", type, new[] { new DateTimeOffset(2300, 1, 1, 0, 0, 0, TimeSpan.Zero) });
-
-        var thrown = Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () => await WriteAsync(w => codec.WriteColumn(w, column)));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(thrown.Message, Does.Contain("2300-01-01"));
-            Assert.That(thrown.Message, Does.Contain(type));
-        });
-    }
-
     // Scale 8 sets one digit finer than a .NET tick, scale 9 two. The raw count keeps them; the DateTimeOffset
     // view truncates toward zero, it does not round.
     [TestCase("DateTime64(8)", 170_000_000_012_345_678L)]
     [TestCase("DateTime64(9)", 1_700_000_000_123_456_789L)]
     public async Task RoundTrip_ScaleFinerThanDotNetTick_KeepsTheCountAndTruncatesTheOffsetView(string type, long count)
     {
-        const long ExpectedDotNetTicks = 17_000_000_001_234_567L; // 1_700_000_000.1234567 s — the tick-aligned part.
+        const long ExpectedDotNetTicks = 17_000_000_001_234_567L; // 1_700_000_000.1234567 s: the tick-aligned part.
         DateTime64ColumnCodec codec = Codec(type, "UTC");
 
         using var column = (DateTime64Column)await RoundTripAsync(
@@ -204,34 +132,6 @@ public class DateTime64ColumnCodecTests
     }
 
     [Test]
-    public async Task WriteColumn_DateTimeInput_EncodesSameCountAsEquivalentDateTimeOffset()
-    {
-        const string type = "DateTime64(3)";
-        DateTime64ColumnCodec codec = Codec(type, "UTC");
-        var utc = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
-
-        byte[] fromDateTime = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { utc })));
-        byte[] fromOffset = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTimeOffset>("c", type, new[] { new DateTimeOffset(utc) })));
-
-        CollectionAssert.AreEqual(fromOffset, fromDateTime);
-    }
-
-    [Test]
-    public async Task WriteColumn_UnspecifiedKind_InterpretedInColumnTimezone()
-    {
-        // Consistency with the HTTP client (and the DateTime codec): a Kind=Unspecified wall-clock is interpreted
-        // in the column's timezone, not UTC. 2024-01-15 10:30:00 in a +05:00 column is 2024-01-15 05:30:00Z.
-        const string type = "DateTime64(3, 'Fixed/UTC+05:00:00')";
-        DateTime64ColumnCodec codec = Codec(type);
-        var unspecified = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Unspecified);
-
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { unspecified })));
-
-        long expectedMillis = new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)).ToUnixTimeMilliseconds();
-        Assert.That(BitConverter.ToInt64(bytes), Is.EqualTo(expectedMillis));
-    }
-
-    [Test]
     public async Task ReadColumn_FixedUtcOffsetTimeZoneInfoCannotHold_ReadsTheCountsAndReportsOnlyTheZone()
     {
         // Raw counts do not require the unrepresentable sub-minute timezone.
@@ -256,12 +156,12 @@ public class DateTime64ColumnCodecTests
         const string type = "DateTime64(3, 'Fixed/UTC+19:00:00')";
         var value = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
 
-        byte[] bytes = await WriteAsync(w => Codec(type).WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { value })));
+        byte[] bytes = await WriteSliceAsync(Codec(type), new ArrayColumn<DateTime>("c", type, new[] { value }), 0, 1);
 
         Assert.That(BitConverter.ToInt64(bytes, 0), Is.EqualTo(1_705_314_600_000L));
     }
 
-    // DateTime64 shares DateTimeColumnCodec.ToUtc; covered here too because a refactor could separate them.
+    // The DateTime64 write of a DateTime applies the rule of the DateTime write (DateTimeColumnCodec.ToUtc).
     [Test]
     public void WriteColumn_UnspecifiedKindInDaylightSavingGap_ThrowsNamingTheZone()
     {
@@ -270,46 +170,10 @@ public class DateTime64ColumnCodecTests
         DateTime64ColumnCodec codec = Codec(type);
         var gap = new DateTime(2024, 3, 10, 2, 30, 0, DateTimeKind.Unspecified);
 
-        ArgumentException thrown = Assert.ThrowsAsync<ArgumentException>(async () =>
-            await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { gap }))));
+        ArgumentException thrown = Assert.ThrowsAsync<ArgumentException>(() =>
+            WriteSliceAsync(codec, new ArrayColumn<DateTime>("c", type, new[] { gap }), 0, 1));
 
         Assert.That(thrown.Message, Does.Contain("America/New_York"));
-    }
-
-    [Test]
-    public async Task WriteColumn_UnspecifiedKindInAmbiguousHour_EncodesTheEarlierOccurrence()
-    {
-        // 2024-11-03 01:30 happens twice in New York; the earlier is 01:30 EDT = 05:30Z.
-        const string type = "DateTime64(3, 'America/New_York')";
-        DateTime64ColumnCodec codec = Codec(type);
-        var ambiguous = new DateTime(2024, 11, 3, 1, 30, 0, DateTimeKind.Unspecified);
-
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { ambiguous })));
-
-        long expected = new DateTimeOffset(2024, 11, 3, 5, 30, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
-        Assert.That(BitConverter.ToInt64(bytes), Is.EqualTo(expected));
-    }
-
-    [Test]
-    public void CanWrite_AcceptsTemporalColumns_RejectsOthers()
-    {
-        DateTime64ColumnCodec codec = Codec("DateTime64(3)", "UTC");
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWrite(new ArrayColumn<long>("c", "DateTime64(3)", Array.Empty<long>())), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<DateTimeOffset>("c", "DateTime64(3)", Array.Empty<DateTimeOffset>())), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<DateTime>("c", "DateTime64(3)", Array.Empty<DateTime>())), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<string>("c", "DateTime64(3)", Array.Empty<string>())), Is.False);
-        });
-    }
-
-    [Test]
-    public void WriteColumn_WrongElementType_Throws()
-    {
-        DateTime64ColumnCodec codec = Codec("DateTime64(3)", "UTC");
-        var column = new ArrayColumn<string>("c", "DateTime64(3)", new[] { "x" });
-
-        Assert.ThrowsAsync<ArgumentException>(async () => await WriteAsync(w => codec.WriteColumn(w, column)));
     }
 
     [Test]
@@ -319,23 +183,4 @@ public class DateTime64ColumnCodecTests
     [Test]
     public void Create_ScaleOutOfRange_Throws()
         => Assert.Throws<FormatException>(() => Codec("DateTime64(10)"));
-
-    [Test]
-    public void WritableElementTypes_ListsLongThenOffsetThenDateTime()
-        => Assert.That(
-            Codec("DateTime64(3)").WritableElementTypes,
-            Is.EqualTo(new[] { typeof(long), typeof(DateTimeOffset), typeof(DateTime) }));
-
-    [Test]
-    public void NullPlaceholderAs_ReturnsEpochInRequestedSpelling_ThrowsForOthers()
-    {
-        DateTime64ColumnCodec codec = Codec("DateTime64(3)");
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.NullPlaceholderAs(typeof(long)), Is.EqualTo(0L));
-            Assert.That(codec.NullPlaceholderAs(typeof(DateTimeOffset)), Is.EqualTo(DateTimeOffset.UnixEpoch));
-            Assert.That(codec.NullPlaceholderAs(typeof(DateTime)), Is.EqualTo(DateTime.UnixEpoch));
-            Assert.Throws<NotSupportedException>(() => codec.NullPlaceholderAs(typeof(string)));
-        });
-    }
 }
