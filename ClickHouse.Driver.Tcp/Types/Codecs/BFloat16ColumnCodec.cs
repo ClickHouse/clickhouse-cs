@@ -14,6 +14,9 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </summary>
 internal sealed class BFloat16ColumnCodec : IColumnCodec
 {
+    // The number of values that a write converts on the stack before it gives them to the writer in one copy.
+    private const int ChunkValues = 2048;
+
     /// <summary>The shared, stateless instance.</summary>
     public static readonly BFloat16ColumnCodec Instance = new();
 
@@ -60,6 +63,26 @@ internal sealed class BFloat16ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
+        // The decoded column holds the floats: their high 16 bits are written a chunk at a time.
+        if (column is ArrayColumn<float> stored)
+        {
+            Span<ushort> chunk = stackalloc ushort[ChunkValues];
+            ReadOnlySpan<float> floats = stored.Values.Slice(start, length);
+            while (!floats.IsEmpty)
+            {
+                int count = Math.Min(chunk.Length, floats.Length);
+                for (int i = 0; i < count; i++)
+                {
+                    chunk[i] = ToBFloat16Bits(floats[i]);
+                }
+
+                writer.WriteBytes(MemoryMarshal.AsBytes(chunk.Slice(0, count)));
+                floats = floats.Slice(count);
+            }
+
+            return;
+        }
+
         var values = (IColumn<float>)column;
         for (int i = 0; i < length; i++)
         {

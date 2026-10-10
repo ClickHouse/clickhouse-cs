@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -19,6 +20,9 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
     public static readonly IPv4ColumnCodec Instance = new();
 
     private const int Size = 4;
+
+    // The number of addresses that a write converts on the stack before it gives them to the writer in one copy.
+    private const int ChunkValues = 1024;
 
     private IPv4ColumnCodec()
     {
@@ -72,6 +76,26 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
+        // The decoded column holds the addresses: their wire values are written a chunk at a time.
+        if (column is ArrayColumn<IPAddress> stored)
+        {
+            Span<uint> chunk = stackalloc uint[ChunkValues];
+            ReadOnlySpan<IPAddress> addresses = stored.Values.Slice(start, length);
+            while (!addresses.IsEmpty)
+            {
+                int count = Math.Min(chunk.Length, addresses.Length);
+                for (int i = 0; i < count; i++)
+                {
+                    chunk[i] = ToWireValue(addresses[i]);
+                }
+
+                writer.WriteBytes(MemoryMarshal.AsBytes(chunk.Slice(0, count)));
+                addresses = addresses.Slice(count);
+            }
+
+            return;
+        }
+
         var values = (IColumn<IPAddress>)column;
         for (int i = 0; i < length; i++)
         {
@@ -102,6 +126,9 @@ internal sealed class IPv6ColumnCodec : IColumnCodec
     public static readonly IPv6ColumnCodec Instance = new();
 
     private const int Size = 16;
+
+    // The number of addresses that a write converts on the stack before it gives them to the writer in one copy.
+    private const int ChunkValues = 256;
 
     private IPv6ColumnCodec()
     {
@@ -158,6 +185,26 @@ internal sealed class IPv6ColumnCodec : IColumnCodec
     // The wire form is the 16 network-order bytes verbatim.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
+        // The decoded column holds the addresses: their 16 bytes are written a chunk at a time.
+        if (column is ArrayColumn<IPAddress> stored)
+        {
+            Span<byte> chunk = stackalloc byte[ChunkValues * Size];
+            ReadOnlySpan<IPAddress> addresses = stored.Values.Slice(start, length);
+            while (!addresses.IsEmpty)
+            {
+                int count = Math.Min(ChunkValues, addresses.Length);
+                for (int i = 0; i < count; i++)
+                {
+                    WriteNetworkBytes(addresses[i], chunk.Slice(i * Size, Size));
+                }
+
+                writer.WriteBytes(chunk.Slice(0, count * Size));
+                addresses = addresses.Slice(count);
+            }
+
+            return;
+        }
+
         var values = (IColumn<IPAddress>)column;
         Span<byte> network = stackalloc byte[Size];
         for (int i = 0; i < length; i++)
