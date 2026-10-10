@@ -70,6 +70,10 @@ internal sealed class EmptyTupleColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<ValueTuple>;
 
     /// <inheritdoc/>
+    // The column that a query of the type reads.
+    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<ValueTuple>;
+
+    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         // The rows hold no data, so the column contributes only its element type: this cast rejects a mismatched

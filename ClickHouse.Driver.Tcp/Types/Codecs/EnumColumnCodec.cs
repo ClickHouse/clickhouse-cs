@@ -151,6 +151,10 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => underlying.CanWrite(column) || column is IColumn<string>;
 
+    /// <inheritdoc/>
+    // The column that a query of the type reads.
+    public bool WritesFromStorage(IColumn column) => column is EnumColumn<T>;
+
     // A column of labels reaches the underlying ordinal codec as a borrowed view that resolves each label on
     // access, so no converted array is materialized.
     private IColumn AsOrdinals(IColumn column)

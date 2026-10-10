@@ -87,6 +87,10 @@ internal sealed class TimeColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is IColumn<int> or IColumn<TimeSpan> or IColumn<TimeOnly>;
 
     /// <inheritdoc/>
+    // The column that a query of the type reads.
+    public bool WritesFromStorage(IColumn column) => column is TimeColumn;
+
+    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         switch (column)

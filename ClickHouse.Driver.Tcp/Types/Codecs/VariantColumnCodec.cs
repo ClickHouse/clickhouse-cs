@@ -272,7 +272,25 @@ internal sealed class VariantColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => allChildrenWritable && column is IColumn<object>;
 
     /// <inheritdoc/>
-    public bool WritesFromStorage(IColumn column) => allChildrenWritable && column is VariantColumn dense && HasTheSameAlternatives(dense);
+    // A decoded Variant column of the same alternatives, whose alternative columns the alternative codecs write from
+    // their storage.
+    public bool WritesFromStorage(IColumn column)
+    {
+        if (!allChildrenWritable || column is not VariantColumn dense || !HasTheSameAlternatives(dense))
+        {
+            return false;
+        }
+
+        for (int i = 0; i < children.Length; i++)
+        {
+            if (!children[i].WritesFromStorage(dense.GetTypeColumn(i)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <inheritdoc/>
     // Project the slice into one column per alternative once, and open each alternative's own write state over it,

@@ -200,14 +200,14 @@ public abstract class PocoReadIntegrationTestBase
                 new[] { "label", "values", "marker" },
                 new IColumn[]
                 {
-                    new ArrayColumn<string>("NestedRecords", "String", new[] { "first", "second", "third" }),
-                    new ArrayColumn<int?[]>("NestedRecords", "Array(Nullable(Int32))", new[]
+                    DecodedColumns.Of("NestedRecords", "String", "first", "second", "third"),
+                    DecodedColumns.Of("NestedRecords", "Array(Nullable(Int32))", new[]
                     {
                         new int?[] { 1, null },
                         Array.Empty<int?>(),
                         new int?[] { null, int.MinValue },
                     }),
-                    new ArrayColumn<(byte, string)>("NestedRecords", "Tuple(UInt8, String)", new[]
+                    DecodedColumns.Of("NestedRecords", "Tuple(UInt8, String)", new[]
                     {
                         ((byte)1, "a"),
                         ((byte)2, string.Empty),
