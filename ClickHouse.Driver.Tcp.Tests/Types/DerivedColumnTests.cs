@@ -51,11 +51,16 @@ public class DerivedColumnTests
         var view = new DerivedColumn<int>(Source(1_000), reader, pool);
         using var start = new Barrier(8);
 
-        int[][] results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
-        {
-            start.SignalAndWait();
-            return view.Values.ToArray();
-        })));
+        // Each worker has its own thread: the barrier holds all of them, and the thread pool adds threads slowly.
+        int[][] results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Factory.StartNew(
+            () =>
+            {
+                start.SignalAndWait();
+                return view.Values.ToArray();
+            },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default)));
 
         Assert.Multiple(() =>
         {
@@ -187,13 +192,18 @@ public class DerivedColumnTests
         using Block block = ReadRulesTests.DecodeSample("Nullable(DateTime('UTC'))");
         using var start = new Barrier(8);
 
-        IColumn<DateTimeOffset?>[] views = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
-        {
-            start.SignalAndWait();
-            IColumn<DateTimeOffset?> view = block.ReadAs<DateTimeOffset?>(0);
-            _ = view.Values.Length;
-            return view;
-        })));
+        // Each worker has its own thread: the barrier holds all of them, and the thread pool adds threads slowly.
+        IColumn<DateTimeOffset?>[] views = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Factory.StartNew(
+            () =>
+            {
+                start.SignalAndWait();
+                IColumn<DateTimeOffset?> view = block.ReadAs<DateTimeOffset?>(0);
+                _ = view.Values.Length;
+                return view;
+            },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default)));
 
         Assert.That(views, Has.All.SameAs(views[0]));
     }

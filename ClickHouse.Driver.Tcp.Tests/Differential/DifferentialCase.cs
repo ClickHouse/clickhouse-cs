@@ -15,7 +15,7 @@ public enum CaseSource
     /// <summary>A column type of the read targets table of <c>DifferentialCases</c>, with the CLR types to read it as.</summary>
     ColumnReadProjection,
 
-    /// <summary>A value or error scenario of <c>ColumnReadProjectionTests</c>: its own values, read as its target.</summary>
+    /// <summary>A value or error scenario of <c>DifferentialCases</c>: its own values, read as its target.</summary>
     ColumnReadScenario,
 }
 

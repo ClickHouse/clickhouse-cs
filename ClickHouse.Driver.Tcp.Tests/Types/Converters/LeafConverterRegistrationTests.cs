@@ -8,8 +8,8 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// Pins what the differential tests compare for the leaf converters (<see cref="LeafConverterRegistration"/>): every
-/// pair of the leaf table is compared there with values or bytes of the client's entry point, except the pairs of
+/// Pins what the differential tests compare for the leaves: every pair of the leaf table is compared there with values
+/// or bytes of the client's entry points, except the pairs of
 /// <see cref="NotInTheCaseList"/>, which no case of the case list reaches. <see cref="LeafReaderTests"/> and
 /// <see cref="LeafWriterTests"/> test those pairs themselves.
 /// </summary>
@@ -29,7 +29,7 @@ public class LeafConverterRegistrationTests
     public void Run_EveryCaseOfALeafType_ComparesEveryLeafPairExceptTheListedOnes()
     {
         var compared = new HashSet<LeafPairKey>();
-        foreach (DifferentialCase testCase in DifferentialCases.All().Where(c => LeafConverterRegistration.IsLeafType(c.ColumnType)))
+        foreach (DifferentialCase testCase in DifferentialCases.All().Where(c => IsLeafType(c.ColumnType)))
         {
             string leaf = LeafName(testCase.ColumnType);
             foreach (FacetResult result in DifferentialEngine.ForCurrentRegistry(testCase).Facets)
@@ -61,6 +61,11 @@ public class LeafConverterRegistrationTests
             Assert.That(NotInTheCaseList.Intersect(compared), Is.Empty, "listed pairs that a case now compares: remove them from the list");
         });
     }
+
+    /// <summary>Whether the derivation of <paramref name="columnType"/> ends at a leaf.</summary>
+    /// <param name="columnType">The ClickHouse type of the case.</param>
+    /// <returns>Whether the type is a leaf, or a <c>SimpleAggregateFunction</c> of a leaf.</returns>
+    internal static bool IsLeafType(string columnType) => LeafTable.TryGet(LeafName(columnType), out _);
 
     /// <summary>The leaf name of a type string, as the derivation finds it.</summary>
     internal static string LeafName(string columnType)

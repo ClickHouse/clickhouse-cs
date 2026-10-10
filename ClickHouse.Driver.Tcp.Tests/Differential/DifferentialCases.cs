@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net;
-using System.Reflection;
 using ClickHouse.Driver.Tcp.Tests.Types;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
@@ -11,8 +11,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
 /// <summary>
 /// The case list of the differential tests: every case of <c>InsertRoundTripCase</c> and of
-/// <c>CompositeLiftMatrixTests</c>, a table of column types with read targets, and each value and error scenario of
-/// <c>ColumnReadProjectionTests</c>.
+/// <c>CompositeLiftMatrixTests</c>, a table of column types with read targets, and a list of value and error scenarios
+/// of <c>ReadAs</c>.
 /// </summary>
 public static class DifferentialCases
 {
@@ -25,7 +25,7 @@ public static class DifferentialCases
     /// <summary>The number of column types of the read targets table (<see cref="CaseSource.ColumnReadProjection"/>).</summary>
     public const int ColumnReadProjectionCount = 56;
 
-    /// <summary>The number of <c>ColumnReadScenario</c> values of the tests of <c>ColumnReadProjectionTests</c>.</summary>
+    /// <summary>The number of value and error scenarios (<see cref="CaseSource.ColumnReadScenario"/>).</summary>
     public const int ColumnReadScenarioCount = 39;
 
     /// <summary>
@@ -205,29 +205,90 @@ public static class DifferentialCases
         }
     }
 
-    // The scenarios of the tests of ColumnReadProjectionTests that take one ColumnReadScenario, from their
-    // TestCaseSource, in the order of the test names.
-    private static IEnumerable<ColumnReadScenario> Scenarios()
+    // The value and error scenarios of ReadAs that a server round trip cannot observe: the DateTimeKind of a calendar
+    // reading, the scale of a count, and the values that have no reading and fail on their row.
+    private static IEnumerable<ColumnReadScenario> Scenarios() => new[]
     {
-        const BindingFlags Static = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
-        IEnumerable<MethodInfo> methods = typeof(ColumnReadProjectionTests)
-            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
-            .Where(m => m.GetParameters() is { Length: 1 } parameters && parameters[0].ParameterType == typeof(ColumnReadScenario))
-            .OrderBy(m => m.Name, StringComparer.Ordinal);
+        // The instant in the timezone of the column. 1700000000 = 2023-11-14T22:13:20Z, which is 23:13:20 +01:00 in
+        // Berlin (winter, no DST).
+        ColumnReadScenario.Reads("DateTime('Europe/Berlin') as DateTimeOffset", "DateTime('Europe/Berlin')", new uint[] { 1_700_000_000 }, new DateTimeOffset(2023, 11, 14, 23, 13, 20, TimeSpan.FromHours(1))),
 
-        foreach (MethodInfo method in methods)
-        {
-            foreach (TestCaseSourceAttribute source in method.GetCustomAttributes<TestCaseSourceAttribute>())
-            {
-                MethodInfo sourceMethod = typeof(ColumnReadProjectionTests).GetMethod(source.SourceName, Static)
-                    ?? throw new InvalidOperationException($"ColumnReadProjectionTests has no static method '{source.SourceName}'.");
-                foreach (ColumnReadScenario scenario in (IEnumerable<ColumnReadScenario>)sourceMethod.Invoke(null, null))
-                {
-                    yield return scenario;
-                }
-            }
-        }
-    }
+        // A timezone that TimeZoneInfo cannot hold fails on the row, and not when the reading is built.
+        ColumnReadScenario.Throws<uint, DateTimeOffset, FormatException>("DateTime('Fixed/UTC+19:00:00') as DateTimeOffset", "DateTime('Fixed/UTC+19:00:00')", 1_700_000_000, "+19:00:00"),
+        ColumnReadScenario.Throws<uint, DateTimeOffset, FormatException>("DateTime('Fixed/UTC+05:30:15') as DateTimeOffset", "DateTime('Fixed/UTC+05:30:15')", 1_700_000_000, "+05:30:15"),
+        ColumnReadScenario.Throws<long, DateTimeOffset, FormatException>("DateTime64(3, 'Fixed/UTC+19:00:00') as DateTimeOffset", "DateTime64(3, 'Fixed/UTC+19:00:00')", 1_700_000_000_000, "+19:00:00"),
+        ColumnReadScenario.Throws<long, DateTimeOffset, FormatException>("DateTime64(9, 'Fixed/UTC+05:30:15') as DateTimeOffset", "DateTime64(9, 'Fixed/UTC+05:30:15')", 1_700_000_000_000, "+05:30:15"),
+
+        // A UTC column gives DateTimeKind.Utc.
+        ColumnReadScenario.Reads("DateTime('UTC') as DateTime", "DateTime('UTC')", new uint[] { 1_700_000_000 }, new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Utc)),
+
+        // A column with a non-zero offset gives the wall clock in its timezone as DateTimeKind.Unspecified. This is
+        // the rule of ToDateTime in the HTTP driver, so a POCO that reads the same column through either client gets
+        // the same value.
+        ColumnReadScenario.Reads("DateTime('Europe/Berlin') as DateTime", "DateTime('Europe/Berlin')", new uint[] { 1_700_000_000 }, new DateTime(2023, 11, 14, 23, 13, 20, DateTimeKind.Unspecified)),
+
+        // The scale of the column applies. Scale 9 is finer than a .NET tick, so the sub-100 ns digits truncate toward
+        // zero.
+        ColumnReadScenario.Reads("DateTime64(3, 'UTC') as DateTimeOffset", "DateTime64(3, 'UTC')", new[] { 1_700_000_000_123L }, Instant("2023-11-14T22:13:20.1230000Z")),
+        ColumnReadScenario.Reads("DateTime64(9, 'UTC') as DateTimeOffset", "DateTime64(9, 'UTC')", new[] { 1_700_000_000_123_456_789L }, Instant("2023-11-14T22:13:20.1234567Z")),
+        ColumnReadScenario.Reads("DateTime64(0, 'UTC') as DateTimeOffset", "DateTime64(0, 'UTC')", new[] { 1_700_000_000L }, Instant("2023-11-14T22:13:20.0000000Z")),
+
+        // DateTime64 has the DateTimeKind rule of DateTime.
+        ColumnReadScenario.Reads("DateTime64(3, 'UTC') as DateTime", "DateTime64(3, 'UTC')", new[] { 1_700_000_000_123L }, new DateTime(2023, 11, 14, 22, 13, 20, 123, DateTimeKind.Utc)),
+        ColumnReadScenario.Reads("DateTime64(3, 'Europe/Berlin') as DateTime", "DateTime64(3, 'Europe/Berlin')", new[] { 1_700_000_000_123L }, new DateTime(2023, 11, 14, 23, 13, 20, 123, DateTimeKind.Unspecified)),
+
+        // A count that decodes but names an instant outside the .NET calendar fails with an OverflowException that
+        // names the raw values. The canonical read gives the exact count.
+        ColumnReadScenario.Throws<long, DateTimeOffset, OverflowException>("DateTime64(0, 'UTC') as DateTimeOffset: beyond the calendar range", "DateTime64(0, 'UTC')", long.MaxValue, "Values"),
+
+        // Time reads as exact whole seconds, and Time64 with the scale of the column.
+        ColumnReadScenario.Reads("Time as TimeSpan", "Time", new[] { 3661, -3661, 0 }, new TimeSpan(1, 1, 1), new TimeSpan(1, 1, 1).Negate(), TimeSpan.Zero),
+        ColumnReadScenario.Reads("Time64(3) as TimeSpan", "Time64(3)", new[] { 3_661_500L }, TimeSpan.Parse("01:01:01.5000000", CultureInfo.InvariantCulture)),
+        ColumnReadScenario.Reads("Time64(9) as TimeSpan", "Time64(9)", new[] { -1_000_000_001L }, TimeSpan.Parse("-00:00:01.0000000", CultureInfo.InvariantCulture)),
+
+        // The time of day, with the scale of the column.
+        ColumnReadScenario.Reads("Time as TimeOnly", "Time", new[] { 3661, 0, (23 * 3600) + (59 * 60) + 59 }, new TimeOnly(1, 1, 1), TimeOnly.MinValue, new TimeOnly(23, 59, 59)),
+        ColumnReadScenario.Reads("Time64(3) as TimeOnly", "Time64(3)", new[] { 3_661_500L }, TimeOnly.Parse("01:01:01.5000000", CultureInfo.InvariantCulture)),
+        ColumnReadScenario.Reads("Time64(9) as TimeOnly", "Time64(9)", new[] { 3_661_000_000_000L }, TimeOnly.Parse("01:01:01", CultureInfo.InvariantCulture)),
+
+        // TimeOnly cannot hold a negative value or a duration of one day or more, and the reading does not wrap it. The
+        // message names the reading that works, TimeSpan. The Time64 cases check raw counts, because a negative count
+        // smaller than one tick truncates to TimeSpan.Zero.
+        NoTimeOfDay("Time as TimeOnly: a negative duration", "Time", -1),
+        NoTimeOfDay("Time as TimeOnly: exactly 24 hours", "Time", 24 * 3600),
+        NoTimeOfDay("Time as TimeOnly: a duration of 100 hours", "Time", 100 * 3600),
+        NoTimeOfDay("Time64(9) as TimeOnly: a nanosecond before midnight", "Time64(9)", -1L),
+        NoTimeOfDay("Time64(9) as TimeOnly: the last count that truncates to zero", "Time64(9)", -99L),
+        NoTimeOfDay("Time64(9) as TimeOnly: one tick before midnight", "Time64(9)", -100L),
+        NoTimeOfDay("Time64(8) as TimeOnly: ten nanoseconds before midnight", "Time64(8)", -1L),
+        NoTimeOfDay("Time64(8) as TimeOnly: the last count that truncates to zero", "Time64(8)", -9L),
+        NoTimeOfDay("Time64(3) as TimeOnly: a millisecond before midnight", "Time64(3)", -1L),
+        NoTimeOfDay("Time64(3) as TimeOnly: exactly 24 hours", "Time64(3)", 86_400_000L),
+        NoTimeOfDay("Time64(0) as TimeOnly: exactly 24 hours", "Time64(0)", 86_400L),
+        NoTimeOfDay("Time64(0) as TimeOnly: a duration of 100 hours", "Time64(0)", 100 * 3600L),
+
+        // The two accepted ends of a day.
+        ColumnReadScenario.Reads("Time64(9) as TimeOnly: midnight", "Time64(9)", new[] { 0L }, TimeOnly.Parse("00:00:00", CultureInfo.InvariantCulture)),
+        ColumnReadScenario.Reads("Time64(9) as TimeOnly: the last count of the day", "Time64(9)", new[] { 86_399_999_999_999L }, TimeOnly.Parse("23:59:59.9999999", CultureInfo.InvariantCulture)),
+        ColumnReadScenario.Reads("Time64(3) as TimeOnly: the last count of the day", "Time64(3)", new[] { 86_399_999L }, TimeOnly.Parse("23:59:59.999", CultureInfo.InvariantCulture)),
+        ColumnReadScenario.Reads("Time64(0) as TimeOnly: the last count of the day", "Time64(0)", new[] { 86_399L }, TimeOnly.Parse("23:59:59", CultureInfo.InvariantCulture)),
+
+        // A NULL stays NULL.
+        ColumnReadScenario.Reads<uint?, DateTime?>("Nullable(DateTime('UTC')) as DateTime?", "Nullable(DateTime('UTC'))", new uint?[] { 1_700_000_000, null }, new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Utc), null),
+        ColumnReadScenario.Reads<uint?, DateTimeOffset?>("LowCardinality(Nullable(DateTime('UTC'))) as DateTimeOffset?", "LowCardinality(Nullable(DateTime('UTC')))", new uint?[] { 1_700_000_000, null }, new DateTimeOffset(2023, 11, 14, 22, 13, 20, TimeSpan.Zero), null),
+
+        // A non-nullable LowCardinality reads its dictionary with the reading of the inner type, with no lifting.
+        ColumnReadScenario.Reads("LowCardinality(DateTime('Europe/Berlin')) as DateTimeOffset", "LowCardinality(DateTime('Europe/Berlin'))", new uint[] { 1_700_000_000 }, new DateTimeOffset(2023, 11, 14, 23, 13, 20, TimeSpan.FromHours(1))),
+
+        // An ordinal with no declared member fails and names the type. A column that the server sends has only declared
+        // ordinals, but a clear failure is better than a wrong label.
+        ColumnReadScenario.Throws<sbyte, string, KeyNotFoundException>("Enum8('a' = -1, 'b' = 127) as string: ordinal 0", "Enum8('a' = -1, 'b' = 127)", 0, "Enum8('a' = -1, 'b' = 127)", "ordinal 0"),
+    };
+
+    private static ColumnReadScenario NoTimeOfDay<TSource>(string name, string columnType, TSource value)
+        => ColumnReadScenario.Throws<TSource, TimeOnly, InvalidOperationException>(name, columnType, value, "is not a time of day", "TimeSpan");
+
+    private static DateTimeOffset Instant(string text) => DateTimeOffset.Parse(text, CultureInfo.InvariantCulture);
 
     private static DifferentialCase TypeOnlyCase(string id, CaseSource source, string columnType, IReadOnlyList<Type> targets)
     {

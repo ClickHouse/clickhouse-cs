@@ -5,8 +5,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Types;
 
 /// <summary>
 /// Canonical values of one ClickHouse type, read as one CLR type, and the outcome of that reading: the values it
-/// gives, or the exception it throws on a row. <c>ColumnReadProjectionTests</c> checks each scenario against the
-/// codec's projection, and the differential tests check it against <c>Block.ReadAs&lt;T&gt;</c>.
+/// gives, or the exception it throws on a row. The differential tests check each scenario against
+/// <c>Block.ReadAs&lt;T&gt;</c>, for all the rows and for a tail.
 /// </summary>
 public sealed class ColumnReadScenario
 {
@@ -21,7 +21,7 @@ public sealed class ColumnReadScenario
         MessageParts = messageParts;
     }
 
-    /// <summary>The name of the scenario, unique in <c>ColumnReadProjectionTests</c>.</summary>
+    /// <summary>The name of the scenario, unique in the case list.</summary>
     public string Name { get; }
 
     /// <summary>The ClickHouse type of the column.</summary>
