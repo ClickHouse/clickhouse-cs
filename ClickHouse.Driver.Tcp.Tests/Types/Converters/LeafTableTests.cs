@@ -120,17 +120,19 @@ public class LeafTableTests
 
     /// <summary>
     /// The derivation succeeds for exactly the CLR types that the current read and write accept, and for the
-    /// <see cref="Additions"/>.
+    /// <see cref="Additions"/>. The reads are the leaf's own readings (<see cref="ConverterDerivation.DeriveNode"/>), without
+    /// the read rules of D6, which apply to every column type (<see cref="ReadRulesTests"/>).
     /// </summary>
     [TestCaseSource(nameof(SampleTypes))]
     public void Derive_EveryCandidateType_AgreesWithTheCurrentAnswers(string type)
     {
         IColumnCodec codec = ConverterHarness.Codec(type);
         string leaf = LeafOf(type).Name;
+        TypeNode root = TypeParser.Parse(type);
         var disagreements = new List<string>();
         foreach (Type candidate in Candidates)
         {
-            bool reads = ConverterDerivation.Default.Derive(type, ConverterHarness.Context, candidate, ConversionDirection.Read).Succeeded;
+            bool reads = ConverterDerivation.Default.DeriveNode(root, root, ConverterHarness.Context, candidate, ConversionDirection.Read).Succeeded;
             bool writes = ConverterDerivation.Default.Derive(type, ConverterHarness.Context, candidate, ConversionDirection.Write).Succeeded;
             if (reads != ColumnProjection.Offers(codec, candidate))
             {

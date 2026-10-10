@@ -17,10 +17,11 @@ internal enum ConversionDirection
 /// <summary>The result of a derivation: a converter tree, or the reason that there is none.</summary>
 internal sealed class Derivation
 {
-    private Derivation(object converter, string refusal)
+    private Derivation(object converter, string refusal, bool needsColumn)
     {
         Converter = converter;
         Refusal = refusal;
+        NeedsColumn = needsColumn;
     }
 
     /// <summary>
@@ -35,15 +36,31 @@ internal sealed class Derivation
     /// <summary>Whether the derivation gave a converter.</summary>
     public bool Succeeded => Converter is not null;
 
+    /// <summary>
+    /// Whether a reader needs the column, not only the canonical value of each row. <c>String</c> read as
+    /// <see cref="T:byte[]"/> copies the bytes that the column stores, because the canonical <see cref="string"/> has
+    /// lost each byte sequence that UTF-8 cannot express. A composite needs the column when a child does. A lift that
+    /// reads a value type from a <c>Nullable</c> column, and the read rules of D6 (<see cref="ReadRules"/>), accept only
+    /// a reader that does not.
+    /// </summary>
+    public bool NeedsColumn { get; }
+
     /// <summary>A derivation that gave <paramref name="converter"/>.</summary>
     /// <param name="converter">The converter tree.</param>
     /// <returns>The derivation.</returns>
-    public static Derivation Of(object converter) => new(converter ?? throw new ArgumentNullException(nameof(converter)), null);
+    public static Derivation Of(object converter) => Of(converter, needsColumn: false);
+
+    /// <summary>A derivation that gave <paramref name="converter"/>.</summary>
+    /// <param name="converter">The converter tree.</param>
+    /// <param name="needsColumn">Whether the reader needs the column (<see cref="NeedsColumn"/>).</param>
+    /// <returns>The derivation.</returns>
+    public static Derivation Of(object converter, bool needsColumn)
+        => new(converter ?? throw new ArgumentNullException(nameof(converter)), null, needsColumn);
 
     /// <summary>A derivation that refused.</summary>
     /// <param name="reason">Why there is no converter.</param>
     /// <returns>The derivation.</returns>
-    public static Derivation Refused(string reason) => new(null, reason ?? throw new ArgumentNullException(nameof(reason)));
+    public static Derivation Refused(string reason) => new(null, reason ?? throw new ArgumentNullException(nameof(reason)), needsColumn: false);
 }
 
 /// <summary>
@@ -62,7 +79,7 @@ internal sealed class Derivation
 /// expression tree. The bulk <see cref="BoundReader{T}.Fill"/> path does not compile code.
 /// </para>
 /// </remarks>
-internal sealed class ConverterDerivation
+internal sealed partial class ConverterDerivation
 {
     // The cache holds trees for each session timezone that a caller uses, so it has a limit. The count check does not
     // lock, so the cache can pass the limit by a few entries when callers race. A tree that is not cached is correct.
@@ -148,13 +165,18 @@ internal sealed class ConverterDerivation
     /// <returns>The tree, or the reason that there is none.</returns>
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     internal Derivation DeriveNode(TypeNode node, TypeNode root, in ResolveContext context, Type clrType, ConversionDirection direction)
+        => DeriveNode(node, root, in context, clrType, direction, DictionaryOrder.FirstEntry);
+
+    // order: the dictionary order of the reads in the tree (see DictionaryOrder).
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private Derivation DeriveNode(TypeNode node, TypeNode root, in ResolveContext context, Type clrType, ConversionDirection direction, DictionaryOrder order)
     {
         string name = registry.TryCanonicalName(node.Name, out string canonical) ? canonical : node.Name;
         switch (name)
         {
             // The function name is only in the type string: the column is its value type.
             case "SimpleAggregateFunction":
-                return DeriveNode(node.Arguments[1], root, in context, clrType, direction);
+                return DeriveNode(node.Arguments[1], root, in context, clrType, direction, order);
 
             default:
                 if (LeafTable.TryGet(name, out Leaf leaf))
@@ -162,18 +184,25 @@ internal sealed class ConverterDerivation
                     return DeriveLeaf(leaf, node, root, in context, clrType, direction);
                 }
 
-                return Refuse(node, root, $"'{node}' has no converter for {clrType}.");
+                return direction == ConversionDirection.Read
+                    ? DeriveCompositeRead(name, node, root, in context, clrType, order)
+                    : Refuse(node, root, $"'{node}' has no converter for {clrType}.");
         }
     }
 
     // Validates the whole type first, so a malformed or an unsupported type throws the same exception as a codec
     // resolution, with the same message.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    // A read that the column type's own readings refuse can still follow a read rule of D6, which applies to the whole
+    // column type only.
     private Derivation DeriveUncached(string type, in ResolveContext context, Type clrType, ConversionDirection direction)
     {
-        registry.Resolve(type, in context);
+        IColumnCodec codec = registry.Resolve(type, in context);
         TypeNode root = TypeParser.Parse(type);
-        return DeriveNode(root, root, in context, clrType, direction);
+        Derivation derived = DeriveNode(root, root, in context, clrType, direction);
+        return derived.Succeeded || direction != ConversionDirection.Read
+            ? derived
+            : DeriveByReadRules(root, codec.ElementType, in context, clrType, derived);
     }
 
     private Derivation DeriveLeaf(Leaf leaf, TypeNode node, TypeNode root, in ResolveContext context, Type clrType, ConversionDirection direction)
@@ -182,7 +211,9 @@ internal sealed class ConverterDerivation
         if (direction == ConversionDirection.Read)
         {
             ColumnReader reader = leaf.CreateReader(codec, clrType);
-            return reader is not null ? Derivation.Of(reader) : Refuse(node, root, leaf.ReadRefusal(node, codec, clrType));
+            return reader is not null
+                ? Derivation.Of(reader, leaf.ReadNeedsColumn(codec, clrType))
+                : Refuse(node, root, leaf.ReadRefusal(node, codec, clrType));
         }
 
         ColumnWriter writer = leaf.CreateWriter(codec, clrType);
