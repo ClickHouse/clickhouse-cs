@@ -141,7 +141,10 @@ internal abstract class DictionaryWriter<TSource> : ColumnWriter<TSource>
     }
 }
 
-/// <summary>A LowCardinality writer over a fixed-width leaf, with a <see cref="FixedInterner{TWire}"/>.</summary>
+/// <summary>
+/// A LowCardinality writer over a fixed-width leaf, with a <see cref="ClrKeyedFixedInterner{T, TWire}"/> over a
+/// <see cref="FixedInterner{TWire}"/>.
+/// </summary>
 /// <typeparam name="TSource">The CLR type of a source value.</typeparam>
 /// <typeparam name="T">The CLR type that the leaf writes.</typeparam>
 /// <typeparam name="TWire">The canonical value of the leaf.</typeparam>
@@ -162,7 +165,9 @@ internal sealed class FixedDictionaryWriter<TSource, T, TWire, TValue> : Diction
     /// <inheritdoc/>
     protected override void WriteBody(ClickHouseBinaryWriter writer, ValueSource<TSource> values, Span<int> keys)
     {
-        using var interner = new FixedInterner<TWire>(leaf.Placeholder, Nullable);
+        using var interner = new ClrKeyedFixedInterner<T, TWire>(leaf, Nullable);
+        FixedInterner<TWire> entries = interner.Entries;
+
         TValue unwrap = default;
         ReadOnlySpan<byte> absent = values.Absent;
         bool marked = values.HasAbsent;
@@ -171,14 +176,23 @@ internal sealed class FixedDictionaryWriter<TSource, T, TWire, TValue> : Diction
         {
             foreach (TSource value in values.Run(r))
             {
-                keys[position] = (marked && absent[position] != 0) || unwrap.IsNull(value)
-                    ? 0
-                    : interner.Intern(leaf.ToCanonical(unwrap.Value(value), interner.Count));
+                if ((marked && absent[position] != 0) || unwrap.IsNull(value))
+                {
+                    keys[position] = 0;
+                }
+                else
+                {
+                    // With no CLR lookup (the leaf has none, or the probe stopped it), the canonical value is interned
+                    // here, with no call through the CLR-keyed interner.
+                    T leafValue = unwrap.Value(value);
+                    keys[position] = interner.UsesClrKeys ? interner.Intern(leafValue) : entries.Intern(leaf.ToCanonical(leafValue, entries.Count));
+                }
+
                 position++;
             }
         }
 
-        WriteDictionary(writer, interner.Count, new Entries(interner), keys);
+        WriteDictionary(writer, entries.Count, new Entries(entries), keys);
     }
 
     private readonly struct Entries : IDictionaryEntries
