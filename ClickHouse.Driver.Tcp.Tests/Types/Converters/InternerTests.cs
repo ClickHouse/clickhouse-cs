@@ -172,7 +172,7 @@ public class InternerTests
         string[] values = { "\uD800", "\uDBFF", "\uD800" };
         using var interner = new ClrKeyedByteInterner<string>((BytesLeafWriter<string>)Leaf<string>("String"), nullable: false);
 
-        int[] keys = values.Select((value, i) => interner.Intern(value, i)).ToArray();
+        int[] keys = values.Select(value => interner.Intern(value)).ToArray();
         byte[] current = await ConverterHarness.WriteOldAsync("LowCardinality(String)", values, 0, values.Length);
 
         Assert.Multiple(() =>
@@ -191,11 +191,11 @@ public class InternerTests
         using var interner = new ClrKeyedByteInterner<string>((BytesLeafWriter<string>)Leaf<string>("String"), nullable: false);
         int probe = ClrKeyedByteInterner<string>.ProbeValues;
 
-        int[] first = Enumerable.Range(0, probe - 1).Select(i => interner.Intern($"v{i}", i)).ToArray();
+        int[] first = Enumerable.Range(0, probe - 1).Select(i => interner.Intern($"v{i}")).ToArray();
         bool onBefore = interner.UsesClrKeys;
-        int last = interner.Intern($"v{probe - 1}", probe - 1);
+        int last = interner.Intern($"v{probe - 1}");
         bool onAfter = interner.UsesClrKeys;
-        int repeated = interner.Intern("v7", probe);
+        int repeated = interner.Intern("v7");
 
         Assert.Multiple(() =>
         {
@@ -210,7 +210,7 @@ public class InternerTests
     public void ClrKeyedByteInterner_RepeatingValues_KeepsTheClrLookup()
     {
         using var interner = new ClrKeyedByteInterner<string>((BytesLeafWriter<string>)Leaf<string>("String"), nullable: false);
-        int[] keys = Enumerable.Range(0, 5_000).Select(i => interner.Intern($"v{i % 100}", i)).ToArray();
+        int[] keys = Enumerable.Range(0, 5_000).Select(i => interner.Intern($"v{i % 100}")).ToArray();
 
         Assert.Multiple(() =>
         {
@@ -228,7 +228,7 @@ public class InternerTests
         int half = ClrKeyedByteInterner<string>.ProbeValues / 2;
         for (int i = 0; i < ClrKeyedByteInterner<string>.ProbeValues; i++)
         {
-            interner.Intern($"v{i % half}", i);
+            interner.Intern($"v{i % half}");
         }
 
         Assert.That(interner.UsesClrKeys, Is.True);
@@ -240,8 +240,8 @@ public class InternerTests
     {
         using var interner = new ClrKeyedByteInterner<byte[]>((BytesLeafWriter<byte[]>)Leaf<byte[]>("String"), nullable: false);
 
-        int first = interner.Intern(new byte[] { 1, 2 }, 0);
-        int second = interner.Intern(new byte[] { 1, 2 }, 1);
+        int first = interner.Intern(new byte[] { 1, 2 });
+        int second = interner.Intern(new byte[] { 1, 2 });
 
         Assert.Multiple(() =>
         {
@@ -258,9 +258,9 @@ public class InternerTests
 
         Assert.Multiple(() =>
         {
-            Assert.Throws<ArgumentException>(() => interner.Intern("bad", 0));
-            Assert.Throws<ArgumentException>(() => interner.Intern("bad", 1));
-            Assert.That(interner.Intern("good", 2), Is.EqualTo(1));
+            Assert.Throws<ArgumentException>(() => interner.Intern("bad"));
+            Assert.Throws<ArgumentException>(() => interner.Intern("bad"));
+            Assert.That(interner.Intern("good"), Is.EqualTo(1));
             Assert.That(interner.UsesClrKeys, Is.True);
         });
     }
@@ -270,7 +270,7 @@ public class InternerTests
     {
         using var interner = new ClrKeyedByteInterner<string>((BytesLeafWriter<string>)Leaf<string>("String"), nullable: false);
 
-        var thrown = Assert.Throws<ArgumentNullException>(() => interner.Intern(null, 0));
+        var thrown = Assert.Throws<ArgumentNullException>(() => interner.Intern(null));
         Assert.That(thrown.ParamName, Is.EqualTo("value"));
     }
 
@@ -282,7 +282,7 @@ public class InternerTests
         string[] values = Enumerable.Range(0, 600).Select(i => i % 7 == 0 ? string.Empty : $"value {i % 300}").ToArray();
         var leaf = (BytesLeafWriter<string>)Leaf<string>("String");
         using var interner = new ClrKeyedByteInterner<string>(leaf, nullable: false);
-        int[] keys = values.Select((value, i) => interner.Intern(value, i)).ToArray();
+        int[] keys = values.Select(value => interner.Intern(value)).ToArray();
 
         byte[] expected = await ConverterHarness.WriteOldAsync("LowCardinality(String)", values, 0, values.Length);
         byte[] actual = await CodecTestHarness.WriteAsync(w => WriteBytesDictionary(w, leaf, interner.Entries, keys));
@@ -296,7 +296,7 @@ public class InternerTests
         string[] values = { "a", null, string.Empty, "a", null, "b" };
         var leaf = (BytesLeafWriter<string>)Leaf<string>("String");
         using var interner = new ClrKeyedByteInterner<string>(leaf, nullable: true);
-        int[] keys = values.Select((value, i) => value is null ? 0 : interner.Intern(value, i)).ToArray();
+        int[] keys = values.Select(value => value is null ? 0 : interner.Intern(value)).ToArray();
 
         byte[] expected = await ConverterHarness.WriteOldAsync("LowCardinality(Nullable(String))", values, 0, values.Length);
         byte[] actual = await CodecTestHarness.WriteAsync(w => WriteBytesDictionary(w, leaf, interner.Entries, keys));
@@ -310,7 +310,7 @@ public class InternerTests
         byte[][] values = { "ab"u8.ToArray(), new byte[2], "ab"u8.ToArray(), "cd"u8.ToArray() };
         var leaf = (BytesLeafWriter<byte[]>)Leaf<byte[]>("FixedString(2)");
         using var interner = new ClrKeyedByteInterner<byte[]>(leaf, nullable: false);
-        int[] keys = values.Select((value, i) => interner.Intern(value, i)).ToArray();
+        int[] keys = values.Select(value => interner.Intern(value)).ToArray();
 
         byte[] expected = await ConverterHarness.WriteOldAsync("LowCardinality(FixedString(2))", values, 0, values.Length);
         byte[] actual = await CodecTestHarness.WriteAsync(w => WriteBytesDictionary(w, leaf, interner.Entries, keys));
@@ -328,7 +328,7 @@ public class InternerTests
         string[] values = { "ab", string.Empty, "ab", "é", "\uD800", "\uDBFF", "é" };
         var leaf = (BytesLeafWriter<string>)Leaf<string>("FixedString(3)");
         using var interner = new ClrKeyedByteInterner<string>(leaf, nullable: false);
-        int[] keys = values.Select((value, i) => interner.Intern(value, i)).ToArray();
+        int[] keys = values.Select(value => interner.Intern(value)).ToArray();
 
         byte[] expected = await ConverterHarness.WriteOldAsync(
             "LowCardinality(FixedString(3))",
@@ -357,7 +357,7 @@ public class InternerTests
         string[] values = { "a", new string('y', size), "a", string.Empty };
         var leaf = (BytesLeafWriter<string>)Leaf<string>($"FixedString({size})");
         using var interner = new ClrKeyedByteInterner<string>(leaf, nullable: true);
-        int[] keys = values.Select((value, i) => interner.Intern(value, i)).ToArray();
+        int[] keys = values.Select(value => interner.Intern(value)).ToArray();
 
         byte[] expected = await ConverterHarness.WriteOldAsync(
             $"LowCardinality(Nullable(FixedString({size})))",
