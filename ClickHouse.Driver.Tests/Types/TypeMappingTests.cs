@@ -108,6 +108,8 @@ public class TypeMappingTests
     // System.Tuple with >7 elements (TRest nesting, same as ValueTuple)
     [TestCase(typeof(Tuple<int, int, int, int, int, int, int, Tuple<string>>), ExpectedResult = "Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,String)")]
     [TestCase(typeof(Tuple<int, int, int, int, int, int, int, Tuple<int, string>>), ExpectedResult = "Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,String)")]
+    // A tuple nested as the 8th element sits in a one-element TRest, so it stays nested
+    [TestCase(typeof(Tuple<int, int, int, int, int, int, int, Tuple<Tuple<string, string>>>), ExpectedResult = "Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,Tuple(String,String))")]
 
     // ValueTuple → ClickHouse Tuple
     [TestCase(typeof(ValueTuple<int, string>), ExpectedResult = "Tuple(Int32,String)")]
@@ -118,6 +120,8 @@ public class TypeMappingTests
     // ValueTuple with >7 elements (compiler generates nested TRest)
     [TestCase(typeof(ValueTuple<int, int, int, int, int, int, int, ValueTuple<string>>), ExpectedResult = "Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,String)")]
     [TestCase(typeof(ValueTuple<int, int, int, int, int, int, int, ValueTuple<int, string>>), ExpectedResult = "Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,String)")]
+    // A tuple nested as the 8th element sits in a one-element TRest, so it stays nested
+    [TestCase(typeof(ValueTuple<int, int, int, int, int, int, int, ValueTuple<ValueTuple<string, string>>>), ExpectedResult = "Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,Tuple(String,String))")]
     // Double rest-nesting (15 elements)
     [TestCase(typeof(ValueTuple<int, int, int, int, int, int, int, ValueTuple<int, int, int, int, int, int, int, ValueTuple<string>>>), ExpectedResult = "Tuple(Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,Int32,String)")]
     public string ShouldConvertToClickHouseType(Type type) => TypeConverter.ToClickHouseType(type).ToString();
