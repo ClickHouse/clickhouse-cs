@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -35,7 +36,7 @@ internal abstract class InsertColumnWrite
 
     private static readonly ConcurrentDictionary<Type, Func<ColumnWriter, InsertColumnWrite>> Factories = new();
 
-    private static readonly ConcurrentDictionary<Type, Func<ColumnReader, ColumnWriter, InsertColumnWrite>> DecodedConversions = new();
+    private static readonly ConcurrentDictionary<Type, Func<ColumnReader, ColumnWriter, INullableColumn, InsertColumnWrite>> DecodedConversions = new();
 
     /// <summary>Begins the write of rows [<paramref name="start"/>, <paramref name="start"/> + <paramref name="length"/>).</summary>
     /// <param name="values">The column.</param>
@@ -79,8 +80,10 @@ internal abstract class InsertColumnWrite
     /// <summary>
     /// The write of <paramref name="values"/> as <paramref name="typeName"/>, as the other overload gives it. A column that
     /// a query read as another type whose canonical values mean other values in the target (a <c>DateTime64</c> or a
-    /// <c>Time64</c> of another scale, an <c>Enum</c> with other members) is converted through the meaning of its values
-    /// (<see cref="ConverterDerivation.TryDeriveDecodedConversion"/>); the reason is set when it cannot be.
+    /// <c>Time64</c> of another scale, an <c>Enum</c> with other members) is written part by part
+    /// (<see cref="ConverterDerivation.PlanDecodedPart"/>): the parts whose values mean other values are converted through
+    /// the meaning of their values, and the codecs write the other parts from their storage. The reason is set when such a
+    /// column cannot be written.
     /// </summary>
     /// <param name="codec">The codec of the target type, resolved with <paramref name="context"/>.</param>
     /// <param name="values">The column that the caller gives.</param>
@@ -101,11 +104,98 @@ internal abstract class InsertColumnWrite
         string source = SourceType(values);
         if (source is not null
             && !string.Equals(source, typeName, StringComparison.Ordinal)
-            && derivation.TryDeriveDecodedConversion(values, source, typeName, in context, out ColumnReader reader, out ColumnWriter writer, out refusal))
+            && derivation.IsReadColumnOfAnotherMeaning(values, source, typeName, in context))
         {
-            return reader is null ? null : DecodedConversions.GetOrAdd(reader.ValueType, BuildDecodedConversionFactory)(reader, writer);
+            return ReadColumnWrite(codec, values, source, typeName, in context, derivation, nulls: null, out refusal);
         }
 
+        return ConverterTreeWrite(values, typeName, in context, derivation, out _);
+    }
+
+    // The write of one part of a column that a query read as another type. nulls: the Nullable column whose null map marks
+    // the rows of the part that hold no value, or null.
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private static InsertColumnWrite ReadColumnWrite(
+        IColumnCodec codec,
+        IColumn values,
+        string source,
+        string target,
+        in ResolveContext context,
+        ConverterDerivation derivation,
+        INullableColumn nulls,
+        out string refusal)
+    {
+        refusal = null;
+        DecodedPartPlan plan = derivation.PlanDecodedPart(source, target);
+        switch (plan.Kind)
+        {
+            case DecodedPart.Kept:
+                return codec.CanWrite(values) ? new CodecWrite(codec) : ConverterTreeWrite(values, target, in context, derivation, out refusal);
+
+            case DecodedPart.Converted:
+                return derivation.TryDeriveMeaningConversion(source, target, in context, out ColumnReader reader, out ColumnWriter writer, out refusal)
+                    ? DecodedConversions.GetOrAdd(reader.ValueType, BuildDecodedConversionFactory)(reader, writer, nulls)
+                    : null;
+
+            case DecodedPart.Tuple when values is ITupleColumn tuple && tuple.Children.Count == plan.SourceParts.Length:
+            {
+                var elements = new InsertColumnWrite[plan.SourceParts.Length];
+                for (int i = 0; i < elements.Length; i++)
+                {
+                    elements[i] = PartWrite(tuple.Children[i], plan.SourceParts[i], plan.TargetParts[i], in context, derivation, nulls, out refusal);
+                    if (elements[i] is null)
+                    {
+                        return null;
+                    }
+                }
+
+                return new TupleParts(elements);
+            }
+
+            // The elements of a row that holds no value are not in the column, so no mark reaches them.
+            case DecodedPart.Array when values is IDenseArrayColumn dense:
+            {
+                InsertColumnWrite elements = PartWrite(dense.Inner, plan.SourceParts[0], plan.TargetParts[0], in context, derivation, nulls: null, out refusal);
+                return elements is null ? null : new DenseArray(elements);
+            }
+
+            case DecodedPart.Map when values is IMapColumn map:
+            {
+                InsertColumnWrite keys = PartWrite(map.KeyColumn, plan.SourceParts[0], plan.TargetParts[0], in context, derivation, nulls: null, out refusal);
+                InsertColumnWrite pairs = keys is null ? null : PartWrite(map.ValueColumn, plan.SourceParts[1], plan.TargetParts[1], in context, derivation, nulls: null, out refusal);
+                return pairs is null ? null : new MapParts(keys, pairs);
+            }
+
+            case DecodedPart.Nullable when !plan.SourceHoldsNull || values is INullableColumn:
+            {
+                // A row that holds no value is written into a Nullable target with the placeholder of each converted part,
+                // and is refused by a target that is not Nullable.
+                IColumn inner = plan.SourceHoldsNull ? ((INullableColumn)values).Inner : values;
+                INullableColumn innerNulls = plan.SourceHoldsNull ? (plan.TargetHoldsNull ? (INullableColumn)values : null) : nulls;
+                InsertColumnWrite part = PartWrite(inner, plan.SourceParts[0], plan.TargetParts[0], in context, derivation, innerNulls, out refusal);
+                return part is null ? null : new NullableParts(part, plan.SourceHoldsNull, plan.TargetHoldsNull, target);
+            }
+
+            case DecodedPart.Refused:
+                refusal = plan.Refusal;
+                return null;
+
+            default:
+                refusal = $"A column read as {source} is written into {target} only from the column that a query of {source} reads.";
+                return null;
+        }
+    }
+
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private static InsertColumnWrite PartWrite(IColumn values, string source, string target, in ResolveContext context, ConverterDerivation derivation, INullableColumn nulls, out string refusal)
+        => ReadColumnWrite(derivation.ResolvePart(target, in context), values, source, target, in context, derivation, nulls, out refusal);
+
+    // The converter tree of the column's CLR type, or of the first suggested CLR type of the target type that the column
+    // implements when it has no single CLR type.
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private static InsertColumnWrite ConverterTreeWrite(IColumn values, string typeName, in ResolveContext context, ConverterDerivation derivation, out string refusal)
+    {
+        refusal = null;
         Type elementType;
         try
         {
@@ -113,12 +203,15 @@ internal abstract class InsertColumnWrite
         }
         catch (InvalidOperationException)
         {
-            return ForSuggestedType(values, typeName, in context, derivation);
+            InsertColumnWrite suggested = ForSuggestedType(values, typeName, in context, derivation);
+            refusal = suggested is null ? $"'{typeName}' cannot be written from a column of {values.GetType()}, which has no single CLR type." : null;
+            return suggested;
         }
 
         Derivation derived = derivation.Derive(typeName, in context, elementType, ConversionDirection.Write);
         if (!derived.Succeeded)
         {
+            refusal = derived.Refusal;
             return null;
         }
 
@@ -144,15 +237,15 @@ internal abstract class InsertColumnWrite
     }
 
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    private static Func<ColumnReader, ColumnWriter, InsertColumnWrite> BuildDecodedConversionFactory(Type valueType)
+    private static Func<ColumnReader, ColumnWriter, INullableColumn, InsertColumnWrite> BuildDecodedConversionFactory(Type valueType)
     {
         MethodInfo make = typeof(InsertColumnWrite).GetMethod(nameof(MakeDecodedConversion), BindingFlags.Static | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException($"{nameof(MakeDecodedConversion)} was not found.");
-        return make.MakeGenericMethod(valueType).CreateDelegate<Func<ColumnReader, ColumnWriter, InsertColumnWrite>>();
+        return make.MakeGenericMethod(valueType).CreateDelegate<Func<ColumnReader, ColumnWriter, INullableColumn, InsertColumnWrite>>();
     }
 
-    private static DecodedConversion<T> MakeDecodedConversion<T>(ColumnReader reader, ColumnWriter writer)
-        => new((ColumnReader<T>)reader, (ColumnWriter<T>)writer);
+    private static DecodedConversion<T> MakeDecodedConversion<T>(ColumnReader reader, ColumnWriter writer, INullableColumn nulls)
+        => new((ColumnReader<T>)reader, (ColumnWriter<T>)writer, nulls);
 
     // A column that implements IColumn<> zero or several times has no single CLR type to derive a tree for.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
@@ -281,18 +374,206 @@ internal abstract class InsertColumnWrite
         }
     }
 
-    // A column that a query read as another type: the reader of that type converts the rows of a slice into the CLR type
-    // that holds their meaning, and the writer of the target type writes them. The rows keep their numbers in the column,
-    // so a refusal names the row of the column.
+    // The elements of a Tuple, each through its own write, as the Tuple codec writes them: the prefixes of the elements in
+    // order, then their bodies in order.
+    private sealed class TupleParts : InsertColumnWrite
+    {
+        private readonly InsertColumnWrite[] elements;
+
+        public TupleParts(InsertColumnWrite[] elements) => this.elements = elements;
+
+        public override IColumnWriteState Begin(IColumn values, int start, int length)
+        {
+            IReadOnlyList<IColumn> children = ((ITupleColumn)values).Children;
+            var state = new PartStates(elements.Length);
+            try
+            {
+                for (int i = 0; i < elements.Length; i++)
+                {
+                    state.States[i] = elements[i].Begin(children[i], start, length);
+                }
+
+                return state;
+            }
+            catch
+            {
+                state.Dispose();
+                throw;
+            }
+        }
+
+        public override void WritePrefix(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state)
+        {
+            IReadOnlyList<IColumn> children = ((ITupleColumn)values).Children;
+            IColumnWriteState[] states = ((PartStates)state).States;
+            for (int i = 0; i < elements.Length; i++)
+            {
+                elements[i].WritePrefix(writer, children[i], start, length, states[i]);
+            }
+        }
+
+        public override void Write(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state)
+        {
+            IReadOnlyList<IColumn> children = ((ITupleColumn)values).Children;
+            IColumnWriteState[] states = ((PartStates)state).States;
+            for (int i = 0; i < elements.Length; i++)
+            {
+                elements[i].Write(writer, children[i], start, length, states[i]);
+            }
+        }
+    }
+
+    // The pairs of a Map, as the Map codec writes them: the stored offsets of the rows, rebased to the slice, then the keys
+    // and the values of the pairs of the slice, each through its own write. The prefix is the prefix of the keys, then the
+    // prefix of the values.
+    private sealed class MapParts : InsertColumnWrite
+    {
+        private readonly InsertColumnWrite keys;
+        private readonly InsertColumnWrite pairValues;
+
+        public MapParts(InsertColumnWrite keys, InsertColumnWrite pairValues)
+        {
+            this.keys = keys;
+            this.pairValues = pairValues;
+        }
+
+        public override IColumnWriteState Begin(IColumn values, int start, int length)
+        {
+            var map = (IMapColumn)values;
+            ReadOnlySpan<int> offsets = map.Offsets;
+            int first = offsets[start];
+            int count = offsets[start + length] - first;
+            var state = new PartStates(2) { First = first, Count = count };
+            try
+            {
+                state.States[0] = keys.Begin(map.KeyColumn, first, count);
+                state.States[1] = pairValues.Begin(map.ValueColumn, first, count);
+                return state;
+            }
+            catch
+            {
+                state.Dispose();
+                throw;
+            }
+        }
+
+        public override void WritePrefix(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state)
+        {
+            var map = (IMapColumn)values;
+            var own = (PartStates)state;
+            keys.WritePrefix(writer, map.KeyColumn, own.First, own.Count, own.States[0]);
+            pairValues.WritePrefix(writer, map.ValueColumn, own.First, own.Count, own.States[1]);
+        }
+
+        public override void Write(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state)
+        {
+            var map = (IMapColumn)values;
+            var own = (PartStates)state;
+            ReadOnlySpan<int> offsets = map.Offsets;
+            for (int i = 0; i < length; i++)
+            {
+                writer.WriteUInt64((ulong)(offsets[start + i + 1] - own.First));
+            }
+
+            keys.Write(writer, map.KeyColumn, own.First, own.Count, own.States[0]);
+            pairValues.Write(writer, map.ValueColumn, own.First, own.Count, own.States[1]);
+        }
+    }
+
+    // A Nullable of a composite on either side: the null map of the source (or no NULL when the source is not Nullable),
+    // then the composite through its own write. A target that is not Nullable refuses a row that holds no value.
+    private sealed class NullableParts : InsertColumnWrite
+    {
+        private readonly InsertColumnWrite inner;
+        private readonly bool sourceHoldsNull;
+        private readonly bool targetHoldsNull;
+        private readonly string targetType;
+
+        public NullableParts(InsertColumnWrite inner, bool sourceHoldsNull, bool targetHoldsNull, string targetType)
+        {
+            this.inner = inner;
+            this.sourceHoldsNull = sourceHoldsNull;
+            this.targetHoldsNull = targetHoldsNull;
+            this.targetType = targetType;
+        }
+
+        public override IColumnWriteState Begin(IColumn values, int start, int length)
+        {
+            if (sourceHoldsNull && !targetHoldsNull)
+            {
+                int position = ((INullableColumn)values).NullMap.Slice(start, length).IndexOfAnyExcept((byte)0);
+                if (position >= 0)
+                {
+                    throw WriteRules.NullNotWritable(values.Name, targetType, (long)start + position);
+                }
+            }
+
+            return inner.Begin(Inner(values), start, length);
+        }
+
+        public override void WritePrefix(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state)
+            => inner.WritePrefix(writer, Inner(values), start, length, state);
+
+        public override void Write(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state)
+        {
+            if (targetHoldsNull)
+            {
+                if (sourceHoldsNull)
+                {
+                    writer.WriteBytes(((INullableColumn)values).NullMap.Slice(start, length));
+                }
+                else
+                {
+                    for (int i = 0; i < length; i++)
+                    {
+                        writer.WriteByte(0);
+                    }
+                }
+            }
+
+            inner.Write(writer, Inner(values), start, length, state);
+        }
+
+        private IColumn Inner(IColumn values) => sourceHoldsNull ? ((INullableColumn)values).Inner : values;
+    }
+
+    // The write states of the parts of a composite, and for a Map the range of the pairs of the slice.
+    private sealed class PartStates : IColumnWriteState
+    {
+        public PartStates(int count) => States = new IColumnWriteState[count];
+
+        public IColumnWriteState[] States { get; }
+
+        public int First { get; init; }
+
+        public int Count { get; init; }
+
+        public void Dispose()
+        {
+            for (int i = 0; i < States.Length; i++)
+            {
+                States[i]?.Dispose();
+                States[i] = null;
+            }
+        }
+    }
+
+    // A part of a column that a query read as another type, whose values mean other values in the target: the reader of
+    // the source type converts the rows of a slice into the CLR type that holds their meaning, and the writer of the target
+    // type writes them. The rows keep their numbers in the column, so a refusal names the row of the column. The null map
+    // of an enclosing Nullable marks the rows that hold no value, so the writer writes its placeholder there and does not
+    // convert the value under the NULL.
     private sealed class DecodedConversion<T> : InsertColumnWrite
     {
         private readonly ColumnReader<T> reader;
         private readonly ColumnWriter<T> writer;
+        private readonly INullableColumn nulls;
 
-        public DecodedConversion(ColumnReader<T> reader, ColumnWriter<T> writer)
+        public DecodedConversion(ColumnReader<T> reader, ColumnWriter<T> writer, INullableColumn nulls)
         {
             this.reader = reader;
             this.writer = writer;
+            this.nulls = nulls;
         }
 
         public override IColumnWriteState Begin(IColumn values, int start, int length)
@@ -323,8 +604,11 @@ internal abstract class InsertColumnWrite
             writer.Write(output, Source(values, start, length, own), own.Inner);
         }
 
-        private static ValueSource<T> Source(IColumn values, int start, int length, State state)
-            => ValueSource<T>.Of(state.Buffer.AsSpan(0, length), start, values.Name);
+        private ValueSource<T> Source(IColumn values, int start, int length, State state)
+        {
+            ValueSource<T> source = ValueSource<T>.Of(state.Buffer.AsSpan(0, length), start, values.Name);
+            return nulls is null ? source : source.WithAbsent(nulls.NullMap.Slice(start, length));
+        }
 
         private sealed class State : IColumnWriteState
         {

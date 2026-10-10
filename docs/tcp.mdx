@@ -586,7 +586,8 @@ insert completes before that block is released.
   column is written in the same way. A column that a query read as a `DateTime64` or `Time64` of
   another scale, or as an `Enum8` or `Enum16` with other members, is converted through its values
   (the instants, the durations and the labels); the insert refuses such a column of a scale above 7
-  unless the target has the same scale.
+  unless the target has the same scale. In a `Tuple`, `Map`, `Array` or `Nullable`, only those parts
+  are converted, and the other parts keep the bytes that the server sent.
 - Any other column is converted from the CLR type of its values to the target type, with the
   mappings of [Type mapping: writing to ClickHouse](#type-map-writing) and the
   [write rules](#write-rules). `ClickHouseTcpTypes.CanWrite` gives the answer of this conversion. A

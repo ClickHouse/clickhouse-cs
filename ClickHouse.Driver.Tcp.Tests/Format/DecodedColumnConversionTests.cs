@@ -21,6 +21,10 @@ public class DecodedColumnConversionTests
 {
     private static readonly ResolveContext Utc = new() { ServerTimezone = "UTC" };
 
+    // Three rows of Tuple(DateTime64(3, 'UTC'), String): the counts 1, 2 and 3, and the strings FF, empty and C3 28 (two
+    // byte sequences that are not UTF-8).
+    private const string TupleOfStringsBytes = "010000000000000002000000000000000300000000000000" + "01FF" + "00" + "02C328";
+
     private static readonly DateTimeOffset[] Instants =
     {
         new(2024, 1, 2, 3, 4, 5, 678, TimeSpan.Zero),
@@ -291,6 +295,222 @@ public class DecodedColumnConversionTests
         });
     }
 
+    /// <summary>
+    /// The insert converts only the parts whose values mean other values, and writes every other part from its storage. A
+    /// String that is not UTF-8, a FixedString, the bits of a NaN and of -0, a DateTime64 of the same scale, a Decimal, a
+    /// UUID, an IPv6 address mapped from IPv4, an Enum of the same definition and a LowCardinality dictionary keep their
+    /// bytes, in a Tuple, a Map, an Array, a Nullable Tuple and a SimpleAggregateFunction. A part of another type whose
+    /// values keep their meaning goes through the converter tree of its CLR type. All rows, and the rows from row 1.
+    /// </summary>
+    [TestCaseSource(nameof(PartCases))]
+    public async Task Write_DecodedCompositeOfAnotherMeaning_WritesTheOtherPartsFromTheirStorage(
+        string source,
+        string target,
+        int rows,
+        string sourceBytes,
+        string expected,
+        string expectedFromRow1)
+    {
+        using IColumn decoded = await ConverterHarness.ReadBackAsync(source, Convert.FromHexString(sourceBytes), rows);
+
+        byte[] all = await WriteAsync(decoded, target, 0, rows, prefix: true);
+        byte[] fromRow1 = await WriteAsync(decoded, target, 1, rows - 1, prefix: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Codec(target).CanWrite(decoded), Is.False, "the codec of the target does not write the column from its storage");
+            Assert.That(Convert.ToHexString(all), Is.EqualTo(expected), "all rows");
+            Assert.That(Convert.ToHexString(fromRow1), Is.EqualTo(expectedFromRow1), "rows from row 1");
+        });
+    }
+
+    /// <summary>
+    /// An array that CreateArray builds over a decoded Tuple column of another scale: the offsets of the rows, the converted
+    /// counts, and the stored bytes of the String elements.
+    /// </summary>
+    [Test]
+    public async Task Write_ArrayOverADecodedTupleOfAnotherScale_WritesTheOtherPartsFromTheirStorage()
+    {
+        const string source = "Tuple(DateTime64(3, 'UTC'), String)";
+        const string target = "Array(Tuple(DateTime64(6, 'UTC'), String))";
+        using IColumn inner = await ConverterHarness.ReadBackAsync(source, Convert.FromHexString(TupleOfStringsBytes), 3);
+        IArrayColumn<(long, string)> array = ClickHouseTcpColumn.CreateArray("c", (IColumn<(long, string)>)inner, new[] { 0, 1, 1, 3 });
+
+        byte[] all = await WriteAsync(array, target, 0, 3, prefix: true);
+        byte[] fromRow1 = await WriteAsync(array, target, 1, 2, prefix: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                Convert.ToHexString(all),
+                Is.EqualTo("010000000000000001000000000000000300000000000000E803000000000000D007000000000000B80B00000000000001FF0002C328"),
+                "all rows");
+            Assert.That(
+                Convert.ToHexString(fromRow1),
+                Is.EqualTo("00000000000000000200000000000000D007000000000000B80B0000000000000002C328"),
+                "rows from row 1");
+        });
+    }
+
+    /// <summary>
+    /// A Tuple into a Nullable Tuple has no NULL; a Nullable Tuple into a Tuple refuses a row that holds no value, with its
+    /// row, and writes the rows that hold one.
+    /// </summary>
+    [Test]
+    public async Task Write_DecodedTupleIntoANullableTupleOrBack_WritesTheNullMapOrRefusesANull()
+    {
+        using IColumn tuple = await ConverterHarness.ReadBackAsync("Tuple(DateTime64(3, 'UTC'), String)", Convert.FromHexString(TupleOfStringsBytes), 3);
+        using IColumn nullable = await ConverterHarness.ReadBackAsync(
+            "Nullable(Tuple(DateTime64(3, 'UTC'), String))",
+            Convert.FromHexString("010000" + TupleOfStringsBytes),
+            3);
+
+        byte[] intoNullable = await WriteAsync(tuple, "Nullable(Tuple(DateTime64(6, 'UTC'), String))", 1, 2, prefix: true);
+        byte[] fromRow1 = await WriteAsync(nullable, "Tuple(DateTime64(6, 'UTC'), String)", 1, 2, prefix: true);
+        Exception refused = ConverterHarness.Catch(() => WriteAsync(nullable, "Tuple(DateTime64(6, 'UTC'), String)", 0, 3).GetAwaiter().GetResult());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Convert.ToHexString(intoNullable), Is.EqualTo("0000" + "D007000000000000B80B000000000000" + "0002C328"));
+            Assert.That(Convert.ToHexString(fromRow1), Is.EqualTo("D007000000000000B80B000000000000" + "0002C328"));
+            ConverterHarness.AssertFailure(
+                refused,
+                "InvalidOperationException",
+                null,
+                "Column 'c' (Tuple(DateTime64(6, 'UTC'), String)) is null at row 0 of the insert, but it cannot hold null. Make the column Nullable(...), or leave out the rows with no value.",
+                "the NULL at row 0");
+        });
+    }
+
+    /// <summary>
+    /// A part that no CLR type converts, and a part of another type that its CLR type does not write, refuse the whole
+    /// column, with the reason of the part.
+    /// </summary>
+    [TestCase(
+        "Tuple(DateTime64(9, 'UTC'), String)",
+        "Tuple(DateTime64(6, 'UTC'), String)",
+        "010000000000000002000000000000000300000000000000" + "01FF0002C328",
+        "A value of DateTime64(9, 'UTC') is a count at scale 9, finer than the 100 ns ticks of the System.DateTimeOffset that converts it, so a column read as DateTime64(9, 'UTC') is written only into a column of the same scale.")]
+    [TestCase(
+        "Tuple(DateTime64(3, 'UTC'), Int32)",
+        "Tuple(DateTime64(6, 'UTC'), Int64)",
+        "010000000000000002000000000000000300000000000000" + "07000000FFFFFFFFFFFFFF7F",
+        "'Int64' cannot be written from System.Int32. It is written from: System.Int64.")]
+    public async Task For_DecodedTupleWithAPartThatCannotBeWritten_IsRefusedWithTheReasonOfThePart(string source, string target, string sourceBytes, string reason)
+    {
+        using IColumn decoded = await ConverterHarness.ReadBackAsync(source, Convert.FromHexString(sourceBytes), 3);
+
+        InsertColumnWrite write = InsertColumnWrite.For(Codec(target), decoded, target, Utc, ConverterDerivation.Default, out string refusal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write, Is.Null);
+            Assert.That(refusal, Is.EqualTo(reason));
+        });
+    }
+
+    public static IEnumerable<TestCaseData> PartCases()
+    {
+        yield return Bytes(
+            "Tuple(DateTime64(3, 'UTC'), String)",
+            "Tuple(DateTime64(6, 'UTC'), String)",
+            3,
+            "01000000000000000200000000000000030000000000000001FF0002C328",
+            "E803000000000000D007000000000000B80B00000000000001FF0002C328",
+            "D007000000000000B80B0000000000000002C328");
+        yield return Bytes(
+            "Tuple(String, Time64(3))",
+            "Tuple(String, Time64(6))",
+            3,
+            "01FF0002C328010000000000000002000000000000000300000000000000",
+            "01FF0002C328E803000000000000D007000000000000B80B000000000000",
+            "0002C328D007000000000000B80B000000000000");
+        yield return Bytes(
+            "Map(String, DateTime64(3, 'UTC'))",
+            "Map(String, DateTime64(6, 'UTC'))",
+            3,
+            "01000000000000000100000000000000030000000000000001FF0002C328010000000000000002000000000000000300000000000000",
+            "01000000000000000100000000000000030000000000000001FF0002C328E803000000000000D007000000000000B80B000000000000",
+            "000000000000000002000000000000000002C328D007000000000000B80B000000000000");
+        yield return Bytes(
+            "Map(Enum8('a' = 1, 'b' = 2), String)",
+            "Map(Enum8('a' = 2, 'b' = 1), String)",
+            3,
+            "01000000000000000100000000000000030000000000000001020101FF0002C328",
+            "01000000000000000100000000000000030000000000000002010201FF0002C328",
+            "0000000000000000020000000000000001020002C328");
+        yield return Bytes(
+            "Array(Tuple(DateTime64(3, 'UTC'), String))",
+            "Array(Tuple(DateTime64(6, 'UTC'), String))",
+            3,
+            "01000000000000000100000000000000030000000000000001000000000000000200000000000000030000000000000001FF0002C328",
+            "010000000000000001000000000000000300000000000000E803000000000000D007000000000000B80B00000000000001FF0002C328",
+            "00000000000000000200000000000000D007000000000000B80B0000000000000002C328");
+        yield return Bytes(
+            "Tuple(DateTime64(3, 'UTC'), FixedString(2))",
+            "Tuple(DateTime64(6, 'UTC'), FixedString(2))",
+            3,
+            "010000000000000002000000000000000300000000000000FF00C3288081",
+            "E803000000000000D007000000000000B80B000000000000FF00C3288081",
+            "D007000000000000B80B000000000000C3288081");
+        yield return Bytes(
+            "Tuple(DateTime64(3, 'UTC'), Float64)",
+            "Tuple(DateTime64(6, 'UTC'), Float64)",
+            3,
+            "010000000000000002000000000000000300000000000000010000000000F47F0000000000000080230100000000F8FF",
+            "E803000000000000D007000000000000B80B000000000000010000000000F47F0000000000000080230100000000F8FF",
+            "D007000000000000B80B0000000000000000000000000080230100000000F8FF");
+        yield return Bytes(
+            "Tuple(DateTime64(3, 'UTC'), DateTime64(9, 'UTC'))",
+            "Tuple(DateTime64(6, 'UTC'), DateTime64(9, 'UTC'))",
+            3,
+            "01000000000000000200000000000000030000000000000015CD853DFE9C971700000000000000000100000000000000",
+            "E803000000000000D007000000000000B80B00000000000015CD853DFE9C971700000000000000000100000000000000",
+            "D007000000000000B80B00000000000000000000000000000100000000000000");
+        yield return Bytes(
+            "Tuple(Enum8('a' = 1, 'b' = 2), Decimal(38, 10), UUID, IPv6, Enum8('x' = 1, 'y' = 2))",
+            "Tuple(Enum8('a' = 2, 'b' = 1), Decimal(38, 10), UUID, IPv6, Enum8('x' = 1, 'y' = 2))",
+            2,
+            "0102D20A1FEB8CA954AB0000000000000000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00112233445566778899AABBCCDDEEFFFFEEDDCCBBAA9988776655443322110000000000000000000000FFFF0102030420010DB80000000000000000000000010102",
+            "0201D20A1FEB8CA954AB0000000000000000FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00112233445566778899AABBCCDDEEFFFFEEDDCCBBAA9988776655443322110000000000000000000000FFFF0102030420010DB80000000000000000000000010102",
+            "01FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEEDDCCBBAA9988776655443322110020010DB800000000000000000000000102");
+        yield return Bytes(
+            "Nullable(Tuple(Enum8('a' = 1, 'b' = 2), String))",
+            "Nullable(Tuple(Enum8('b' = 1), String))",
+            3,
+            "01000001020201FF0002C328",
+            "01000001010101FF0002C328",
+            "000001010002C328");
+        yield return Bytes(
+            "Tuple(DateTime64(3, 'UTC'), Decimal(9, 2))",
+            "Tuple(DateTime64(6, 'UTC'), Decimal(18, 4))",
+            3,
+            "0100000000000000020000000000000003000000000000007B0000003EFEFFFF00000000",
+            "E803000000000000D007000000000000B80B0000000000000C300000000000003850FFFFFFFFFFFF0000000000000000",
+            "D007000000000000B80B0000000000003850FFFFFFFFFFFF0000000000000000");
+        yield return Bytes(
+            "SimpleAggregateFunction(anyLast, Tuple(DateTime64(3, 'UTC'), String))",
+            "SimpleAggregateFunction(anyLast, Tuple(DateTime64(6, 'UTC'), String))",
+            3,
+            "01000000000000000200000000000000030000000000000001FF0002C328",
+            "E803000000000000D007000000000000B80B00000000000001FF0002C328",
+            "D007000000000000B80B0000000000000002C328");
+        yield return Bytes(
+            "Tuple(Nullable(DateTime64(3, 'UTC')), String)",
+            "Tuple(Nullable(DateTime64(6, 'UTC')), String)",
+            3,
+            "00010001000000000000000000000000000000030000000000000001FF0002C328",
+            "000100E8030000000000000000000000000000B80B00000000000001FF0002C328",
+            "01000000000000000000B80B0000000000000002C328");
+        yield return Bytes(
+            "Tuple(DateTime64(3, 'UTC'), LowCardinality(String))",
+            "Tuple(DateTime64(6, 'UTC'), LowCardinality(String))",
+            3,
+            "0100000000000000010000000000000002000000000000000300000000000000000600000000000003000000000000000001FF02C3280300000000000000010002",
+            "0100000000000000E803000000000000D007000000000000B80B000000000000000600000000000003000000000000000001FF02C3280300000000000000010002",
+            "0100000000000000D007000000000000B80B000000000000000600000000000003000000000000000001FF02C32802000000000000000002");
+    }
+
     public static IEnumerable<TestCaseData> CompositeCases()
     {
         yield return Case("Nullable(DateTime64(3, 'UTC'))", "Nullable(DateTime64(6, 'UTC'))", new DateTimeOffset?[] { Instants[0], null });
@@ -321,6 +541,9 @@ public class DecodedColumnConversionTests
     }
 
     private static TestCaseData Case<T>(string source, string target, T[] values) => new TestCaseData(source, target, values).SetArgDisplayNames(source, target);
+
+    private static TestCaseData Bytes(string source, string target, int rows, string sourceBytes, string expected, string expectedFromRow1)
+        => new TestCaseData(source, target, rows, sourceBytes, expected, expectedFromRow1).SetArgDisplayNames(source, target);
 
     private static IColumnCodec Codec(string type) => ColumnCodecRegistry.Default.Resolve(type, Utc);
 

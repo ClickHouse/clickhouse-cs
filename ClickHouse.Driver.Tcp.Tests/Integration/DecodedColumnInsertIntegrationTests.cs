@@ -47,6 +47,42 @@ public class DecodedColumnInsertIntegrationTests
         yield return Case("Decimal(9, 2)", "Decimal(18, 4)", ("1.23", "1.23"), ("-4.5", "-4.5"));
     }
 
+    // A part whose values mean other values next to parts that keep their meaning, which hold bytes that are not UTF-8: the
+    // SQL literal of the source row, the expression that the target reads back, and its text.
+    public static IEnumerable<TestCaseData> PartCases()
+    {
+        yield return PartCase(
+            "Tuple(DateTime64(3, 'UTC'), String)",
+            "Tuple(DateTime64(6, 'UTC'), String)",
+            "('2024-01-02 03:04:05.678', unhex('FF'))",
+            "concat(toString(value.1), ' ', hex(value.2))",
+            "2024-01-02 03:04:05.678000 FF");
+        yield return PartCase(
+            "Map(String, DateTime64(3, 'UTC'))",
+            "Map(String, DateTime64(6, 'UTC'))",
+            "map(unhex('FF'), toDateTime64('2024-01-02 03:04:05.678', 3, 'UTC'), unhex('C328'), toDateTime64('2024-01-02 03:04:05.679', 3, 'UTC'))",
+            "concat(hex(arrayStringConcat(mapKeys(value), ',')), ' ', toString(mapValues(value)))",
+            "FF2CC328 ['2024-01-02 03:04:05.678000','2024-01-02 03:04:05.679000']");
+        yield return PartCase(
+            "Map(Enum8('a' = 1, 'b' = 2), String)",
+            "Map(Enum8('a' = 2, 'b' = 1), String)",
+            "map('b', unhex('FF'))",
+            "concat(toString(mapKeys(value)), ' ', hex(mapValues(value)[1]))",
+            "['b'] FF");
+        yield return PartCase(
+            "Array(Tuple(DateTime64(3, 'UTC'), String))",
+            "Array(Tuple(DateTime64(6, 'UTC'), String))",
+            "[('2024-01-02 03:04:05.678', unhex('C328')), ('2024-01-02 03:04:05.679', unhex('FF'))]",
+            "concat(toString(arrayMap(x -> x.1, value)), ' ', hex(arrayStringConcat(arrayMap(x -> x.2, value), ',')))",
+            "['2024-01-02 03:04:05.678000','2024-01-02 03:04:05.679000'] C3282CFF");
+        yield return PartCase(
+            "Tuple(DateTime64(3, 'UTC'), LowCardinality(String), FixedString(2))",
+            "Tuple(DateTime64(6, 'UTC'), LowCardinality(String), FixedString(2))",
+            "('2024-01-02 03:04:05.678', unhex('FF'), unhex('C328'))",
+            "concat(toString(value.1), ' ', hex(value.2), ' ', hex(value.3))",
+            "2024-01-02 03:04:05.678000 FF C328");
+    }
+
     public static IEnumerable<TestCaseData> TimeCases()
     {
         yield return Case("Time64(3)", "Time64(6)", ("'01:02:03.456'", "01:02:03.456000"), ("'-00:00:00.001'", "-00:00:00.001000"));
@@ -60,6 +96,46 @@ public class DecodedColumnInsertIntegrationTests
     [RequiresServerFeature(TcpFeature.Time)]
     public Task InsertAsync_Time64ColumnReadAsAnotherScale_StoresTheValuesOfTheSource(string source, string target, string[] literals, string[] expected)
         => AssertStoresTheValuesAsync(source, target, literals, expected, TimeSettings);
+
+    /// <summary>
+    /// A column that a query read, with a part whose values mean other values in the target and parts that hold bytes that
+    /// are not UTF-8: the server stores the converted values and the bytes of the other parts.
+    /// </summary>
+    [TestCaseSource(nameof(PartCases))]
+    public async Task InsertAsync_ColumnReadAsARelatedComposite_StoresTheBytesOfTheOtherParts(string source, string target, string literal, string readBack, string expected)
+    {
+        string sourceTable = UniqueTableName();
+        string targetTable = UniqueTableName();
+        await using ClickHouseTcpConnection connection = await TcpServerFixture.ConnectAsync(None);
+        try
+        {
+            await CreateAsync(connection, sourceTable, targetTable, source, target, new[] { literal }, settings: null);
+
+            await using (ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None))
+            {
+                await foreach (Block block in reader.QueryAsync($"SELECT id, value FROM {sourceTable} ORDER BY id", cancellationToken: None))
+                {
+                    await connection.InsertAsync($"INSERT INTO {targetTable} (id, value) VALUES", new[] { block[0], block[1] }, cancellationToken: None);
+                }
+            }
+
+            var stored = new List<string>();
+            await foreach (Block block in connection.QueryAsync($"SELECT {readBack} FROM {targetTable} ORDER BY id", cancellationToken: None))
+            {
+                for (int row = 0; row < block.RowCount; row++)
+                {
+                    stored.Add((string)block[0].GetValue(row));
+                }
+            }
+
+            Assert.That(stored, Is.EqualTo(new[] { expected }));
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {sourceTable}");
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {targetTable}");
+        }
+    }
 
     /// <summary>
     /// A value that the target cannot hold (a label that it does not declare, an instant finer than its scale), and a
@@ -104,6 +180,9 @@ public class DecodedColumnInsertIntegrationTests
             await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {targetTable}");
         }
     }
+
+    private static TestCaseData PartCase(string source, string target, string literal, string readBack, string expected)
+        => new TestCaseData(source, target, literal, readBack, expected).SetArgDisplayNames(source, target);
 
     // One row for each pair: the SQL literal that the source table holds, and the text that the target reads back.
     private static TestCaseData Case(string source, string target, params (string Literal, string Expected)[] rows)
