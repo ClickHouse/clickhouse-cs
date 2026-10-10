@@ -32,12 +32,21 @@ public enum ConverterRouteShape
     /// <c>int?</c>: 0 to 4 elements in a row, every fifth element NULL.
     /// </summary>
     CreateArrayNullableInt32,
+
+    /// <summary><c>LowCardinality(UUID)</c> from <see cref="Guid"/>: 100 distinct values.</summary>
+    LowCardinalityUuidHighRepeat,
+
+    /// <summary><c>LowCardinality(UUID)</c> from <see cref="Guid"/>: every value distinct.</summary>
+    LowCardinalityUuidLowRepeat,
+
+    /// <summary><c>LowCardinality(UInt32)</c> from <c>uint</c>: 100 distinct values.</summary>
+    LowCardinalityUInt32HighRepeat,
 }
 
 /// <summary>
-/// Prices the writes of <c>Dynamic</c> and of the dense arrays that <see cref="ClickHouseTcpColumn.CreateArray{TElement}"/>
-/// builds, through the code that an insert runs for one block: the plan of the column, then the block writer. In memory,
-/// with no server.
+/// Prices the writes of <c>Dynamic</c>, of the dense arrays that <see cref="ClickHouseTcpColumn.CreateArray{TElement}"/>
+/// builds, and of LowCardinality over fixed-width leaves, through the code that an insert runs for one block: the plan of
+/// the column, then the block writer. In memory, with no server.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -127,7 +136,10 @@ public class TcpConverterWriteRoutes
         {
             ConverterRouteShape.DynamicMixedKinds => ("Dynamic", ClickHouseTcpColumn.Create("value", rows.Select(DynamicValue).ToArray())),
             ConverterRouteShape.CreateArrayLowCardinalityString => ("Array(LowCardinality(String))", Dense(rows, element => $"category-{element % 100}")),
-            _ => ("Array(Nullable(Int32))", Dense(rows, element => element % 5 == 0 ? null : (int?)element)),
+            ConverterRouteShape.CreateArrayNullableInt32 => ("Array(Nullable(Int32))", Dense(rows, element => element % 5 == 0 ? null : (int?)element)),
+            ConverterRouteShape.LowCardinalityUuidHighRepeat => ("LowCardinality(UUID)", ClickHouseTcpColumn.Create("value", rows.Select(i => Uuid(i % 100)).ToArray())),
+            ConverterRouteShape.LowCardinalityUuidLowRepeat => ("LowCardinality(UUID)", ClickHouseTcpColumn.Create("value", rows.Select(Uuid).ToArray())),
+            _ => ("LowCardinality(UInt32)", ClickHouseTcpColumn.Create("value", rows.Select(i => (uint)(i % 100) * 2_654_435_761u).ToArray())),
         };
     }
 
@@ -142,6 +154,17 @@ public class TcpConverterWriteRoutes
         6 => (row, $"item-{row % 100}"),
         _ => DateTime.UnixEpoch.AddSeconds(row),
     };
+
+    // A UUID for each number, with the bits of the number spread over all 16 bytes.
+    private static Guid Uuid(int number)
+    {
+        ulong first = (ulong)number * 0x9E3779B97F4A7C15UL;
+        ulong second = (first ^ (ulong)number) * 0xBF58476D1CE4E5B9UL;
+        var bytes = new byte[16];
+        BitConverter.TryWriteBytes(bytes.AsSpan(0, 8), first);
+        BitConverter.TryWriteBytes(bytes.AsSpan(8, 8), second);
+        return new Guid(bytes);
+    }
 
     // A dense array of the rows: row i has i % 5 elements, numbered across the rows of the block.
     private static IColumn Dense<T>(IEnumerable<int> rows, Func<int, T> element)
