@@ -26,7 +26,7 @@ internal static class RowWriteArms
     public static Block Schema(string columnType, ResolveContext context)
         => new(string.Empty, BlockInfo.Default, rowCount: 0, new IColumn[] { new ArrayColumn<object>("value", columnType, Array.Empty<object>()) }, ColumnCodecRegistry.Default, context);
 
-    /// <summary>The write of the gathered column of the insert plan today: through the converter derivation.</summary>
+    /// <summary>The write that the insert plan gives the gathered column (<see cref="InsertColumnWrite.For"/>).</summary>
     /// <param name="column">The gathered column.</param>
     /// <param name="columnType">The type of the target.</param>
     /// <param name="context">The context of the sample block.</param>
@@ -79,13 +79,16 @@ internal static class RowWriteArms
             }
         };
 
-    /// <summary>The POCO insert: a plan of <c>Row&lt;T&gt;</c>, and the write of the gathered column.</summary>
-    internal abstract class PocoArm : WriteArm
+    /// <summary>
+    /// The client's POCO insert: the write plan of <c>Row&lt;T&gt;</c> that the client caches, with the gather tier of the
+    /// registry, and the write of the gathered column.
+    /// </summary>
+    internal sealed class ClientPocoArm : WriteArm
     {
-        protected PocoArm(string name)
-            : base(name, Tier.PocoWrite)
-        {
-        }
+        private readonly PocoTypeRegistry plans;
+
+        public ClientPocoArm(string name, PocoGatherTier? tier)
+            : base(name, Tier.PocoWrite) => plans = new PocoTypeRegistry { ForcedGatherTier = tier };
 
         public override SliceWriter Bind<T>(IColumn<T> column, string columnType, ResolveContext context)
         {
@@ -95,12 +98,12 @@ internal static class RowWriteArms
                 rows[i] = new Row<T> { Value = column[i] };
             }
 
-            PocoWritePlan<Row<T>> plan = Plan<T>(Schema(columnType, context));
+            PocoWritePlan<Row<T>> plan = plans.WritePlanFor<Row<T>>(Schema(columnType, context));
             var buffer = PocoRowBuffer<Row<T>>.Create(rows, "rows", rows.Length, CancellationToken.None);
             PocoInsertSource<Row<T>> source = plan.CreateSource(buffer, rows.Length);
             try
             {
-                InsertColumnWrite write = Write(source.Columns[0], columnType, context)
+                InsertColumnWrite write = ClientWrite(source.Columns[0], columnType, context)
                     ?? throw new ArmRefusal($"The insert plan of '{columnType}' refuses the gathered column ({source.Columns[0].GetType().Name}).");
                 return Gathered(source, buffer, write);
             }
@@ -111,18 +114,12 @@ internal static class RowWriteArms
                 throw;
             }
         }
-
-        /// <summary>The write plan for the sample block. Throw to refuse.</summary>
-        protected abstract PocoWritePlan<Row<T>> Plan<T>(Block schema);
-
-        /// <summary>The write of the gathered column, or null when the insert plan refuses it.</summary>
-        protected abstract InsertColumnWrite Write(IColumn column, string columnType, ResolveContext context);
     }
 
-    /// <summary>The untyped insert: the source of the untyped rows, and the write of the gathered column.</summary>
-    internal abstract class UntypedArm : WriteArm
+    /// <summary>The client's untyped insert: the source of the untyped rows, and the write of the gathered column.</summary>
+    internal sealed class ClientUntypedArm : WriteArm
     {
-        protected UntypedArm(string name)
+        public ClientUntypedArm(string name)
             : base(name, Tier.UntypedWrite)
         {
         }
@@ -139,7 +136,7 @@ internal static class RowWriteArms
             PocoInsertSource<object[]> source;
             try
             {
-                source = CreateSource(Schema(columnType, context), buffer, rows.Length);
+                source = UntypedRowColumns.CreateSource(Schema(columnType, context), buffer, rows.Length);
             }
             catch
             {
@@ -149,7 +146,7 @@ internal static class RowWriteArms
 
             try
             {
-                InsertColumnWrite write = Write(source.Columns[0], columnType, context)
+                InsertColumnWrite write = ClientWrite(source.Columns[0], columnType, context)
                     ?? throw new ArmRefusal($"The insert plan of '{columnType}' refuses the gathered column ({source.Columns[0].GetType().Name}).");
                 return Gathered(source, buffer, write);
             }
@@ -160,39 +157,6 @@ internal static class RowWriteArms
                 throw;
             }
         }
-
-        /// <summary>The source of the insert. Throw to refuse.</summary>
-        protected abstract PocoInsertSource<object[]> CreateSource(Block schema, PocoRowBuffer<object[]> rows, int blockRows);
-
-        /// <summary>The write of the gathered column, or null when the insert plan refuses it.</summary>
-        protected abstract InsertColumnWrite Write(IColumn column, string columnType, ResolveContext context);
-    }
-
-    /// <summary>The client's POCO insert: the write plan that the client caches, with the gather tier of the registry.</summary>
-    internal sealed class ClientPocoArm : PocoArm
-    {
-        private readonly PocoTypeRegistry plans;
-
-        public ClientPocoArm(string name, PocoGatherTier? tier)
-            : base(name) => plans = new PocoTypeRegistry { ForcedGatherTier = tier };
-
-        protected override PocoWritePlan<Row<T>> Plan<T>(Block schema) => plans.WritePlanFor<Row<T>>(schema);
-
-        protected override InsertColumnWrite Write(IColumn column, string columnType, ResolveContext context) => ClientWrite(column, columnType, context);
-    }
-
-    /// <summary>The client's untyped insert.</summary>
-    internal sealed class ClientUntypedArm : UntypedArm
-    {
-        public ClientUntypedArm(string name)
-            : base(name)
-        {
-        }
-
-        protected override PocoInsertSource<object[]> CreateSource(Block schema, PocoRowBuffer<object[]> rows, int blockRows)
-            => UntypedRowColumns.CreateSource(schema, rows, blockRows);
-
-        protected override InsertColumnWrite Write(IColumn column, string columnType, ResolveContext context) => ClientWrite(column, columnType, context);
     }
 
     /// <summary>Whether the client's POCO write plan builds for a <c>Row&lt;T&gt;.Value</c> property of the type.</summary>
