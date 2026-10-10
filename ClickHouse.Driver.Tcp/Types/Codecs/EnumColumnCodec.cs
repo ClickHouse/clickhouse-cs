@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Linq.Expressions;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -17,9 +15,6 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 internal sealed class EnumColumnCodec<T> : IColumnCodec
     where T : unmanaged
 {
-    private static readonly MethodInfo LabelMethod =
-        typeof(EnumMemberTable).GetMethod(nameof(EnumMemberTable.Label), BindingFlags.Public | BindingFlags.Instance);
-
     private readonly FixedWidthColumnCodec<T> underlying;
 
     private readonly EnumMemberTable members;
@@ -72,12 +67,6 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
 
     /// <summary>The declared members, in declaration order, and the messages for an unknown ordinal or label.</summary>
     internal EnumMemberTable Members => members;
-
-    /// <summary>
-    /// A label is a reading as well as the ordinal. Diagnostics only; <see cref="TryProjectRead"/> is the
-    /// authority.
-    /// </summary>
-    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(T), typeof(string) };
 
     /// <summary>A column of labels writes as well as a column of ordinals.</summary>
     public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(T), typeof(string) };
@@ -157,25 +146,6 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
         return writeType == typeof(string)
             ? OrdinalToLabel[nullPlaceholder]
             : throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
-    }
-
-    /// <inheritdoc/>
-    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
-    {
-        ColumnValueProjections.RequireSourceType(value, typeof(T), TypeName);
-
-        if (targetType == typeof(T))
-        {
-            projected = value;
-            return true;
-        }
-
-        // The members are a constant of this codec, so the lookup is a call on it with the ordinal widened to long
-        // — the same table the public IEnumColumn view answers from.
-        projected = targetType == typeof(string)
-            ? Expression.Call(Expression.Constant(members), LabelMethod, Expression.Convert(value, typeof(long)))
-            : null;
-        return projected is not null;
     }
 
     /// <inheritdoc/>

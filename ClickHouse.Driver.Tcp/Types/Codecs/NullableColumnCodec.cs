@@ -1,8 +1,6 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Linq.Expressions;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -33,9 +31,6 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </summary>
 internal sealed class NullableColumnCodec : IColumnCodec
 {
-    private static readonly MethodInfo ProjectNullableMethod =
-        typeof(NullableColumnCodec).GetMethod(nameof(ProjectNullable), BindingFlags.NonPublic | BindingFlags.Static);
-
     private readonly IColumnCodec inner;
     private readonly INullableShape canonicalShape;
 
@@ -58,26 +53,6 @@ internal sealed class NullableColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public Type ElementType => canonicalShape.NullableElementType;
-
-    /// <summary>
-    /// The inner codec's readings, each made nullable through the same shape rule reads use — so
-    /// <c>Nullable(DateTime)</c> reports <c>uint?</c>, <c>DateTimeOffset?</c> and <c>DateTime?</c>. Diagnostics only,
-    /// and only ever read on a failure path, so it is built per call rather than cached.
-    /// </summary>
-    public IReadOnlyList<Type> ReadableElementTypes
-    {
-        get
-        {
-            IReadOnlyList<Type> innerTypes = inner.ReadableElementTypes;
-            var lifted = new Type[innerTypes.Count];
-            for (int i = 0; i < innerTypes.Count; i++)
-            {
-                lifted[i] = NullableShapes.For(innerTypes[i]).NullableElementType;
-            }
-
-            return lifted;
-        }
-    }
 
     /// <summary>
     /// The inner codec's writable CLR types, each made nullable.
@@ -171,82 +146,6 @@ internal sealed class NullableColumnCodec : IColumnCodec
             innerColumn?.Dispose();
             throw;
         }
-    }
-
-    /// <inheritdoc/>
-    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
-    {
-        ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
-
-        if (targetType == ElementType)
-        {
-            projected = value;
-            return true;
-        }
-
-        projected = null;
-
-        // Undo this surface's wrap on the target to recover the inner's spelling. The wrap is invertible, so the
-        // target alone decides it — see ColumnValueProjections.TryLiftOverAbsent for why nothing may be inferred from
-        // the inner codec's canonical type instead.
-        Type innerTarget = Nullable.GetUnderlyingType(targetType);
-        if (innerTarget is null)
-        {
-            // A bare value-typed target has nowhere to put a null row, so this surface cannot offer it — that is what
-            // stops Nullable(Int64) from claiming it can produce a plain long.
-            if (targetType.IsValueType)
-            {
-                return false;
-            }
-
-            // A reference-typed target holds the null itself, and the surface left it unwrapped.
-            innerTarget = targetType;
-        }
-
-        return ColumnValueProjections.TryLiftOverAbsent(value, inner, innerTarget, targetType, out projected);
-    }
-
-    /// <summary>
-    /// Projects the dense inner column once and applies the null map to the result.
-    /// </summary>
-    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
-    {
-        projection = null;
-
-        // Only a reference-typed target has room for this surface's null. A Nullable<U> one would need the inner to
-        // offer U at the column level and then be lifted, which no reading needs today.
-        if (targetType.IsValueType || targetType == ElementType)
-        {
-            return false;
-        }
-
-        // Leave elementwise inner conversions to TryProjectRead.
-        if (!inner.TryProjectColumnRead(targetType, out ColumnReadProjection innerProjection))
-        {
-            return false;
-        }
-
-        projection = LegacyColumnProjection.Close(ProjectNullableMethod, innerProjection, targetType);
-        return true;
-    }
-
-    /// <summary>
-    /// Builds a row view over the projected inner column and this column's null map.
-    /// </summary>
-    /// <typeparam name="T">The projected reference type, which holds the absent rows itself.</typeparam>
-    /// <param name="source">The decoded <c>Nullable(T)</c> column.</param>
-    /// <param name="innerProjection">The inner codec's projection of the dense inner column.</param>
-    /// <returns>The view.</returns>
-    // The inner column holds a decoded value at every row, the null positions included, so its content there is a
-    // meaningless placeholder and the map has to be consulted first.
-    private static IColumn ProjectNullable<T>(IColumn source, ColumnReadProjection innerProjection)
-        where T : class
-    {
-        INullableColumn nullable = LegacyColumnProjection.Surface<INullableColumn>(source);
-        var values = (IColumn<T>)innerProjection(nullable.Inner);
-        return new ProjectedReadColumn<T>(
-            source,
-            (column, row) => ((INullableColumn)column).NullMap[row] != 0 ? null : values[row]);
     }
 
     /// <summary>Builds the nullable write-type list on first use.</summary>
