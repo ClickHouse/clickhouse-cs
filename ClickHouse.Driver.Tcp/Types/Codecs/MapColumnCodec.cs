@@ -2,8 +2,6 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Linq.Expressions;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -31,9 +29,6 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </summary>
 internal sealed class MapColumnCodec : IColumnCodec
 {
-    private static readonly MethodInfo ProjectMapMethod =
-        typeof(MapColumnCodec).GetMethod(nameof(ProjectMap), BindingFlags.NonPublic | BindingFlags.Static);
-
     private readonly IColumnCodec keyCodec;
     private readonly IColumnCodec valueCodec;
     private readonly IMapShape shape;
@@ -192,92 +187,6 @@ internal sealed class MapColumnCodec : IColumnCodec
         {
             ArrayPool<byte>.Shared.Return(scratch);
         }
-    }
-
-    /// <inheritdoc/>
-    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
-    {
-        ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
-
-        if (targetType == ElementType)
-        {
-            projected = value;
-            return true;
-        }
-
-        projected = null;
-
-        // Project the key and value independently.
-        if (!TryPairArguments(targetType, out Type targetPair, out Type[] targetArguments))
-        {
-            return false;
-        }
-
-        ParameterExpression pair = Expression.Variable(ElementType.GetElementType(), "pair");
-        if (!keyCodec.TryProjectRead(Expression.Property(pair, "Key"), targetArguments[0], out Expression projectedKey)
-            || !valueCodec.TryProjectRead(Expression.Property(pair, "Value"), targetArguments[1], out Expression projectedValue))
-        {
-            return false;
-        }
-
-        // KeyValuePair is immutable, so create a projected pair.
-        Expression rebuilt = Expression.New(
-            targetPair.GetConstructor(targetArguments) ?? throw new InvalidOperationException($"KeyValuePair<,> is missing its ({targetArguments[0]}, {targetArguments[1]}) constructor."),
-            projectedKey,
-            projectedValue);
-
-        projected = CompositeElementProjections.ProjectArray(value, pair, rebuilt);
-        return true;
-    }
-
-    /// <summary>
-    /// Projects the flat key and value columns once, then pairs their slices by row. Used only when a child
-    /// conversion needs column state.
-    /// </summary>
-    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
-    {
-        projection = null;
-
-        if (targetType == ElementType || !TryPairArguments(targetType, out Type _, out Type[] targetArguments))
-        {
-            return false;
-        }
-
-        bool keyNeedsColumn = keyCodec.TryProjectColumnRead(targetArguments[0], out ColumnReadProjection keyProjection);
-        bool valueNeedsColumn = valueCodec.TryProjectColumnRead(targetArguments[1], out ColumnReadProjection valueProjection);
-        if (!keyNeedsColumn && !valueNeedsColumn)
-        {
-            return false;
-        }
-
-        // The other side may still read as its own type or convert elementwise; resolve it the general way.
-        keyProjection ??= LegacyColumnProjection.For(keyCodec, targetArguments[0]);
-        valueProjection ??= LegacyColumnProjection.For(valueCodec, targetArguments[1]);
-        if (keyProjection is null || valueProjection is null)
-        {
-            return false;
-        }
-
-        projection = LegacyColumnProjection.Close(ProjectMapMethod, (keyProjection, valueProjection), targetArguments);
-        return true;
-    }
-
-    /// <summary>
-    /// Builds a row view over the projected key and value columns.
-    /// </summary>
-    /// <typeparam name="TKey">The projected key type.</typeparam>
-    /// <typeparam name="TValue">The projected value type.</typeparam>
-    /// <param name="source">The decoded <c>Map(K, V)</c> column.</param>
-    /// <param name="projections">The key and value codecs' projections of the two flat entry columns.</param>
-    /// <returns>The view.</returns>
-    private static IColumn ProjectMap<TKey, TValue>(IColumn source, (ColumnReadProjection Key, ColumnReadProjection Value) projections)
-    {
-        IMapColumn map = LegacyColumnProjection.Surface<IMapColumn>(source);
-        var keys = (IColumn<TKey>)projections.Key(map.KeyColumn);
-        var values = (IColumn<TValue>)projections.Value(map.ValueColumn);
-        return new ProjectedReadColumn<KeyValuePair<TKey, TValue>[]>(
-            source,
-            (column, row) => Row(((IMapColumn)column).Offsets, keys, values, row));
     }
 
     /// <summary>Pairs one row's slice of the projected key and value columns into a new array.</summary>

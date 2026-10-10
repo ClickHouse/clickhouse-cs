@@ -12,7 +12,7 @@ public enum CaseSource
     /// <summary>A case of <c>CompositeLiftMatrixTests.Cases()</c>.</summary>
     CompositeLiftMatrix,
 
-    /// <summary>A column type that <c>ColumnReadProjectionTests</c> reads, with each CLR type it reads that type as.</summary>
+    /// <summary>A column type of the read targets table of <c>DifferentialCases</c>, with the CLR types to read it as.</summary>
     ColumnReadProjection,
 
     /// <summary>A value or error scenario of <c>ColumnReadProjectionTests</c>: its own values, read as its target.</summary>
