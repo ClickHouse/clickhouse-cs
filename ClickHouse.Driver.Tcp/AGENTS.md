@@ -68,9 +68,11 @@ Two layers handle a column type:
   `InsertRowsAsync` with `object[]` rows, and `ClickHouseTcpTypes.CanRead`/`CanWrite`. A column that a query read as
   a type whose values mean other values in the target (another scale, other enum members) is written part by part
   (`ConverterDerivation.PlanDecodedPart`, `InsertColumnWrite.For`): only the parts whose values mean other values are
-  converted through the meaning of their values (read as `DateTimeOffset`, `TimeSpan` or the label, then written); the
-  offsets of an `Array` or a `Map`, the null map of a `Nullable` and every other part are written from their storage,
-  so their bytes do not change (`Types/Converters/ConverterDerivation.DecodedColumns.cs`).
+  converted through the meaning of their values (read as `DateTimeOffset`, `TimeSpan` or the label, then written); a
+  `String` or `FixedString` part into another type of a string (another width, `Nullable`, `LowCardinality`) is read
+  as `byte[]` and written through the `byte[]` tree, so no byte goes through text; the offsets of an `Array` or a
+  `Map`, the null map of a `Nullable` and every other part are written from their storage, so their bytes do not change
+  (`Types/Converters/ConverterDerivation.DecodedColumns.cs`).
 
 When you add or change a type, consider every path that touches it:
 

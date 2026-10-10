@@ -303,24 +303,49 @@ public class DecodedColumnConversionTests
     /// values keep their meaning goes through the converter tree of its CLR type. All rows, and the rows from row 1.
     /// </summary>
     [TestCaseSource(nameof(PartCases))]
-    public async Task Write_DecodedCompositeOfAnotherMeaning_WritesTheOtherPartsFromTheirStorage(
+    public Task Write_DecodedCompositeOfAnotherMeaning_WritesTheOtherPartsFromTheirStorage(
         string source,
         string target,
         int rows,
         string sourceBytes,
         string expected,
         string expectedFromRow1)
-    {
-        using IColumn decoded = await ConverterHarness.ReadBackAsync(source, Convert.FromHexString(sourceBytes), rows);
+        => AssertWritesAsync(source, target, rows, sourceBytes, expected, expectedFromRow1);
 
-        byte[] all = await WriteAsync(decoded, target, 0, rows, prefix: true);
-        byte[] fromRow1 = await WriteAsync(decoded, target, 1, rows - 1, prefix: true);
+    /// <summary>
+    /// A <c>String</c> that a query read, into another type of a string (<c>LowCardinality</c>, <c>Nullable</c>,
+    /// <c>FixedString</c>, also in <c>Array</c>, <c>Map</c> and <c>Tuple</c>), is written from its bytes, so bytes that
+    /// are not UTF-8 keep their value. A <c>LowCardinality</c>, <c>Nullable</c> or <c>FixedString</c> column that a query
+    /// read, into another type of a string, is written from its bytes too. All rows, and the rows from row 1.
+    /// </summary>
+    [TestCaseSource(nameof(StringShapeCases))]
+    public Task Write_DecodedStringIntoAnotherTypeOfAString_WritesItsBytes(
+        string source,
+        string target,
+        int rows,
+        string sourceBytes,
+        string expected,
+        string expectedFromRow1)
+        => AssertWritesAsync(source, target, rows, sourceBytes, expected, expectedFromRow1);
+
+    /// <summary>
+    /// A <c>FixedString</c> takes the bytes of a <c>String</c> that a query read only when each value has its width, as
+    /// for any <c>byte[]</c>. A column of <c>string</c> values that a caller built goes by the text rules, which pad a
+    /// shorter value with zero bytes.
+    /// </summary>
+    [Test]
+    public async Task Write_StringIntoAWiderFixedString_RefusesReadBytesAndPadsTheTextOfACaller()
+    {
+        using IColumn decoded = await ConverterHarness.ReadBackAsync("String", Convert.FromHexString("026162"), 1);
+        using var text = new ArrayColumn<string>("c", "String", new[] { "ab" });
+
+        Exception refused = ConverterHarness.Catch(() => WriteAsync(decoded, "FixedString(3)", 0, 1).GetAwaiter().GetResult());
+        byte[] padded = await WriteAsync(text, "FixedString(3)", 0, 1);
 
         Assert.Multiple(() =>
         {
-            Assert.That(Codec(target).CanWrite(decoded), Is.False, "the codec of the target does not write the column from its storage");
-            Assert.That(Convert.ToHexString(all), Is.EqualTo(expected), "all rows");
-            Assert.That(Convert.ToHexString(fromRow1), Is.EqualTo(expectedFromRow1), "rows from row 1");
+            Assert.That(refused?.Message, Does.StartWith("A FixedString(3) value at row 0 is 2 bytes; every value must be exactly 3 bytes."));
+            Assert.That(Convert.ToHexString(padded), Is.EqualTo("616200"));
         });
     }
 
@@ -407,6 +432,115 @@ public class DecodedColumnConversionTests
             Assert.That(write, Is.Null);
             Assert.That(refusal, Is.EqualTo(reason));
         });
+    }
+
+    public static IEnumerable<TestCaseData> StringShapeCases()
+    {
+        yield return Bytes(
+            "String",
+            "LowCardinality(String)",
+            3,
+            "01FF0002C328",
+            "0100000000000000000600000000000003000000000000000001FF02C3280300000000000000010002",
+            "0100000000000000000600000000000002000000000000000002C32802000000000000000001");
+        yield return Bytes(
+            "String",
+            "LowCardinality(Nullable(String))",
+            3,
+            "01FF0002C328",
+            "010000000000000000060000000000000400000000000000000001FF02C3280300000000000000020103",
+            "010000000000000000060000000000000300000000000000000002C32802000000000000000102");
+        yield return Bytes(
+            "String",
+            "Nullable(String)",
+            3,
+            "01FF0002C328",
+            "00000001FF0002C328",
+            "00000002C328");
+        yield return Bytes(
+            "String",
+            "FixedString(2)",
+            3,
+            "02FF0002C328026162",
+            "FF00C3286162",
+            "C3286162");
+        yield return Bytes(
+            "String",
+            "Nullable(FixedString(2))",
+            3,
+            "02FF0002C328026162",
+            "000000FF00C3286162",
+            "0000C3286162");
+        yield return Bytes(
+            "String",
+            "LowCardinality(FixedString(2))",
+            3,
+            "02FF0002C328026162",
+            "0100000000000000000600000000000004000000000000000000FF00C32861620300000000000000010203",
+            "0100000000000000000600000000000003000000000000000000C328616202000000000000000102");
+        yield return Bytes(
+            "Nullable(String)",
+            "LowCardinality(Nullable(String))",
+            3,
+            "00010001FF0002C328",
+            "010000000000000000060000000000000400000000000000000001FF02C3280300000000000000020003",
+            "010000000000000000060000000000000300000000000000000002C32802000000000000000002");
+        yield return Bytes(
+            "LowCardinality(String)",
+            "String",
+            3,
+            "0100000000000000000600000000000003000000000000000001FF02C3280300000000000000010002",
+            "01FF0002C328",
+            "0002C328");
+        yield return Bytes(
+            "LowCardinality(Nullable(String))",
+            "Nullable(String)",
+            3,
+            "010000000000000000060000000000000400000000000000000001FF02C3280300000000000000020003",
+            "00010001FF0002C328",
+            "01000002C328");
+        yield return Bytes(
+            "FixedString(2)",
+            "String",
+            3,
+            "FF00C3286162",
+            "02FF0002C328026162",
+            "02C328026162");
+        yield return Bytes(
+            "Array(String)",
+            "Array(LowCardinality(String))",
+            3,
+            "01000000000000000100000000000000030000000000000001FF0002C328",
+            "0100000000000000010000000000000001000000000000000300000000000000000600000000000003000000000000000001FF02C3280300000000000000010002",
+            "010000000000000000000000000000000200000000000000000600000000000002000000000000000002C32802000000000000000001");
+        yield return Bytes(
+            "Map(String, String)",
+            "Map(LowCardinality(String), Nullable(String))",
+            3,
+            "01000000000000000100000000000000030000000000000001FF0002C32802C32801FF00",
+            "0100000000000000010000000000000001000000000000000300000000000000000600000000000003000000000000000001FF02C328030000000000000001000200000002C32801FF00",
+            "010000000000000000000000000000000200000000000000000600000000000002000000000000000002C32802000000000000000001000001FF00");
+        yield return Bytes(
+            "Tuple(String, Int32)",
+            "Tuple(FixedString(2), Int32)",
+            3,
+            "02FF0002C32802616207000000FFFFFFFF05000000",
+            "FF00C328616207000000FFFFFFFF05000000",
+            "C3286162FFFFFFFF05000000");
+        yield return Bytes(
+            "Array(Nullable(String))",
+            "Array(LowCardinality(Nullable(String)))",
+            3,
+            "01000000000000000100000000000000030000000000000000010001FF0002C328",
+            "010000000000000001000000000000000100000000000000030000000000000000060000000000000400000000000000000001FF02C3280300000000000000020003",
+            "01000000000000000000000000000000020000000000000000060000000000000300000000000000000002C32802000000000000000002");
+        yield return Bytes(
+            "Tuple(DateTime64(3, 'UTC'), String)",
+            "Tuple(DateTime64(6, 'UTC'), LowCardinality(String))",
+            3,
+            "01000000000000000200000000000000030000000000000001FF0002C328",
+            "0100000000000000E803000000000000D007000000000000B80B000000000000000600000000000003000000000000000001FF02C3280300000000000000010002",
+            "0100000000000000D007000000000000B80B000000000000000600000000000002000000000000000002C32802000000000000000001");
     }
 
     public static IEnumerable<TestCaseData> PartCases()
@@ -562,6 +696,22 @@ public class DecodedColumnConversionTests
             using IColumn read = await ConverterHarness.ReadBackAsync(target, bytes, length);
             Assert.That(ConverterHarness.ReadAs<T>(read, 0, length), Is.EqualTo(values[start..]), $"{source} into {target}, rows [{start}, {values.Length})");
         }
+    }
+
+    // A column decoded from the source bytes, written into the target for all rows and from row 1.
+    private static async Task AssertWritesAsync(string source, string target, int rows, string sourceBytes, string expected, string expectedFromRow1)
+    {
+        using IColumn decoded = await ConverterHarness.ReadBackAsync(source, Convert.FromHexString(sourceBytes), rows);
+
+        byte[] all = await WriteAsync(decoded, target, 0, rows, prefix: true);
+        byte[] fromRow1 = await WriteAsync(decoded, target, 1, rows - 1, prefix: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Codec(target).CanWrite(decoded), Is.False, "the codec of the target does not write the column from its storage");
+            Assert.That(Convert.ToHexString(all), Is.EqualTo(expected), "all rows");
+            Assert.That(Convert.ToHexString(fromRow1), Is.EqualTo(expectedFromRow1), "rows from row 1");
+        });
     }
 
     // The bytes that an insert writes for rows [start, start + length) of the column into a column of the type.
