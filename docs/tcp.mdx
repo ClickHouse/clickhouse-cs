@@ -589,7 +589,9 @@ insert completes before that block is released.
   another scale, or as an `Enum8` or `Enum16` with other members, is converted through its values
   (the instants, the durations and the labels); the insert refuses such a column of a scale above 7
   unless the target has the same scale. In a `Tuple`, `Map`, `Array` or `Nullable`, only those parts
-  are converted, and the other parts keep the bytes that the server sent. A `String` column that a
+  are converted, and the other parts keep the bytes that the server sent. An array cast that the
+  [write rules](#write-rules) refuse is refused in the other parts too: an `Array(UInt32)` part is
+  not written into an `Array(Int32)` part. A `String` column that a
   query read, written into a `LowCardinality`, `Nullable` or `FixedString` column (also inside an
   `Array`, `Map` or `Tuple`), is written from its bytes, so a value that is not valid UTF-8 keeps
   them; a `FixedString(N)` column takes only values of exactly N bytes. A value that a NULL hides in
