@@ -271,7 +271,8 @@ public class DerivedColumnTests
     [TestCase("String", typeof(object), true)]
     [TestCase("Nullable(Int32)", typeof(int), true)]
     [TestCase("UInt64", typeof(ulong?), true)]
-    [TestCase("Array(UInt32)", typeof(int[]), true)]
+    [TestCase("Array(UInt32)", typeof(int[]), false)]
+    [TestCase("Array(Int8)", typeof(ReadRulesTests.SByteEnum[]), true)]
     [TestCase("String", typeof(int), false)]
     [TestCase("Tuple(String, UInt8)", typeof((byte[], byte)?), false)]
     public void CanRead_ReadingOfTheReadRules_IsWhatReadAsDoes(string type, Type target, bool reads)

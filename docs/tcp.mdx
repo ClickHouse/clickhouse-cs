@@ -538,9 +538,11 @@ the whole column type, the same as in `QueryAsync<T>` POCO mapping:
   value.
 * **Cast.** A column reads as a type that its values cast to, such as `object`, `IComparable`, or
   `IReadOnlyList<string>` for `Array(String)`. A reference value keeps its object, and a value type is
-  boxed. The .NET cast also
-  accepts an array of other integers of the same size, so `Array(UInt32)` reads as `int[]`, and a
-  `UInt32` value above `int.MaxValue` then reads as a negative `int`.
+  boxed. An array reads as an array of an enum whose underlying type is its element type, so
+  `Array(Enum8(...))` reads as `MyEnum[]` for an `enum MyEnum : sbyte`. An array cast that gives each
+  element another meaning is refused: `Array(UInt32)` does not read as `int[]`, because a value above
+  `int.MaxValue` would read as a negative number, and `Array(Int32)` does not read as an array of an
+  enum over `uint`.
 * **Nullable target.** A column that is not nullable reads as a nullable value type, for example
   `UInt64` as `ulong?` or `DateTime` as `DateTimeOffset?`.
 * **Nullable column as a value type.** A `Nullable(T)` or `LowCardinality(Nullable(T))` column reads as a
@@ -587,7 +589,9 @@ insert completes before that block is released.
   another scale, or as an `Enum8` or `Enum16` with other members, is converted through its values
   (the instants, the durations and the labels); the insert refuses such a column of a scale above 7
   unless the target has the same scale. In a `Tuple`, `Map`, `Array` or `Nullable`, only those parts
-  are converted, and the other parts keep the bytes that the server sent. A `String` column that a
+  are converted, and the other parts keep the bytes that the server sent. An array cast that the
+  [write rules](#write-rules) refuse is refused in the other parts too: an `Array(UInt32)` part is
+  not written into an `Array(Int32)` part. A `String` column that a
   query read, written into a `LowCardinality`, `Nullable` or `FixedString` column (also inside an
   `Array`, `Map` or `Tuple`), is written from its bytes, so a value that is not valid UTF-8 keeps
   them; a `FixedString(N)` column takes only values of exactly N bytes. A value that a NULL hides in
@@ -690,9 +694,12 @@ these rules apply to the whole column type, the same in `InsertAsync`, `InsertRo
   underlying type, for example an `enum Status : sbyte` into `Int8` or `Enum8(...)`. The ordinal
   is written as it is: the client does not compare it with the labels of the column type.
 * **Cast.** A value is written into a column that is written from a type that the value casts to,
-  such as a `string` into a `Variant` column, which is written from `object`. The .NET cast also
-  accepts an array of other integers of the same size, so a `uint[]` is written into
-  `Array(Int32)`, and a `uint` above `int.MaxValue` is then stored as a negative `Int32`.
+  such as a `string` into a `Variant` column, which is written from `object`. An enum array is
+  written as an array of its underlying type, so a `MyEnum[]` is written into `Array(Int8)` for an
+  `enum MyEnum : sbyte`. An array cast that gives each element another meaning is refused: a
+  `uint[]` is not written into `Array(Int32)`, because a value above `int.MaxValue` would be stored as
+  a negative number. The same applies to the other integer types of the other sign, and to an
+  enum array over an integer type of the other sign.
 * **Value type into a nullable column.** A value type is written into a column that is written from
   its nullable type, for example an `int` into `Nullable(Int32)` or `LowCardinality(Nullable(Int32))`.
   No value is `NULL`.

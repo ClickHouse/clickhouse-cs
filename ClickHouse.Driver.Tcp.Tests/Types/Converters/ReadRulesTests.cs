@@ -58,7 +58,7 @@ public class ReadRulesTests
         ["Int64"] = "object, ValueType, IComparable, IFormattable, long, long?",
         ["Enum8('a' = 1, 'b' = 2)"] = "object, ValueType, IComparable, IFormattable, string, sbyte, sbyte?, SByteEnum, SByteEnum?",
         ["String"] = "object, IComparable, IEnumerable, string, byte[]",
-        ["FixedString(4)"] = "object, IEnumerable, IReadOnlyList<SByteEnum>, string, byte[], SByteEnum[], sbyte[]",
+        ["FixedString(4)"] = "object, IEnumerable, string, byte[]",
         ["Date"] = "object, ValueType, IComparable, IFormattable, DateOnly?",
         ["DateTime('UTC')"] =
             "object, ValueType, IComparable, IFormattable, uint, uint?, UIntEnum, UIntEnum?, DateTime," +
@@ -80,15 +80,11 @@ public class ReadRulesTests
         ["LowCardinality(Nullable(DateTime('UTC')))"] =
             "object, ValueType, uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset," +
             " DateTimeOffset?",
-        ["Array(Int8)"] = "object, IEnumerable, IReadOnlyList<SByteEnum>, byte[], SByteEnum[], sbyte[]",
-        ["Array(Int32)"] =
-            "object, IEnumerable, IEnumerable<int>, IReadOnlyList<int>, IntEnum[], UIntEnum[], int[]," +
-            " uint[]",
-        ["Array(UInt32)"] =
-            "object, IEnumerable, IEnumerable<int>, IReadOnlyList<int>, IntEnum[], UIntEnum[], int[]," +
-            " uint[]",
+        ["Array(Int8)"] = "object, IEnumerable, IReadOnlyList<SByteEnum>, SByteEnum[], sbyte[]",
+        ["Array(Int32)"] = "object, IEnumerable, IEnumerable<int>, IReadOnlyList<int>, IntEnum[], int[]",
+        ["Array(UInt32)"] = "object, IEnumerable, UIntEnum[], uint[]",
         ["Array(String)"] = "object, IEnumerable, IEnumerable<string>, object[], string[]",
-        ["Array(Array(UInt32))"] = "object, IEnumerable, int[][], uint[][], object[]",
+        ["Array(Array(UInt32))"] = "object, IEnumerable, uint[][], object[]",
         ["Array(Nullable(Int32))"] = "object, IEnumerable, int?[]",
         ["Array(LowCardinality(String))"] = "object, IEnumerable, IEnumerable<string>, object[], string[]",
         ["Map(String, Int32)"] = "object, IEnumerable, KeyValuePair<string, int>[], KeyValuePair<byte[], int>[]",
@@ -99,6 +95,11 @@ public class ReadRulesTests
         ["Point"] = "object, ValueType, IComparable, (double, double)?",
         ["SimpleAggregateFunction(anyLast, Nullable(Int32))"] = "object, ValueType, int, int?, IntEnum, IntEnum?",
     };
+
+    // The refusal of Array(UInt32) read as int[]: the element type refuses int, and the message gives the type that it
+    // reads as.
+    private const string RefusalOfArrayOfUInt32AsInt32Array =
+        "'UInt32' cannot be read as System.Int32. It reads as: System.UInt32. It is inside the column type 'Array(UInt32)'.";
 
     internal enum SByteEnum : sbyte
     {
@@ -130,8 +131,13 @@ public class ReadRulesTests
         Assert.That(actual, Is.EquivalentTo(AcceptedTargets), "The table is:" + Environment.NewLine + string.Join(Environment.NewLine, actual.Select(entry => $"[\"{entry.Key}\"] = \"{entry.Value}\",")));
     }
 
+    /// <summary>
+    /// The array casts that the CLR allows between the canonical arrays of the client and arrays of other integers or
+    /// enums of the same size: the rule accepts an enum array from an array of its underlying type, and refuses every cast
+    /// that gives the elements another meaning (an integer of the other sign, an enum over another integer type).
+    /// </summary>
     [Test]
-    public void ReinterpretsElements_EveryAcceptedArrayCast_IsListed()
+    public void CanConvert_EveryArrayCastThatReadsElementsAsAnotherType_AcceptsOnlyAnEnumFromItsUnderlyingType()
     {
         // The canonical array types of the client: an array of each leaf's canonical type, and the jagged forms.
         Type[] elements = LeafTable.All.SelectMany(leaf => leaf.Reads.Where(pair => !pair.IsConversion).Select(pair => pair.ClrType)).Distinct().ToArray();
@@ -141,43 +147,79 @@ public class ReadRulesTests
         IEnumerable<Type> targetElements = integers.Concat(enums);
         Type[] targets = targetElements.SelectMany(e => new[] { e.MakeArrayType(), e.MakeArrayType().MakeArrayType(), typeof(IReadOnlyList<>).MakeGenericType(e) }).ToArray();
 
-        string[] accepted = sources
-            .SelectMany(source => targets.Where(target => ReadRules.CanConvert(source, target) && ReadRules.ReinterpretsElements(source, target))
+        string[] Casts(bool accepted) => sources
+            .SelectMany(source => targets.Where(target => target.IsAssignableFrom(source) && ElementOf(target) != ElementOf(source) && ReadRules.CanConvert(source, target) == accepted)
                 .Select(target => $"{TypeNames.Of(source)} as {TypeNames.Of(target)}"))
             .OrderBy(text => text, StringComparer.Ordinal)
             .ToArray();
 
-        string[] expected =
+        string[] expectedAccepted =
         {
-            "byte[] as ByteEnum[]", "byte[] as IReadOnlyList<ByteEnum>", "byte[] as IReadOnlyList<SByteEnum>", "byte[] as IReadOnlyList<sbyte>",
-            "byte[] as SByteEnum[]", "byte[] as sbyte[]", "byte[][] as ByteEnum[][]", "byte[][] as SByteEnum[][]", "byte[][] as sbyte[][]",
-            "int[] as IReadOnlyList<IntEnum>", "int[] as IReadOnlyList<UIntEnum>", "int[] as IReadOnlyList<uint>", "int[] as IntEnum[]",
-            "int[] as UIntEnum[]", "int[] as uint[]", "int[][] as IntEnum[][]", "int[][] as UIntEnum[][]", "int[][] as uint[][]",
+            "byte[] as ByteEnum[]", "byte[] as IReadOnlyList<ByteEnum>", "byte[][] as ByteEnum[][]",
+            "int[] as IReadOnlyList<IntEnum>", "int[] as IntEnum[]", "int[][] as IntEnum[][]",
+            "sbyte[] as IReadOnlyList<SByteEnum>", "sbyte[] as SByteEnum[]", "sbyte[][] as SByteEnum[][]",
+            "uint[] as IReadOnlyList<UIntEnum>", "uint[] as UIntEnum[]", "uint[][] as UIntEnum[][]",
+        };
+
+        string[] expectedRefused =
+        {
+            "byte[] as IReadOnlyList<SByteEnum>", "byte[] as IReadOnlyList<sbyte>", "byte[] as SByteEnum[]", "byte[] as sbyte[]",
+            "byte[][] as SByteEnum[][]", "byte[][] as sbyte[][]",
+            "int[] as IReadOnlyList<UIntEnum>", "int[] as IReadOnlyList<uint>", "int[] as UIntEnum[]", "int[] as uint[]",
+            "int[][] as UIntEnum[][]", "int[][] as uint[][]",
             "long[] as IReadOnlyList<ulong>", "long[] as ulong[]", "long[][] as ulong[][]",
-            "sbyte[] as ByteEnum[]", "sbyte[] as IReadOnlyList<ByteEnum>", "sbyte[] as IReadOnlyList<SByteEnum>", "sbyte[] as IReadOnlyList<byte>",
-            "sbyte[] as SByteEnum[]", "sbyte[] as byte[]", "sbyte[][] as ByteEnum[][]", "sbyte[][] as SByteEnum[][]", "sbyte[][] as byte[][]",
+            "sbyte[] as ByteEnum[]", "sbyte[] as IReadOnlyList<ByteEnum>", "sbyte[] as IReadOnlyList<byte>", "sbyte[] as byte[]",
+            "sbyte[][] as ByteEnum[][]", "sbyte[][] as byte[][]",
             "short[] as IReadOnlyList<ushort>", "short[] as ushort[]", "short[][] as ushort[][]",
-            "uint[] as IReadOnlyList<IntEnum>", "uint[] as IReadOnlyList<UIntEnum>", "uint[] as IReadOnlyList<int>", "uint[] as IntEnum[]",
-            "uint[] as UIntEnum[]", "uint[] as int[]", "uint[][] as IntEnum[][]", "uint[][] as UIntEnum[][]", "uint[][] as int[][]",
+            "uint[] as IReadOnlyList<IntEnum>", "uint[] as IReadOnlyList<int>", "uint[] as IntEnum[]", "uint[] as int[]",
+            "uint[][] as IntEnum[][]", "uint[][] as int[][]",
             "ulong[] as IReadOnlyList<long>", "ulong[] as long[]", "ulong[][] as long[][]",
             "ushort[] as IReadOnlyList<short>", "ushort[] as short[]", "ushort[][] as short[][]",
         };
 
-        Assert.That(accepted, Is.EqualTo(expected), "Accepted:" + Environment.NewLine + string.Join(Environment.NewLine, accepted.Select(a => $"\"{a}\",")));
+        Assert.Multiple(() =>
+        {
+            string[] accepted = Casts(accepted: true);
+            string[] refused = Casts(accepted: false);
+            Assert.That(accepted, Is.EqualTo(expectedAccepted), "Accepted:" + Environment.NewLine + string.Join(Environment.NewLine, accepted.Select(a => $"\"{a}\",")));
+            Assert.That(refused, Is.EqualTo(expectedRefused), "Refused:" + Environment.NewLine + string.Join(Environment.NewLine, refused.Select(a => $"\"{a}\",")));
+        });
     }
 
+    /// <summary>
+    /// <c>Array(UInt32)</c> does not read as <c>int[]</c>: the cast would read 3000000000 as -1294967296. The refusals name
+    /// <c>uint[]</c> (<c>uint</c> for the element), which the column reads as.
+    /// </summary>
     [Test]
-    public void ReadAs_ArrayCastThatReadsElementsAsAnotherType_KeepsTheArrayAndItsBits()
+    public void ReadAs_ArrayOfIntegersOfTheOtherSign_IsRefused()
     {
         using Block block = Decode("Array(UInt32)", new ArrayColumn<uint[]>("value", "Array(UInt32)", new[] { new[] { 3_000_000_000u, 7u } }));
 
-        int[][] values = Fill<int[]>(block);
+        Derivation derived = ConverterDerivation.Default.Derive("Array(UInt32)", block.Context, typeof(int[]), ConversionDirection.Read);
+        Exception readAs = Assert.Catch(() => block.ReadAs<int[]>(0));
 
         Assert.Multiple(() =>
         {
-            Assert.That(values[0][0], Is.EqualTo(-1_294_967_296));
-            Assert.That(values[0][1], Is.EqualTo(7));
-            Assert.That(values[0].GetType(), Is.EqualTo(typeof(uint[])), "The cast keeps the array that the column reads.");
+            Assert.That(derived.Refusal, Is.EqualTo(RefusalOfArrayOfUInt32AsInt32Array));
+            Assert.That(readAs, Is.TypeOf<InvalidCastException>());
+            Assert.That(readAs.Message, Is.EqualTo("Column 'value' has type 'Array(UInt32)', whose values cannot be read as System.Int32[]. It reads as: System.UInt32[]."));
+            Assert.That(ClickHouseTcpTypes.CanRead("Array(UInt32)", typeof(int[])), Is.False);
+        });
+    }
+
+    /// <summary>An enum array from an array of its underlying type keeps the array and the value of each element.</summary>
+    [Test]
+    public void ReadAs_EnumArrayFromAnArrayOfItsUnderlyingType_KeepsTheArrayAndItsValues()
+    {
+        using Block block = Decode("Array(Int8)", new ArrayColumn<sbyte[]>("value", "Array(Int8)", new[] { new sbyte[] { -1, 1 } }));
+
+        SByteEnum[][] values = Fill<SByteEnum[]>(block);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(values[0].Select(value => (sbyte)value), Is.EqualTo(new sbyte[] { -1, 1 }));
+            Assert.That(values[0][1] == SByteEnum.A, Is.True);
+            Assert.That(values[0].GetType(), Is.EqualTo(typeof(sbyte[])), "The cast keeps the array that the column reads.");
         });
     }
 
@@ -189,7 +231,10 @@ public class ReadRulesTests
     [TestCase(typeof(uint), typeof(int), false)]
     [TestCase(typeof(uint[]), typeof(int[]), true)]
     [TestCase(typeof(uint[][]), typeof(int[][]), true)]
-    [TestCase(typeof(sbyte[]), typeof(IEnumerable<SByteEnum>), true)]
+    [TestCase(typeof(int[]), typeof(UIntEnum[]), true)]
+    [TestCase(typeof(SByteEnum[]), typeof(byte[]), true)]
+    [TestCase(typeof(sbyte[]), typeof(IEnumerable<SByteEnum>), false)]
+    [TestCase(typeof(SByteEnum[]), typeof(sbyte[]), false)]
     public void ReinterpretsElements_Cast_IsWhatTheCastDoesToTheElements(Type from, Type to, bool reinterprets)
         => Assert.That(ReadRules.ReinterpretsElements(from, to), Is.EqualTo(reinterprets));
 
@@ -220,7 +265,10 @@ public class ReadRulesTests
         };
     }
 
-    /// <summary>Writes a column with its codec and decodes it into a block of one column called <c>value</c>.</summary>
+    // The element type of an array, or the type argument of a generic collection interface.
+    private static Type ElementOf(Type type) => type.IsArray ? type.GetElementType() : type.GetGenericArguments()[0];
+
+    /// <summary>Writes a column as an insert writes it and decodes it into a block of one column called <c>value</c>.</summary>
     internal static Block Decode(string columnType, IColumn source)
     {
         IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(columnType, DifferentialEngine.Context);
