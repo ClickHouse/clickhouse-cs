@@ -62,6 +62,9 @@ public class CompositeLiftMatrixTests
             "Tuple(DateTime('UTC'), DateTime64(3, 'UTC'), Time)",
             typeof(ValueTuple<uint, long, int>),
             typeof(ValueTuple<DateTime, long, TimeSpan>));
+
+        // A nullable tuple whose fields lift.
+        yield return new Case("Nullable(Tuple(DateTime('UTC'), String))", typeof(ValueTuple<uint, string>?), typeof(ValueTuple<DateTime, string>?));
     }
 
     private static IColumnCodec Codec(string type)

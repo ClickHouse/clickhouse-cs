@@ -17,10 +17,10 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 public static class DifferentialCases
 {
     /// <summary>The number of cases from <c>InsertRoundTripCase.CasesFor(TcpFeature.All)</c>.</summary>
-    public const int InsertRoundTripCount = 286;
+    public const int InsertRoundTripCount = 298;
 
     /// <summary>The number of cases from <c>CompositeLiftMatrixTests.Cases()</c>.</summary>
-    public const int CompositeLiftMatrixCount = 22;
+    public const int CompositeLiftMatrixCount = 23;
 
     /// <summary>The number of column types of the read targets table (<see cref="CaseSource.ColumnReadProjection"/>).</summary>
     public const int ColumnReadProjectionCount = 56;
