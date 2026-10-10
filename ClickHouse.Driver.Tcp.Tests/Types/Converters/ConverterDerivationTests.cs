@@ -308,6 +308,33 @@ public class ConverterDerivationTests
         });
     }
 
+    /// <summary>A type holds NULL when its codec writes a NULL with no placeholder value of the type.</summary>
+    [TestCase("Nullable(String)", true)]
+    [TestCase("nullable(Int32)", true)]
+    [TestCase("LowCardinality(Nullable(String))", true)]
+    [TestCase("Variant(String, UInt64)", true)]
+    [TestCase("Dynamic", true)]
+    [TestCase("Dynamic(max_types=3)", true)]
+    [TestCase("Geometry", true)]
+    [TestCase("SimpleAggregateFunction(anyLast, Nullable(String))", true)]
+    [TestCase("String", false)]
+    [TestCase("LowCardinality(String)", false)]
+    [TestCase("Array(Nullable(String))", false)]
+    [TestCase("Tuple(Nullable(String), Int32)", false)]
+    [TestCase("Map(String, Nullable(String))", false)]
+    [TestCase("JSON", false)]
+    [TestCase("Point", false)]
+    [TestCase("Ring", false)]
+    [TestCase("SimpleAggregateFunction(anyLast, String)", false)]
+    public void HoldsNull_Type_IsWhetherTheCodecHasNoPlaceholder(string type, bool holdsNull)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ConverterDerivation.Default.HoldsNull(type), Is.EqualTo(holdsNull));
+            Assert.That(ConverterHarness.Codec(type).NullPlaceholder is null, Is.EqualTo(holdsNull), "the placeholder of the codec");
+        });
+    }
+
     [Test]
     public void OfAndRefused_Null_Throw()
     {

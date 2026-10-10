@@ -101,7 +101,7 @@ internal sealed class PocoColumnBuilder<T, TWrite> : PocoColumnBuilder<T>
 /// <para>
 /// The gather finds a null that the column cannot hold before the block is written, so the error names the property and
 /// the row, and the connection stays at a block boundary. A reference type is null where the column type has no NULL
-/// (<see cref="PocoWriteConversion.TakesNull"/>). A <c>T?</c> property is null where the tree writes its values as
+/// (<see cref="ConverterDerivation.HoldsNull"/>). A <c>T?</c> property is null where the tree writes its values as
 /// <c>T</c> (<see cref="NonNullWriter{T}"/>).
 /// </para>
 /// <para>
@@ -155,7 +155,7 @@ internal static class PocoColumnBuilderFactory
                 .Invoke(null, BindingFlags.DoNotWrapExceptions, binder: null, new object[] { column.Name, column.TypeName, member, tier }, culture: null);
         }
 
-        bool refusesNull = !member.MemberType.IsValueType && !PocoWriteConversion.TakesNull(codec);
+        bool refusesNull = !member.MemberType.IsValueType && !derivation.HoldsNull(column.TypeName);
         return (PocoColumnBuilder<T>)CreateTypedMethod
             .MakeGenericMethod(typeof(T), member.MemberType)
             .Invoke(null, BindingFlags.DoNotWrapExceptions, binder: null, new object[] { column.Name, column.TypeName, member, refusesNull, tier }, culture: null);
