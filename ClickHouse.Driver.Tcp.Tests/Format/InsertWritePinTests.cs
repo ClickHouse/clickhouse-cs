@@ -44,6 +44,8 @@ public class InsertWritePinTests
         ["Dynamic/decimals@2"] = "0300000000000000030E446563696D616C2833382C2031290E446563696D616C2837362C2032290F446563696D616C2837362C2034302900010203FBFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF3930000000000000000000000000000000000000000000000000000000000000F9FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
         ["Dynamic/arrays@0"] = "03000000000000000713417272617928417272617928496E743332292913417272617928417272617928496E74363429290E417272617928466C6F61743634290B41727261792849507634290C417272617928496E743332290D417272617928537472696E67290C41727261792855496E7438290405060400010302070402000000000000000100000000000000030000000000000001000000020000000300000000000000000000000200000000000000000000000000F83F000000000000044001000000000000000302010A030000000000000003000000000000000500000000000000010000000200000003000000040000000500000002000000000000000161016202000000000000000102",
         ["Dynamic/arrays@2"] = "03000000000000000613417272617928417272617928496E743332292913417272617928417272617928496E74363429290E417272617928466C6F61743634290B41727261792849507634290C417272617928496E743332290C41727261792855496E743829050400010302060402000000000000000100000000000000030000000000000001000000020000000300000000000000000000000200000000000000000000000000F83F000000000000044001000000000000000302010A00000000000000000200000000000000040000000500000002000000000000000102",
+        ["Dynamic/unsignedArrays@0"] = "0300000000000000020C417272617928496E743332290D41727261792855496E74333229010001020100000000000000FFFFFFFF02000000000000000300000000000000005ED0B20700000001000000",
+        ["Dynamic/unsignedArrays@2"] = "0300000000000000010D41727261792855496E743332290001010000000000000001000000",
         ["Dynamic/maps@0"] = "030000000000000004114D617028495076342C20537472696E6729194D617028496E7433322C20417272617928537472696E672929124D617028537472696E672C20496E74333229124D617028537472696E672C20496E7436342902030100040201000000000000000302010A02763401000000000000000100000001000000000000000178020000000000000003000000000000000161016201630100000002000000030000000000000000000000",
         ["Dynamic/maps@2"] = "030000000000000003114D617028495076342C20537472696E6729194D617028496E7433322C20417272617928537472696E672929124D617028537472696E672C20496E743332290100030201000000000000000302010A027634010000000000000001000000010000000000000001780100000000000000016303000000",
         ["Dynamic/tuples@0"] = "0300000000000000051B5475706C6528417272617928496E743332292C20537472696E67290B5475706C65284950763429145475706C6528496E7433322C20537472696E67291D5475706C6528496E7436342C20466C6F617436342C20537472696E6729225475706C65285475706C6528496E7433322C20537472696E67292C20496E74333229020300010405020200000000000000010000000200000001790302010A0100000003000000016101620200000000000000000000000000F83F017801000000016102000000",
@@ -156,6 +158,12 @@ public class InsertWritePinTests
         ["CreateArray/Int32 into Int64@2"] = "refused",
         ["CreateArray/enum into Int32@0"] = "02000000000000000200000000000000030000000000000005000000000000000100000002000000010000000200000001000000",
         ["CreateArray/enum into Int32@2"] = "01000000000000000300000000000000010000000200000001000000",
+        ["CreateArray/UInt32 into Int32@0"] = "refused",
+        ["CreateArray/UInt32 into Int32@2"] = "refused",
+        ["CreateArray/unsigned enum into Int32@0"] = "refused",
+        ["CreateArray/unsigned enum into Int32@2"] = "refused",
+        ["CreateArray/Array(UInt32) into Array(Int32)@0"] = "refused",
+        ["CreateArray/Array(UInt32) into Array(Int32)@1"] = "refused",
         ["CreateArray/Nullable(String)@0"] = "020000000000000002000000000000000300000000000000050000000000000000010000010161000163016400",
         ["CreateArray/Nullable(String)@2"] = "010000000000000003000000000000000000010163016400",
         ["CreateArray/String@0"] = "020000000000000002000000000000000300000000000000050000000000000001610262620001640165",
@@ -210,6 +218,8 @@ public class InsertWritePinTests
         ["CreateArray/decoded DateTime('UTC') into DateTime@1"] = "000000000000000001000000000000000300000000000000030000000400000005000000",
         ["CreateArray/decoded Int32 into Int64@0"] = "refused",
         ["CreateArray/decoded Int32 into Int64@1"] = "refused",
+        ["CreateArray/decoded UInt32 into Int32@0"] = "refused",
+        ["CreateArray/decoded UInt32 into Int32@1"] = "refused",
         ["TwoTyped/String@0"] = "01610162",
         ["TwoTyped/String@1"] = "0162",
         ["TwoTyped/Int32@0"] = "0100000002000000",
@@ -475,6 +485,9 @@ public class InsertWritePinTests
         yield return Of("Dynamic/instants", "Dynamic", new object[] { instant, new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc), new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Unspecified), null });
         yield return Of("Dynamic/decimals", "Dynamic", new object[] { 12.345m, 1m, -0.5m, new ClickHouseTcpDecimal((Int128)12345, 2), new ClickHouseTcpDecimal(Int256.FromBigInteger(-7), 40), null });
         yield return Of("Dynamic/arrays", "Dynamic", new object[] { new[] { 1, 2, 3 }, new[] { "a", "b" }, new byte[] { 1, 2 }, Array.Empty<int>(), new[] { new[] { 1 }, new[] { 2, 3 } }, Array.Empty<long[]>(), new[] { v4 }, new[] { 1.5, 2.5 }, null, new[] { 4, 5 } });
+
+        // The type of an array comes from the CLR type of its elements, so a uint[] is an Array(UInt32) and keeps its values.
+        yield return Of("Dynamic/unsignedArrays", "Dynamic", new object[] { new[] { 3_000_000_000u, 7u }, new[] { -1 }, new[] { 1u }, null });
         yield return Of("Dynamic/maps", "Dynamic", new object[] { Pairs(("a", 1), ("b", 2)), Array.Empty<KeyValuePair<string, long>>(), new[] { new KeyValuePair<int, string[]>(1, new[] { "x" }) }, new[] { new KeyValuePair<IPAddress, string>(v4, "v4") }, null, Pairs(("c", 3)) });
         yield return Of("Dynamic/tuples", "Dynamic", new object[] { (1, "a"), (2L, 1.5, "x"), (new[] { 1, 2 }, "y"), ValueTuple.Create(v4), ((1, "a"), 2), null, (3, "b") });
         yield return Of("Dynamic/mixed", "Dynamic", new object[] { 1, "a", null, 2, "b", (1, "a"), new[] { 1 }, 3, Pairs(("k", 1)), "c" });
@@ -542,6 +555,12 @@ public class InsertWritePinTests
         yield return Dense("CreateArray/Int32 into Nullable(Int32)", "Array(Nullable(Int32))", new[] { 1, 2, 3, 4, 5 }, offsets);
         yield return Dense("CreateArray/Int32 into Int64", "Array(Int64)", new[] { 1, 2, 3, 4, 5 }, offsets);
         yield return Dense("CreateArray/enum into Int32", "Array(Int32)", new[] { Small.A, Small.B, Small.A, Small.B, Small.A }, offsets);
+
+        // An array cast that gives each element another meaning is refused (the cast rule of the writes).
+        yield return Dense("CreateArray/UInt32 into Int32", "Array(Int32)", new[] { 3_000_000_000u, 7u, 1u, 2u, 3u }, offsets);
+        yield return Dense("CreateArray/unsigned enum into Int32", "Array(Int32)", new[] { ReadRulesTests.UIntEnum.A, ReadRulesTests.UIntEnum.A, ReadRulesTests.UIntEnum.A, ReadRulesTests.UIntEnum.A, ReadRulesTests.UIntEnum.A }, offsets);
+        yield return new PinCase("CreateArray/Array(UInt32) into Array(Int32)", "Array(Array(Int32))", 1, () => Task.FromResult<IColumn>(
+            ClickHouseTcpColumn.CreateArray("c", ClickHouseTcpColumn.CreateArray("c", ClickHouseTcpColumn.Create("c", new[] { 3_000_000_000u, 7u, 1u, 2u, 3u }), offsets), new[] { 0, 1, 1, 4 })));
         yield return Dense("CreateArray/Nullable(String)", "Array(Nullable(String))", new[] { "a", null, "c", "d", null }, offsets);
         yield return Dense("CreateArray/String", "Array(String)", new[] { "a", "bb", "", "d", "e" }, offsets);
         yield return Dense("CreateArray/bytes into String", "Array(String)", new[] { new byte[] { 0xFF }, new byte[] { 0x41 }, Array.Empty<byte>(), new byte[] { 0xC3, 0xA9 }, new byte[] { 0x42 } }, offsets);
@@ -571,6 +590,7 @@ public class InsertWritePinTests
         yield return DecodedDense<int, int>("CreateArray/decoded Int32", "Array(Int32)", "Int32", new[] { 1, 2, 3, 4, 5 }, offsets);
         yield return DecodedDense<uint, uint>("CreateArray/decoded DateTime('UTC') into DateTime", "Array(DateTime)", "DateTime('UTC')", new uint[] { 1, 2, 3, 4, 5 }, offsets);
         yield return DecodedDense<int, int>("CreateArray/decoded Int32 into Int64", "Array(Int64)", "Int32", new[] { 1, 2, 3, 4, 5 }, offsets);
+        yield return DecodedDense<uint, uint>("CreateArray/decoded UInt32 into Int32", "Array(Int32)", "UInt32", new[] { 3_000_000_000u, 7u, 1u, 2u, 3u }, offsets);
 
         // Columns of no single CLR type.
         yield return new PinCase("TwoTyped/String", "String", 1, () => Task.FromResult<IColumn>(new TextAndInt()));
