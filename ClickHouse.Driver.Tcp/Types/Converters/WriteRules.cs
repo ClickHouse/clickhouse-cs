@@ -28,14 +28,14 @@ internal static class WriteRules
     /// <summary>
     /// The types other than <paramref name="source"/> that a value of <paramref name="source"/> casts to with no
     /// conversion, where a column type can be written from them, in the order that the rule tries them: the base classes
-    /// of a class; for an array, the arrays whose elements the CLR reads in place of the source elements (an integer
-    /// type of the same size, an enum and its integer type, a base class of a reference element, also in jagged arrays);
-    /// then <see cref="object"/>. Interfaces are not in the list: no column type is written from one.
+    /// of a class; for an array, the arrays whose elements the CLR reads in place of the source elements and keep their
+    /// meaning (the integer type under an enum, a base class of a reference element, also in jagged arrays); then
+    /// <see cref="object"/>. Interfaces are not in the list: no column type is written from one.
     /// </summary>
     /// <remarks>
     /// Each type is one that the cast rule of the reads accepts (<see cref="ReadRules.IsAssignable"/>), so the array casts
-    /// that read elements as another type (<see cref="ReadRules.ReinterpretsElements"/>) are in one place for both
-    /// directions.
+    /// that give the elements another meaning (<see cref="ReadRules.ReinterpretsElements"/>) are refused in one place for
+    /// both directions.
     /// </remarks>
     /// <param name="source">The CLR type of the values. Not a nullable value type: the rules unwrap it first.</param>
     /// <returns>The types.</returns>
