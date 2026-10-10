@@ -116,7 +116,7 @@ internal sealed class ClrKeyedFixedInterner<T, TCanon> : IDisposable
     }
 
     // A miss during the probe. When more than half of the probe has missed, the end of the probe can only stop the CLR
-    // lookup, so it stops now and the values after it cost no CLR lookup.
+    // lookup, so it stops at this miss and the values after it cost no CLR lookup.
     private void EndProbeOnMiss()
     {
         if (++misses * 2 > ProbeValues)
