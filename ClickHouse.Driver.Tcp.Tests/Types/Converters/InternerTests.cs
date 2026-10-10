@@ -183,23 +183,28 @@ public class InternerTests
     }
 
     /// <summary>When the first values do not repeat, the probe turns the CLR lookup off. The keys stay correct after it.</summary>
+    /// <summary>
+    /// Distinct values: the CLR lookup stops at the miss that passes half of the probe, as no later lookup of the probe can
+    /// keep it, and the keys go on in order.
+    /// </summary>
     [Test]
-    public void ClrKeyedByteInterner_DistinctValues_TurnsTheClrLookupOffAfterTheProbe()
+    public void ClrKeyedByteInterner_DistinctValues_TurnsTheClrLookupOffAtTheMissThatPassesHalfOfTheProbe()
     {
         using var interner = new ClrKeyedByteInterner<string>((BytesLeafWriter<string>)Leaf<string>("String"), nullable: false);
-        int probe = ClrKeyedByteInterner<string>.ProbeValues;
+        int half = ClrKeyedByteInterner<string>.ProbeValues / 2;
 
-        int[] first = Enumerable.Range(0, probe - 1).Select(i => interner.Intern($"v{i}")).ToArray();
-        bool onBefore = interner.UsesClrKeys;
-        int last = interner.Intern($"v{probe - 1}");
+        int[] first = Enumerable.Range(0, half).Select(i => interner.Intern($"v{i}")).ToArray();
+        bool onAtHalf = interner.UsesClrKeys;
+        int next = interner.Intern($"v{half}");
         bool onAfter = interner.UsesClrKeys;
+        int[] later = Enumerable.Range(half + 1, half).Select(i => interner.Intern($"v{i}")).ToArray();
         int repeated = interner.Intern("v7");
 
         Assert.Multiple(() =>
         {
-            Assert.That(onBefore, Is.True);
+            Assert.That(onAtHalf, Is.True);
             Assert.That(onAfter, Is.False);
-            Assert.That(first.Append(last), Is.EqualTo(Enumerable.Range(1, probe)));
+            Assert.That(first.Append(next).Concat(later), Is.EqualTo(Enumerable.Range(1, (2 * half) + 1)));
             Assert.That(repeated, Is.EqualTo(8), "the byte interner still finds a value that the CLR lookup knew");
         });
     }
@@ -263,6 +268,30 @@ public class InternerTests
         });
     }
 
+    /// <summary>
+    /// After a probe of repeating values the CLR lookup stays on. A value that the leaf refuses then leaves no key behind,
+    /// a repeated value is found, and a new value takes the next key.
+    /// </summary>
+    [Test]
+    public void ClrKeyedByteInterner_RefusedValueAfterTheProbe_LeavesNoClrKey()
+    {
+        using var interner = new ClrKeyedByteInterner<string>(new RefusingLeaf("bad"), nullable: false);
+        for (int i = 0; i < ClrKeyedByteInterner<string>.ProbeValues; i++)
+        {
+            interner.Intern("good");
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(interner.UsesClrKeys, Is.True);
+            Assert.Throws<ArgumentException>(() => interner.Intern("bad"));
+            Assert.Throws<ArgumentException>(() => interner.Intern("bad"));
+            Assert.That(interner.Intern("good"), Is.EqualTo(1));
+            Assert.That(interner.Intern("other"), Is.EqualTo(2));
+            Assert.That(interner.Intern("other"), Is.EqualTo(2));
+        });
+    }
+
     [Test]
     public void ClrKeyedByteInterner_NullString_ThrowsAsTheStringWriteDoes()
     {
@@ -295,23 +324,24 @@ public class InternerTests
 
     /// <summary>When the first values do not repeat, the probe turns the CLR lookup off. The keys stay correct after it.</summary>
     [Test]
-    public void ClrKeyedFixedInterner_DistinctValues_TurnsTheClrLookupOffAfterTheProbe()
+    public void ClrKeyedFixedInterner_DistinctValues_TurnsTheClrLookupOffAtTheMissThatPassesHalfOfTheProbe()
     {
         using var interner = new ClrKeyedFixedInterner<Guid, UInt128>((FixedLeafWriter<Guid, UInt128>)Leaf<Guid>("UUID"), nullable: false);
-        int probe = ClrKeyedFixedInterner<Guid, UInt128>.ProbeValues;
-        Guid[] values = Enumerable.Range(1, probe).Select(i => new Guid(i, 0, 0, new byte[8])).ToArray();
+        int half = ClrKeyedFixedInterner<Guid, UInt128>.ProbeValues / 2;
+        Guid[] values = Enumerable.Range(1, (2 * half) + 1).Select(i => new Guid(i, 0, 0, new byte[8])).ToArray();
 
-        int[] first = values.Take(probe - 1).Select(interner.Intern).ToArray();
-        bool onBefore = interner.UsesClrKeys;
-        int last = interner.Intern(values[probe - 1]);
+        int[] first = values.Take(half).Select(interner.Intern).ToArray();
+        bool onAtHalf = interner.UsesClrKeys;
+        int next = interner.Intern(values[half]);
         bool onAfter = interner.UsesClrKeys;
+        int[] later = values.Skip(half + 1).Select(interner.Intern).ToArray();
         int repeated = interner.Intern(values[7]);
 
         Assert.Multiple(() =>
         {
-            Assert.That(onBefore, Is.True);
+            Assert.That(onAtHalf, Is.True);
             Assert.That(onAfter, Is.False);
-            Assert.That(first.Append(last), Is.EqualTo(Enumerable.Range(1, probe)));
+            Assert.That(first.Append(next).Concat(later), Is.EqualTo(Enumerable.Range(1, (2 * half) + 1)));
             Assert.That(repeated, Is.EqualTo(8), "the canonical interner still finds a value that the CLR lookup knew");
         });
     }
@@ -339,6 +369,30 @@ public class InternerTests
             Assert.That(interner.Intern(1.25m), Is.EqualTo(1));
             Assert.That(interner.Intern(1.250m), Is.EqualTo(1), "equal decimals of other scales share an entry");
             Assert.That(interner.UsesClrKeys, Is.True);
+        });
+    }
+
+    /// <summary>
+    /// After a probe of repeating values the CLR lookup stays on. A value out of the range of the leaf then leaves no key
+    /// behind, a repeated value is found, and a new value takes the next key.
+    /// </summary>
+    [Test]
+    public void ClrKeyedFixedInterner_RefusedValueAfterTheProbe_LeavesNoClrKey()
+    {
+        using var interner = new ClrKeyedFixedInterner<decimal, int>((FixedLeafWriter<decimal, int>)Leaf<decimal>("Decimal(3, 2)"), nullable: false);
+        for (int i = 0; i < ClrKeyedFixedInterner<decimal, int>.ProbeValues; i++)
+        {
+            interner.Intern(1.25m);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(interner.UsesClrKeys, Is.True);
+            Assert.Throws<OverflowException>(() => interner.Intern(100m));
+            Assert.Throws<OverflowException>(() => interner.Intern(100m));
+            Assert.That(interner.Intern(1.25m), Is.EqualTo(1));
+            Assert.That(interner.Intern(2.5m), Is.EqualTo(2));
+            Assert.That(interner.Intern(2.50m), Is.EqualTo(2), "equal decimals of other scales share an entry");
         });
     }
 
