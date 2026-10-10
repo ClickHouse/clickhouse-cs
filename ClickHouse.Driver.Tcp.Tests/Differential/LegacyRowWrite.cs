@@ -10,11 +10,11 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
 /// <summary>
-/// The row inserts (<c>InsertRowsAsync&lt;T&gt;</c> and <c>InsertRowsAsync(object[])</c>) as they were before they moved
-/// onto the converter derivation, the reference of the differential tests (SPEC invariant 11). The POCO write plan is
-/// the internal <see cref="PocoWritePlan{T}.BuildLegacy"/> (more than 100 lines: <see cref="LegacyPocoColumnBuilderFactory"/>
-/// and <see cref="LegacyPocoWriteConversion"/>). The choice of the write type of an untyped column is copied here. In
-/// both, the insert plan wrote the gathered columns through their codecs.
+/// The reference row inserts of the differential tests (SPEC invariant 11): the POCO write plan and the untyped write
+/// type choice over the codecs' preferred write types, with the gathered columns written through their codecs. The POCO
+/// write plan is the internal <see cref="PocoWritePlan{T}.BuildLegacy"/> (more than 100 lines:
+/// <see cref="LegacyPocoColumnBuilderFactory"/> and <see cref="LegacyPocoWriteConversion"/>); the untyped write type
+/// choice is copied here.
 /// </summary>
 internal static class LegacyRowWrite
 {

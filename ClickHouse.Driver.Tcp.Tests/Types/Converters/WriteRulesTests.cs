@@ -76,8 +76,8 @@ public class WriteRulesTests
     };
 
     /// <summary>
-    /// The writes that the old row inserts accepted and failed, and that write bytes now (D7): a Variant value whose CLR
-    /// type is the canonical type of no alternative goes to the alternative that is written from it.
+    /// The writes that the old row inserts accepted and then failed, and that the converter layer writes (D7): a Variant
+    /// value whose CLR type is the canonical type of no alternative goes to the alternative that is written from it.
     /// </summary>
     internal static readonly (string ColumnType, Type Source, string Reason)[] OutcomeChanges =
     {
@@ -289,6 +289,32 @@ public class WriteRulesTests
         };
 
         Assert.That(reinterpreted, Is.EqualTo(expected), "Listed:" + Environment.NewLine + string.Join(Environment.NewLine, reinterpreted.Select(r => $"\"{r}\",")));
+    }
+
+    /// <summary>
+    /// An untyped column whose first value is written through a cast takes later values of the type that it is written
+    /// as, also of the source type: the untyped insert of today writes them as the old one did.
+    /// </summary>
+    [TestCase("IPv4")]
+    [TestCase("Array(Int32)")]
+    [TestCase("String")]
+    public void UntypedWrite_FirstValueWrittenThroughACast_TakesLaterValuesOfTheTypeThatItIsWrittenAs(string columnType)
+    {
+        object[] values = columnType switch
+        {
+            "IPv4" => new object[] { new Address(1), IPAddress.Parse("1.2.3.4"), new Address(3) },
+            "Array(Int32)" => new object[] { new[] { 3_000_000_000u }, new[] { -1, 2 }, new[] { 7u } },
+            _ => new object[] { new sbyte[] { -1 }, new byte[] { 0x41, 0x42 }, new sbyte[] { 1 } },
+        };
+
+        Outcome old = WriteOutcome(ReferenceArms.UntypedWrite, typeof(object), values, columnType, start: 0);
+        Outcome now = WriteOutcome(ClientArms.UntypedWrite, typeof(object), values, columnType, start: 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(now.Kind, Is.EqualTo(OutcomeKind.Bytes), now.ToString());
+            Assert.That(Differential.Outcome.Difference(old, now), Is.Null, $"today {now}; old {old}");
+        });
     }
 
     /// <summary>The reinterpretation keeps the bits of each element, as the old POCO write plan wrote them.</summary>

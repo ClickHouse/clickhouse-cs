@@ -43,8 +43,9 @@ internal sealed class PocoWritePlan<T>
         => Build(descriptor, schema, (column, codec, member) => PocoColumnBuilderFactory.Create<T>(column, codec, member, schema.Codecs.Converters, schema.Context, forcedTier));
 
     /// <summary>
-    /// Builds the same plan with the builders of the write path before the converter derivation
-    /// (<see cref="LegacyPocoColumnBuilderFactory"/>): the reference of the differential tests. Only the tests call it.
+    /// Builds the same plan with the builders of the reference path (<see cref="LegacyPocoColumnBuilderFactory"/>), which
+    /// convert each property value in the gather and write the columns through their codecs. Only the differential tests
+    /// call it.
     /// </summary>
     /// <param name="descriptor">The POCO type's mapping.</param>
     /// <param name="schema">The server's sample block, naming and typing the target columns.</param>
