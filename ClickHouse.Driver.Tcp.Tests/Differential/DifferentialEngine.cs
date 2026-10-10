@@ -86,9 +86,8 @@ internal sealed class CaseReport
 /// <c>[RowCount / 2, RowCount)</c>. The tail of a case of one row is row 1 of a column that has a row before the
 /// case's row: for an <c>Array</c> type, the row's elements twice; for other types, a copy. So every read and every
 /// write also runs with a start above zero, after a preceding row. The first candidate that covers a facet is its
-/// baseline. Every other candidate must give the baseline's outcome for both ranges, or every candidate must give the
-/// outcome that is declared for the facet. Each arm must also read the same values for the tail alone as for the same
-/// rows of the case in the full read.
+/// baseline. Every other candidate must give the baseline's outcome for both ranges. Each arm must also read the same
+/// values for the tail alone as for the same rows of the case in the full read.
 /// </para>
 /// <para>
 /// An outcome that the source test of the case states (<see cref="DifferentialCase.Stated"/>) must be the outcome of
@@ -436,25 +435,7 @@ internal sealed class DifferentialEngine
             CheckInvariants(facet, arm, outcomes);
         }
 
-        DeclaredOutcome declared;
-        try
-        {
-            declared = registry.DeclaredFor(facet);
-        }
-        catch (InvalidOperationException e)
-        {
-            mismatches.Add(e.Message);
-            return;
-        }
-
-        if (declared is null)
-        {
-            CompareWithBaseline(facet, result.Candidates);
-        }
-        else
-        {
-            CompareWithDeclared(facet, declared, result);
-        }
+        CompareWithBaseline(facet, result.Candidates);
     }
 
     private void CheckInvariants(Facet facet, Arm arm, RangeOutcomes outcomes)
@@ -515,29 +496,6 @@ internal sealed class DifferentialEngine
                 if (difference is not null)
                 {
                     mismatches.Add($"{facet}{Describe(facet, rows)}: {arm.Name} gives {actual}; {baselineArm.Name} gives {expected}: {difference}.");
-                }
-            }
-        }
-    }
-
-    private void CompareWithDeclared(Facet facet, DeclaredOutcome declared, FacetResult result)
-    {
-        Expectation expected = declared.ExpectationFor(facet);
-        if (result.Candidates.Count == 0)
-        {
-            mismatches.Add($"{facet}: the declared outcome '{declared.Name}' selects this facet, but no candidate arm covers it.");
-            return;
-        }
-
-        foreach ((Arm arm, RangeOutcomes outcomes) in result.Candidates)
-        {
-            foreach (Rows rows in new[] { Rows.All, Rows.Tail })
-            {
-                Outcome actual = outcomes.For(rows);
-                string difference = actual is null ? null : expected.Verify(actual, rows, tailCaseRow);
-                if (difference is not null)
-                {
-                    mismatches.Add($"{facet}{Describe(facet, rows)}: {arm.Name} gives {actual}; the declared outcome '{declared.Name}' expects {expected}: {difference}.");
                 }
             }
         }

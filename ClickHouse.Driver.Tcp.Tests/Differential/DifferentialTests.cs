@@ -13,9 +13,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 /// <summary>
 /// The differential tests: for every case of <see cref="DifferentialCases"/>, each candidate arm of
 /// <see cref="DifferentialRegistry.Current"/> must give the outcome of the client's entry point of its tier (the
-/// baseline), or the outcome that is declared for the facet. The converter arms run their trees through
-/// <c>Fill</c> and through <c>Emit</c>, so the two paths must give the same outcomes. No server is necessary. See
-/// <see cref="DifferentialEngine"/>.
+/// baseline). The POCO reads run their trees through <c>Emit</c> (the baseline) and through <c>Fill</c>, so the two
+/// paths must give the same outcomes. No server is necessary. See <see cref="DifferentialEngine"/>.
 /// </summary>
 [TestFixture]
 public class DifferentialTests
@@ -53,7 +52,7 @@ public class DifferentialTests
     };
 
     [TestCaseSource(typeof(DifferentialCases), nameof(DifferentialCases.All))]
-    public void Run_Case_EveryCandidateGivesTheBaselineOutcomeOrTheDeclaredOne(DifferentialCase testCase)
+    public void Run_Case_EveryCandidateGivesTheBaselineOutcome(DifferentialCase testCase)
     {
         CaseReport report = DifferentialEngine.ForCurrentRegistry(testCase);
 
@@ -70,7 +69,7 @@ public class DifferentialTests
             Assert.That(bySource[CaseSource.InsertRoundTrip].Count(), Is.EqualTo(DifferentialCases.InsertRoundTripCount), "InsertRoundTripCase.CasesFor(TcpFeature.All)");
             Assert.That(bySource[CaseSource.CompositeLiftMatrix].Count(), Is.EqualTo(DifferentialCases.CompositeLiftMatrixCount), "CompositeLiftMatrixTests.Cases()");
             Assert.That(bySource[CaseSource.ColumnReadProjection].Count(), Is.EqualTo(DifferentialCases.ColumnReadProjectionCount), "the read targets table of DifferentialCases");
-            Assert.That(bySource[CaseSource.ColumnReadScenario].Count(), Is.EqualTo(DifferentialCases.ColumnReadScenarioCount), "the scenarios of ColumnReadProjectionTests");
+            Assert.That(bySource[CaseSource.ColumnReadScenario].Count(), Is.EqualTo(DifferentialCases.ColumnReadScenarioCount), "the scenarios of DifferentialCases");
             Assert.That(bySource.Sum(g => g.Count()), Is.EqualTo(DifferentialCases.All().Count()), "every case has one of these sources");
         });
     }

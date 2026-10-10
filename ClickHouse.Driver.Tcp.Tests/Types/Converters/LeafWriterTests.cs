@@ -11,10 +11,10 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// The write tests of the leaves that the differential tests (<see cref="LeafConverterRegistration"/>) do not run: the
-/// pairs that no differential case reaches, compared here with the current codec write (a whole column and a slice
-/// that starts after row 0); segments against one span; marked positions against the current <c>Nullable</c> write;
-/// refused values (type, message and parameter name); <c>FixedString</c> from text, which no codec writes.
+/// The write tests of the leaves that the differential tests (<see cref="LeafConverterRegistrationTests"/>) do not
+/// reach: the pairs that no differential case reaches, compared here with the current codec write (a whole column and a
+/// slice that starts after row 0); segments against one span; marked positions against the current <c>Nullable</c>
+/// write; refused values (type, message and parameter name); <c>FixedString</c> from text, which no codec writes.
 /// </summary>
 [TestFixture]
 public class LeafWriterTests
