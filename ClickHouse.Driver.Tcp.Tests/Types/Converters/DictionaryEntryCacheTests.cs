@@ -119,11 +119,16 @@ public class DictionaryEntryCacheTests
         const int threads = 8;
         using var start = new Barrier(threads);
 
-        DictionaryEntries<string>[] entries = await Task.WhenAll(Enumerable.Range(0, threads).Select(_ => Task.Run(() =>
-        {
-            start.SignalAndWait();
-            return cache.For(lowCardinality);
-        })));
+        // Each worker has its own thread: the barrier holds all of them, and the thread pool adds threads slowly.
+        DictionaryEntries<string>[] entries = await Task.WhenAll(Enumerable.Range(0, threads).Select(_ => Task.Factory.StartNew(
+            () =>
+            {
+                start.SignalAndWait();
+                return cache.For(lowCardinality);
+            },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default)));
 
         Assert.That(entries.Distinct().Count(), Is.EqualTo(1));
     }
