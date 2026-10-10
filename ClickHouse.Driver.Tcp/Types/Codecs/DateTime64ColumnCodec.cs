@@ -66,8 +66,9 @@ internal sealed class DateTime64ColumnCodec : IColumnCodec
         => DateTime64Column.ReadAsync(reader, columnName, columnType, scale, timeZone, rowCount, cancellationToken);
 
     /// <inheritdoc/>
-    // The column that a query of the type reads.
-    public bool CanWrite(IColumn column) => column is DateTime64Column;
+    // The column that a query of the type reads, at the same scale: a stored count is a count at the scale of the column
+    // that holds it. The timezone does not change a count, which is an instant.
+    public bool CanWrite(IColumn column) => column is DateTime64Column stored && stored.Scale == scale;
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
