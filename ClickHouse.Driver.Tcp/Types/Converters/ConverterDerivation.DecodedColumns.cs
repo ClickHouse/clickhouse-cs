@@ -1,50 +1,101 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Types.Converters;
 
+/// <summary>The kind of one part of a column that a query read as another type, as the insert writes it.</summary>
+internal enum DecodedPart
+{
+    /// <summary>The values keep their meaning: the codec writes the part from its storage, else the converter tree of its CLR type.</summary>
+    Kept,
+
+    /// <summary>
+    /// A <c>DateTime64</c>, <c>Time64</c> or <c>Enum</c> whose values mean other values, also in <c>Nullable</c>,
+    /// <c>LowCardinality</c> and <c>SimpleAggregateFunction</c>: converted through the CLR type of their meaning.
+    /// </summary>
+    Converted,
+
+    /// <summary>A <c>Tuple</c>: each element is a part.</summary>
+    Tuple,
+
+    /// <summary>An <c>Array</c>: the stored offsets, then the elements as a part.</summary>
+    Array,
+
+    /// <summary>A <c>Map</c>: the stored offsets, then the keys and the values as parts.</summary>
+    Map,
+
+    /// <summary>A <c>Nullable</c> of a composite on either side: the null map, then the composite as a part.</summary>
+    Nullable,
+
+    /// <summary>A type that no part of the write converts (a <c>Variant</c>, a <c>Nested</c>); the reason says why.</summary>
+    Refused,
+}
+
+/// <summary>How the insert writes one part of a column that a query read as another type.</summary>
+internal readonly struct DecodedPartPlan
+{
+    /// <summary>Initializes a plan.</summary>
+    /// <param name="kind">The kind of the part.</param>
+    /// <param name="sourceParts">The source types of the parts in it.</param>
+    /// <param name="targetParts">The target types of the parts in it.</param>
+    /// <param name="sourceHoldsNull">For <see cref="DecodedPart.Nullable"/>: whether the source is <c>Nullable</c>.</param>
+    /// <param name="targetHoldsNull">For <see cref="DecodedPart.Nullable"/>: whether the target is <c>Nullable</c>.</param>
+    /// <param name="refusal">For <see cref="DecodedPart.Refused"/>: why no part converts the values.</param>
+    public DecodedPartPlan(DecodedPart kind, string[] sourceParts = null, string[] targetParts = null, bool sourceHoldsNull = false, bool targetHoldsNull = false, string refusal = null)
+    {
+        Kind = kind;
+        SourceParts = sourceParts ?? System.Array.Empty<string>();
+        TargetParts = targetParts ?? System.Array.Empty<string>();
+        SourceHoldsNull = sourceHoldsNull;
+        TargetHoldsNull = targetHoldsNull;
+        Refusal = refusal;
+    }
+
+    /// <summary>The kind of the part.</summary>
+    public DecodedPart Kind { get; }
+
+    /// <summary>
+    /// The source types of the parts in it: the elements of a <c>Tuple</c>, the element of an <c>Array</c>, the key and the
+    /// value of a <c>Map</c>, the type in a <c>Nullable</c> (or the type itself when the source is not <c>Nullable</c>).
+    /// </summary>
+    public string[] SourceParts { get; }
+
+    /// <summary>The target types of the parts in it, in the order of <see cref="SourceParts"/>.</summary>
+    public string[] TargetParts { get; }
+
+    /// <summary>For <see cref="DecodedPart.Nullable"/>: whether the source is <c>Nullable</c>.</summary>
+    public bool SourceHoldsNull { get; }
+
+    /// <summary>For <see cref="DecodedPart.Nullable"/>: whether the target is <c>Nullable</c>.</summary>
+    public bool TargetHoldsNull { get; }
+
+    /// <summary>For <see cref="DecodedPart.Refused"/>: why no part converts the values.</summary>
+    public string Refusal { get; }
+}
+
 /// <summary>
 /// The write of a column that a query read as one type into a column of another type, where the canonical values of the
 /// two types mean other values: the count of a <c>DateTime64</c> or a <c>Time64</c> is a count at the scale of its type,
-/// and the ordinal of an <c>Enum</c> means the label that its type declares for it. Such a column is converted through
-/// the meaning of its values: a time as <see cref="DateTimeOffset"/>, a duration as <see cref="TimeSpan"/>, a label as
-/// <see cref="string"/>.
+/// and the ordinal of an <c>Enum</c> means the label that its type declares for it. The insert converts only the parts
+/// whose values mean other values, through the meaning of their values: a time as <see cref="DateTimeOffset"/>, a
+/// duration as <see cref="TimeSpan"/>, a label as <see cref="string"/>. It writes every other part from its storage, so
+/// their bytes do not change.
 /// </summary>
 internal sealed partial class ConverterDerivation
 {
     /// <summary>
-    /// The conversion of a column that a query read as <paramref name="source"/> into a column of
-    /// <paramref name="target"/>: a reader of the source type and a writer of the target type, over the CLR type that holds
-    /// the meaning of the values.
+    /// Whether <paramref name="column"/> is the column that a query of <paramref name="source"/> reads, and its canonical
+    /// values mean other values in <paramref name="target"/>.
     /// </summary>
     /// <param name="column">The column to write.</param>
     /// <param name="source">The type that the column says it holds.</param>
     /// <param name="target">The type of the target column.</param>
     /// <param name="context">The resolution context of the target.</param>
-    /// <param name="reader">The reader of the source type, when the conversion is possible.</param>
-    /// <param name="writer">The writer of the target type, over the CLR type of the reader.</param>
-    /// <param name="refusal">Why the column cannot be converted, when the conversion applies and is not possible.</param>
-    /// <returns>
-    /// Whether the conversion applies: the column is the column that a query of <paramref name="source"/> reads, and its
-    /// canonical values mean other values in <paramref name="target"/>. When it applies, either the reader and the writer
-    /// or the refusal is set.
-    /// </returns>
-    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    internal bool TryDeriveDecodedConversion(
-        IColumn column,
-        string source,
-        string target,
-        in ResolveContext context,
-        out ColumnReader reader,
-        out ColumnWriter writer,
-        out string refusal)
+    /// <returns>Whether the insert writes the column part by part (<see cref="PlanDecodedPart"/>).</returns>
+    internal bool IsReadColumnOfAnotherMeaning(IColumn column, string source, string target, in ResolveContext context)
     {
-        reader = null;
-        writer = null;
-        refusal = null;
         if (!TryParse(source, out TypeNode sourceNode) || !TryParse(target, out TypeNode targetNode))
         {
             return false;
@@ -62,16 +113,84 @@ internal sealed partial class ConverterDerivation
             return false;
         }
 
-        if (!sourceCodec.CanWrite(column) || !ChangesMeaning(sourceNode, targetNode))
+        return sourceCodec.CanWrite(column) && ChangesMeaning(sourceNode, targetNode);
+    }
+
+    /// <summary>How the insert writes one part of a column that a query read as <paramref name="source"/>.</summary>
+    /// <param name="source">The source type of the part.</param>
+    /// <param name="target">The target type of the part.</param>
+    /// <returns>The plan of the part.</returns>
+    internal DecodedPartPlan PlanDecodedPart(string source, string target)
+    {
+        TypeNode sourceNode = WithoutAggregateFunction(TypeParser.Parse(source));
+        TypeNode targetNode = WithoutAggregateFunction(TypeParser.Parse(target));
+        if (!ChangesMeaning(sourceNode, targetNode))
         {
-            return false;
+            return new DecodedPartPlan(DecodedPart.Kept);
         }
 
-        Type meaning = MeaningType(sourceNode, in context, out string reason);
+        if (MeaningFamily(CanonicalName(Unwrapped(sourceNode))) is not null)
+        {
+            return new DecodedPartPlan(DecodedPart.Converted);
+        }
+
+        bool sourceNullable = CanonicalName(sourceNode) == "Nullable" && sourceNode.Arguments.Count == 1;
+        bool targetNullable = CanonicalName(targetNode) == "Nullable" && targetNode.Arguments.Count == 1;
+        if (sourceNullable || targetNullable)
+        {
+            return new DecodedPartPlan(
+                DecodedPart.Nullable,
+                new[] { (sourceNullable ? sourceNode.Arguments[0] : sourceNode).ToString() },
+                new[] { (targetNullable ? targetNode.Arguments[0] : targetNode).ToString() },
+                sourceNullable,
+                targetNullable);
+        }
+
+        // The meaning changes in the composite, so both types have its name.
+        switch (CanonicalName(sourceNode))
+        {
+            case "Array":
+                return new DecodedPartPlan(DecodedPart.Array, new[] { sourceNode.Arguments[0].ToString() }, new[] { targetNode.Arguments[0].ToString() });
+
+            case "Map":
+                return new DecodedPartPlan(
+                    DecodedPart.Map,
+                    new[] { sourceNode.Arguments[0].ToString(), sourceNode.Arguments[1].ToString() },
+                    new[] { targetNode.Arguments[0].ToString(), targetNode.Arguments[1].ToString() });
+
+            case "Tuple":
+                return new DecodedPartPlan(
+                    DecodedPart.Tuple,
+                    System.Array.ConvertAll(NamedElementParser.Split(sourceNode), element => element.Type.ToString()),
+                    System.Array.ConvertAll(NamedElementParser.Split(targetNode), element => element.Type.ToString()));
+
+            default:
+                return new DecodedPartPlan(
+                    DecodedPart.Refused,
+                    refusal: $"The values of {sourceNode} are converted to another type only through Nullable, LowCardinality, Array, Map and Tuple, so a column read as {sourceNode} is written only into a column whose DateTime64, Time64 and Enum types are the same.");
+        }
+    }
+
+    /// <summary>
+    /// The conversion of a part of kind <see cref="DecodedPart.Converted"/>: a reader of the source type and a writer of the
+    /// target type, over the CLR type that holds the meaning of the values.
+    /// </summary>
+    /// <param name="source">The source type of the part.</param>
+    /// <param name="target">The target type of the part.</param>
+    /// <param name="context">The resolution context of the target.</param>
+    /// <param name="reader">The reader of the source type, when the conversion is possible.</param>
+    /// <param name="writer">The writer of the target type, over the CLR type of the reader.</param>
+    /// <param name="refusal">Why the part cannot be converted, when it cannot.</param>
+    /// <returns>Whether the conversion is possible.</returns>
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    internal bool TryDeriveMeaningConversion(string source, string target, in ResolveContext context, out ColumnReader reader, out ColumnWriter writer, out string refusal)
+    {
+        reader = null;
+        writer = null;
+        Type meaning = MeaningType(TypeParser.Parse(source), out refusal);
         if (meaning is null)
         {
-            refusal = reason;
-            return true;
+            return false;
         }
 
         Derivation read = Derive(source, in context, meaning, ConversionDirection.Read);
@@ -79,13 +198,19 @@ internal sealed partial class ConverterDerivation
         if (!write.Succeeded)
         {
             refusal = write.Refusal;
-            return true;
+            return false;
         }
 
         reader = (ColumnReader)read.Converter;
         writer = (ColumnWriter)write.Converter;
         return true;
     }
+
+    /// <summary>The codec of the target type of a part.</summary>
+    /// <param name="type">The type of the part.</param>
+    /// <param name="context">The resolution context of the target.</param>
+    /// <returns>The codec.</returns>
+    internal IColumnCodec ResolvePart(string type, in ResolveContext context) => registry.Resolve(type, in context);
 
     /// <summary>
     /// Whether the canonical values of <paramref name="source"/> mean other values in <paramref name="target"/>: at the same
@@ -203,11 +328,11 @@ internal sealed partial class ConverterDerivation
         return false;
     }
 
-    // The CLR type that holds the meaning of the values of a type: a time, a duration, a label, and the canonical type of
-    // every other leaf, through Nullable, LowCardinality, SimpleAggregateFunction, Array, Map and Tuple. Null, with the
-    // reason, when no CLR type holds the values without a loss.
+    // The CLR type that holds the meaning of the values of a part of kind Converted: a time, a duration or a label, through
+    // Nullable, LowCardinality and SimpleAggregateFunction. Null, with the reason, when no CLR type holds the values
+    // without a loss.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    private Type MeaningType(TypeNode node, in ResolveContext context, out string reason)
+    private Type MeaningType(TypeNode node, out string reason)
     {
         reason = null;
         string name = CanonicalName(node);
@@ -233,96 +358,30 @@ internal sealed partial class ConverterDerivation
 
             case "Nullable" when node.Arguments.Count == 1:
             {
-                Type inner = MeaningType(node.Arguments[0], in context, out reason);
+                Type inner = MeaningType(node.Arguments[0], out reason);
                 return inner is null ? null : inner.IsValueType ? typeof(Nullable<>).MakeGenericType(inner) : inner;
             }
 
             case "LowCardinality" when node.Arguments.Count == 1:
-                return MeaningType(node.Arguments[0], in context, out reason);
+                return MeaningType(node.Arguments[0], out reason);
 
             case "SimpleAggregateFunction" when node.Arguments.Count == 2:
-                return MeaningType(node.Arguments[1], in context, out reason);
-
-            case "Array" when node.Arguments.Count == 1:
-                return MeaningType(node.Arguments[0], in context, out reason)?.MakeArrayType();
-
-            case "Map" when node.Arguments.Count == 2:
-            {
-                Type key = MeaningType(node.Arguments[0], in context, out reason);
-                Type value = key is null ? null : MeaningType(node.Arguments[1], in context, out reason);
-                return value is null ? null : typeof(KeyValuePair<,>).MakeGenericType(key, value).MakeArrayType();
-            }
-
-            case "Tuple":
-            {
-                (string Name, TypeNode Type)[] elements = NamedElementParser.Split(node);
-                if (elements.Length == 0)
-                {
-                    return typeof(ValueTuple);
-                }
-
-                if (elements.Length >= ValueTupleDefinitions.Length)
-                {
-                    reason = $"{node} has more elements than a ValueTuple holds.";
-                    return null;
-                }
-
-                var types = new Type[elements.Length];
-                for (int i = 0; i < elements.Length; i++)
-                {
-                    types[i] = MeaningType(elements[i].Type, in context, out reason);
-                    if (types[i] is null)
-                    {
-                        return null;
-                    }
-                }
-
-                return ValueTupleDefinitions[elements.Length].MakeGenericType(types);
-            }
+                return MeaningType(node.Arguments[1], out reason);
 
             default:
-                if (HasMeaningLeaf(node))
-                {
-                    reason = $"The values of {node} are converted to another type only through Nullable, LowCardinality, Array, Map and Tuple, so a column read as {node} is written only into a column whose DateTime64, Time64 and Enum types are the same.";
-                    return null;
-                }
-
-                return registry.ResolveNode(node, in context).ElementType;
+                throw new InvalidOperationException($"{node} is not a DateTime64, a Time64 or an Enum in Nullable, LowCardinality or SimpleAggregateFunction.");
         }
     }
 
-    // Whether a DateTime64, a Time64 or an Enum is in the type.
-    private bool HasMeaningLeaf(TypeNode node)
+    // A SimpleAggregateFunction(f, T) column is a T column.
+    private TypeNode WithoutAggregateFunction(TypeNode node)
     {
-        string name = CanonicalName(node);
-        if (MeaningFamily(name) is not null)
+        while (CanonicalName(node) == "SimpleAggregateFunction" && node.Arguments.Count == 2)
         {
-            return true;
+            node = node.Arguments[1];
         }
 
-        if (name is "Tuple" or "Nested")
-        {
-            foreach ((string _, TypeNode element) in NamedElementParser.Split(node))
-            {
-                if (HasMeaningLeaf(element))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        foreach (TypeNode argument in node.Arguments)
-        {
-            // An argument that is not a type (a scale, a label, a function name) has no registered name.
-            if (registry.TryCanonicalName(argument.Name, out _) && HasMeaningLeaf(argument))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return node;
     }
 
     private TypeNode Unwrapped(TypeNode node)
