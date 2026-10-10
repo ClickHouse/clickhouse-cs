@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
+using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Poco;
 
@@ -23,13 +24,12 @@ internal static class PocoReadErrors
     /// Reports a property type the column cannot be read as.
     /// </summary>
     /// <param name="column">The column.</param>
-    /// <param name="codec">The column's codec, for the types it can be read as.</param>
+    /// <param name="readable">The CLR types to suggest (<see cref="ConverterDerivation.SuggestedTypes"/>).</param>
     /// <param name="member">The property that cannot be filled.</param>
     /// <param name="pocoType">The POCO type.</param>
     /// <returns>The exception to throw.</returns>
-    public static Exception NotReadableAs(IColumn column, IColumnCodec codec, PocoMember member, Type pocoType)
+    public static Exception NotReadableAs(IColumn column, IReadOnlyList<Type> readable, PocoMember member, Type pocoType)
     {
-        IReadOnlyList<Type> readable = codec.ReadableElementTypes;
         var offered = new string[readable.Count];
         for (int i = 0; i < readable.Count; i++)
         {
