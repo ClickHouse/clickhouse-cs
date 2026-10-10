@@ -57,10 +57,11 @@ internal sealed class ColumnReadProjections
         return views is null ? view : views.Add(column, (DerivedColumn<T>)view);
     }
 
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     private InvalidCastException NoSuchReading<T>(IColumn column, in ResolveContext context)
     {
-        // Only on the failure path, so re-resolving the codec to name its readings costs nothing that matters.
-        IReadOnlyList<Type> readable = registry.Resolve(column.TypeName, in context).ReadableElementTypes;
+        // Only on the failure path, so finding the types to suggest costs nothing that matters.
+        IReadOnlyList<Type> readable = registry.Converters.SuggestedTypes(column.TypeName, in context, ConversionDirection.Read);
         return new InvalidCastException(
             $"Column '{column.Name}' has type '{column.TypeName}', whose values cannot be read as {typeof(T)}. It reads as: {string.Join(", ", readable)}.");
     }
