@@ -329,6 +329,24 @@ public class DecodedColumnConversionTests
         => AssertWritesAsync(source, target, rows, sourceBytes, expected, expectedFromRow1);
 
     /// <summary>
+    /// A value that an enclosing NULL hides is not read, converted or checked: each part of another type writes the
+    /// placeholder of its target there, and a part of the same type keeps its stored bytes. The hidden values here are a
+    /// <c>Decimal</c> out of the range of the target, an enum ordinal that the target does not declare and one that the
+    /// source does not declare, a <c>DateTime64</c> finer than the target scale, and strings of another width than the
+    /// target <c>FixedString</c>. Also a <c>Nullable</c> of a leaf, and the elements of an <c>Array</c> and a <c>Map</c>
+    /// under a NULL row and in an <c>Array(Nullable(Tuple))</c>. All rows, and the rows from row 1.
+    /// </summary>
+    [TestCaseSource(nameof(HiddenValueCases))]
+    public Task Write_DecodedColumnWithAHiddenValue_WritesThePlaceholderOfTheTarget(
+        string source,
+        string target,
+        int rows,
+        string sourceBytes,
+        string expected,
+        string expectedFromRow1)
+        => AssertWritesAsync(source, target, rows, sourceBytes, expected, expectedFromRow1, storageOfTheTarget: null);
+
+    /// <summary>
     /// A <c>FixedString</c> takes the bytes of a <c>String</c> that a query read only when each value has its width, as
     /// for any <c>byte[]</c>. A column of <c>string</c> values that a caller built goes by the text rules, which pad a
     /// shorter value with zero bytes.
@@ -432,6 +450,80 @@ public class DecodedColumnConversionTests
             Assert.That(write, Is.Null);
             Assert.That(refusal, Is.EqualTo(reason));
         });
+    }
+
+    public static IEnumerable<TestCaseData> HiddenValueCases()
+    {
+        yield return Bytes(
+            "Nullable(Decimal(18, 2))",
+            "Nullable(Decimal(9, 2))",
+            3,
+            "010000141A99BE1C0000007B000000000000003EFEFFFFFFFFFFFF",
+            "010000000000007B0000003EFEFFFF",
+            "00007B0000003EFEFFFF");
+        yield return Bytes(
+            "Nullable(Tuple(DateTime64(3, 'UTC'), Decimal(18, 2)))",
+            "Nullable(Tuple(DateTime64(6, 'UTC'), Decimal(9, 2)))",
+            3,
+            "010000010000000000000002000000000000000300000000000000141A99BE1C0000007B000000000000003EFEFFFFFFFFFFFF",
+            "0100000000000000000000D007000000000000B80B000000000000000000007B0000003EFEFFFF",
+            "0000D007000000000000B80B0000000000007B0000003EFEFFFF");
+        yield return Bytes(
+            "Nullable(Tuple(Enum8('a' = 1, 'b' = 2, 'c' = 3), String))",
+            "Nullable(Tuple(Enum8('a' = 1, 'b' = 2), String))",
+            3,
+            "01000003010201FF0002C328",
+            "01000001010201FF0002C328",
+            "000001020002C328");
+        yield return Bytes(
+            "Nullable(Tuple(Enum8('a' = 1, 'b' = 2), String))",
+            "Nullable(Tuple(Enum8('b' = 1, 'a' = 2), String))",
+            3,
+            "01000007010201FF0002C328",
+            "01000001020101FF0002C328",
+            "000002010002C328");
+        yield return Bytes(
+            "Nullable(Tuple(DateTime64(6, 'UTC'), String))",
+            "Nullable(Tuple(DateTime64(3, 'UTC'), String))",
+            3,
+            "01000041420F0000000000D007000000000000B80B00000000000001FF0002C328",
+            "01000000000000000000000200000000000000030000000000000001FF0002C328",
+            "0000020000000000000003000000000000000002C328");
+        yield return Bytes(
+            "Nullable(Tuple(String, DateTime64(3, 'UTC')))",
+            "Nullable(Tuple(FixedString(2), DateTime64(6, 'UTC')))",
+            3,
+            "0100000361626302C328026162010000000000000002000000000000000300000000000000",
+            "0100000000C32861620000000000000000D007000000000000B80B000000000000",
+            "0000C3286162D007000000000000B80B000000000000");
+        yield return Bytes(
+            "Nullable(Tuple(LowCardinality(Nullable(String)), DateTime64(3, 'UTC')))",
+            "Nullable(Tuple(LowCardinality(Nullable(FixedString(2))), DateTime64(6, 'UTC')))",
+            3,
+            "01000000000000000100000006000000000000050000000000000000000361626302C3280261620300000000000000020304010000000000000002000000000000000300000000000000",
+            "01000000000000000100000006000000000000040000000000000000000000C328616203000000000000000002030000000000000000D007000000000000B80B000000000000",
+            "010000000000000000000006000000000000040000000000000000000000C328616202000000000000000203D007000000000000B80B000000000000");
+        yield return Bytes(
+            "Nullable(Tuple(Array(Decimal(18, 2)), DateTime64(3, 'UTC')))",
+            "Nullable(Tuple(Array(Decimal(9, 2)), DateTime64(6, 'UTC')))",
+            3,
+            "010000010000000000000001000000000000000300000000000000141A99BE1C0000007B000000000000003EFEFFFFFFFFFFFF010000000000000002000000000000000300000000000000",
+            "010000010000000000000001000000000000000300000000000000000000007B0000003EFEFFFF0000000000000000D007000000000000B80B000000000000",
+            "0000000000000000000002000000000000007B0000003EFEFFFFD007000000000000B80B000000000000");
+        yield return Bytes(
+            "Nullable(Tuple(Map(String, Decimal(18, 2)), DateTime64(3, 'UTC')))",
+            "Nullable(Tuple(Map(String, Decimal(9, 2)), DateTime64(6, 'UTC')))",
+            3,
+            "01000001000000000000000100000000000000030000000000000001FF016B02C328141A99BE1C0000007B000000000000003EFEFFFFFFFFFFFF010000000000000002000000000000000300000000000000",
+            "01000001000000000000000100000000000000030000000000000001FF016B02C328000000007B0000003EFEFFFF0000000000000000D007000000000000B80B000000000000",
+            "000000000000000000000200000000000000016B02C3287B0000003EFEFFFFD007000000000000B80B000000000000");
+        yield return Bytes(
+            "Array(Nullable(Tuple(DateTime64(3, 'UTC'), Decimal(18, 2))))",
+            "Array(Nullable(Tuple(DateTime64(6, 'UTC'), Decimal(9, 2))))",
+            3,
+            "010000000000000001000000000000000300000000000000010000010000000000000002000000000000000300000000000000141A99BE1C0000007B000000000000003EFEFFFFFFFFFFFF",
+            "0100000000000000010000000000000003000000000000000100000000000000000000D007000000000000B80B000000000000000000007B0000003EFEFFFF",
+            "000000000000000002000000000000000000D007000000000000B80B0000000000007B0000003EFEFFFF");
     }
 
     public static IEnumerable<TestCaseData> StringShapeCases()
@@ -699,7 +791,15 @@ public class DecodedColumnConversionTests
     }
 
     // A column decoded from the source bytes, written into the target for all rows and from row 1.
-    private static async Task AssertWritesAsync(string source, string target, int rows, string sourceBytes, string expected, string expectedFromRow1)
+    // storageOfTheTarget: whether the codec of the target writes the column from its storage, or null to leave that open.
+    private static async Task AssertWritesAsync(
+        string source,
+        string target,
+        int rows,
+        string sourceBytes,
+        string expected,
+        string expectedFromRow1,
+        bool? storageOfTheTarget = false)
     {
         using IColumn decoded = await ConverterHarness.ReadBackAsync(source, Convert.FromHexString(sourceBytes), rows);
 
@@ -708,7 +808,11 @@ public class DecodedColumnConversionTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(Codec(target).CanWrite(decoded), Is.False, "the codec of the target does not write the column from its storage");
+            if (storageOfTheTarget is bool storage)
+            {
+                Assert.That(Codec(target).CanWrite(decoded), Is.EqualTo(storage), "whether the codec of the target writes the column from its storage");
+            }
+
             Assert.That(Convert.ToHexString(all), Is.EqualTo(expected), "all rows");
             Assert.That(Convert.ToHexString(fromRow1), Is.EqualTo(expectedFromRow1), "rows from row 1");
         });
