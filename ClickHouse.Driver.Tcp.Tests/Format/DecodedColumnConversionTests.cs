@@ -334,7 +334,8 @@ public class DecodedColumnConversionTests
     /// <c>Decimal</c> out of the range of the target, an enum ordinal that the target does not declare and one that the
     /// source does not declare, a <c>DateTime64</c> finer than the target scale, and strings of another width than the
     /// target <c>FixedString</c>. Also a <c>Nullable</c> of a leaf, and the elements of an <c>Array</c> and a <c>Map</c>
-    /// under a NULL row and in an <c>Array(Nullable(Tuple))</c>. All rows, and the rows from row 1.
+    /// under a NULL row and in an <c>Array(Nullable(Tuple))</c>. All rows, and the rows from row 1; in the last cases the
+    /// hidden row is row 1, so the rows from row 1 start with it.
     /// </summary>
     [TestCaseSource(nameof(HiddenValueCases))]
     public Task Write_DecodedColumnWithAHiddenValue_WritesThePlaceholderOfTheTarget(
@@ -524,6 +525,29 @@ public class DecodedColumnConversionTests
             "010000000000000001000000000000000300000000000000010000010000000000000002000000000000000300000000000000141A99BE1C0000007B000000000000003EFEFFFFFFFFFFFF",
             "0100000000000000010000000000000003000000000000000100000000000000000000D007000000000000B80B000000000000000000007B0000003EFEFFFF",
             "000000000000000002000000000000000000D007000000000000B80B0000000000007B0000003EFEFFFF");
+
+        // The hidden row is row 1, so the write of the rows from row 1 starts at a hidden row too.
+        yield return Bytes(
+            "Nullable(Decimal(18, 2))",
+            "Nullable(Decimal(9, 2))",
+            3,
+            "0001007B00000000000000141A99BE1C0000003EFEFFFFFFFFFFFF",
+            "0001007B000000000000003EFEFFFF",
+            "0100000000003EFEFFFF");
+        yield return Bytes(
+            "Nullable(Tuple(Array(Decimal(18, 2)), DateTime64(3, 'UTC')))",
+            "Nullable(Tuple(Array(Decimal(9, 2)), DateTime64(6, 'UTC')))",
+            3,
+            "0001000100000000000000020000000000000003000000000000007B00000000000000141A99BE1C0000003EFEFFFFFFFFFFFF010000000000000002000000000000000300000000000000",
+            "0001000100000000000000020000000000000003000000000000007B000000000000003EFEFFFFE8030000000000000000000000000000B80B000000000000",
+            "010001000000000000000200000000000000000000003EFEFFFF0000000000000000B80B000000000000");
+        yield return Bytes(
+            "Nullable(Tuple(Map(String, Decimal(18, 2)), DateTime64(3, 'UTC')))",
+            "Nullable(Tuple(Map(String, Decimal(9, 2)), DateTime64(6, 'UTC')))",
+            3,
+            "0001000100000000000000020000000000000003000000000000000161016B01637B00000000000000141A99BE1C0000003EFEFFFFFFFFFFFF010000000000000002000000000000000300000000000000",
+            "0001000100000000000000020000000000000003000000000000000161016B01637B000000000000003EFEFFFFE8030000000000000000000000000000B80B000000000000",
+            "010001000000000000000200000000000000016B0163000000003EFEFFFF0000000000000000B80B000000000000");
     }
 
     public static IEnumerable<TestCaseData> StringShapeCases()
