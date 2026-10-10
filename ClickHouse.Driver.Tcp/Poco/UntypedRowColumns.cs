@@ -105,7 +105,7 @@ internal static class UntypedRowColumns
         Derivation derived = derivation.Derive(target.TypeName, in context, present, ConversionDirection.Write);
         if (!derived.Succeeded)
         {
-            throw PocoWriteErrors.ValuesNotWritable(index, target, codec, present);
+            throw PocoWriteErrors.ValuesNotWritable(index, target, derivation.SuggestedTypes(target.TypeName, in context, ConversionDirection.Write), present);
         }
 
         return derived.Converter is ICastWriter cast

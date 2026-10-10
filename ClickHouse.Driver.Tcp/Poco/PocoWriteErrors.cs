@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using ClickHouse.Driver.Tcp.Types;
+using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Poco;
 
@@ -12,23 +13,16 @@ internal static class PocoWriteErrors
 {
     /// <summary>Reports a property type that the column cannot be written from.</summary>
     /// <param name="column">The target column.</param>
-    /// <param name="codec">The target type's codec, for the types it accepts.</param>
+    /// <param name="accepted">The CLR types to suggest (<see cref="ConverterDerivation.SuggestedTypes"/>).</param>
     /// <param name="member">The property that cannot fill it.</param>
     /// <param name="pocoType">The row type.</param>
     /// <returns>The exception to throw.</returns>
-    public static Exception NotWritableAs(IColumn column, IColumnCodec codec, PocoMember member, Type pocoType)
+    public static Exception NotWritableAs(IColumn column, IReadOnlyList<Type> accepted, PocoMember member, Type pocoType)
     {
-        IReadOnlyList<Type> accepted = PocoWriteConversion.AcceptedWriteTypes(codec);
-        var offered = new string[accepted.Count];
-        for (int i = 0; i < accepted.Count; i++)
-        {
-            offered[i] = accepted[i].ToString();
-        }
-
-        // Empty means the codec requires a specialized column shape.
+        // Empty means the type is written only from a column of its own layout.
         string remedy = accepted.Count == 0
             ? $"No property type can fill a '{column.TypeName}' column: insert it through the columnar API, which can build the column shape it needs."
-            : $"It accepts {string.Join(" or ", offered)}, and — for a composite type — rows whose elements are any type its element codecs accept. " +
+            : $"It accepts {string.Join(" or ", accepted)}, and an Array, Map or Tuple type also accepts rows of the types that its element types accept. " +
               "Give the property one of those types, or insert that column through the columnar API.";
 
         return new InvalidOperationException(
@@ -57,20 +51,11 @@ internal static class PocoWriteErrors
     /// <summary>Reports untyped values of a CLR type that the target column cannot be written from.</summary>
     /// <param name="index">The column's position in every row.</param>
     /// <param name="target">The target column.</param>
-    /// <param name="codec">The target type's codec, for the types it accepts.</param>
+    /// <param name="accepted">The CLR types to suggest (<see cref="ConverterDerivation.SuggestedTypes"/>).</param>
     /// <param name="present">The CLR type of the first value that is not null.</param>
     /// <returns>The exception to throw.</returns>
-    public static Exception ValuesNotWritable(int index, IColumn target, IColumnCodec codec, Type present)
-    {
-        IReadOnlyList<Type> accepted = PocoWriteConversion.AcceptedWriteTypes(codec);
-        var offered = new string[accepted.Count];
-        for (int i = 0; i < accepted.Count; i++)
-        {
-            offered[i] = accepted[i].ToString();
-        }
-
-        return new InvalidOperationException(
+    public static Exception ValuesNotWritable(int index, IColumn target, IReadOnlyList<Type> accepted, Type present)
+        => new InvalidOperationException(
             $"Column {index} ('{target.Name}', {target.TypeName}) was given values of type {present}, which it cannot be written from. " +
-            $"It accepts {string.Join(" or ", offered)}.");
-    }
+            $"It accepts {string.Join(" or ", accepted)}, and an Array, Map or Tuple type also accepts values of the types that its element types accept.");
 }
