@@ -55,7 +55,20 @@ internal sealed class DerivedColumn<T> : IColumn<T>, IDerivedColumn
     public ReadOnlySpan<T> Values => Converted().AsSpan(0, source.RowCount);
 
     /// <inheritdoc/>
-    public T this[int row] => Values[row];
+    /// <exception cref="IndexOutOfRangeException"><paramref name="row"/> is negative or not less than <see cref="RowCount"/>.</exception>
+    public T this[int row]
+    {
+        get
+        {
+            // The row is checked first, so a row outside the column does not convert the column.
+            if ((uint)row >= (uint)source.RowCount)
+            {
+                throw new IndexOutOfRangeException();
+            }
+
+            return Converted()[row];
+        }
+    }
 
     /// <inheritdoc/>
     public object GetValue(int row) => this[row];
