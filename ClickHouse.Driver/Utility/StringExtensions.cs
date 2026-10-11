@@ -9,10 +9,10 @@ internal static class StringExtensions
     public static string Escape(this string str) => str.Replace("\\", "\\\\").Replace("\'", "\\\'").Replace("\n", "\\n").Replace("\t", "\\t");
 
     [SuppressMessage("Performance", "CA1865:Use char overload", Justification = "Not available in net462")]
-    public static string QuoteSingle(this string str) => $"'{str.Replace("'", "\\'")}'";
+    public static string QuoteSingle(this string str) => $"'{str}'";
 
     [SuppressMessage("Performance", "CA1865:Use char overload", Justification = "Not available in net462")]
-    public static string QuoteDouble(this string str) => $"\"{str.Replace("\"", "\\\"")}\"";
+    public static string QuoteDouble(this string str) => $"\"{str}\"";
 
     /// <summary>
     /// Appends a value prefixed with its length, so that a concatenation of appended values maps back to

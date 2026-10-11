@@ -29,11 +29,12 @@ public class QuotedStringTests
     }
 
     [Test]
-    public void QuoteSingle_EscapesQuotesAndAddsOuterQuotes()
+    public void QuoteSingle_AddsOuterSingleQuotes()
     {
-        var result = "'O'Reilly'".QuoteSingle();
+        var input = "O\\'Reilly";
+        var result = input.QuoteSingle();
 
-        Assert.That(result, Is.EqualTo("'\\'O\\'Reilly\\''"));
+        Assert.That(result, Is.EqualTo("'O\\'Reilly'"));
     }
 
     [Test]
@@ -43,17 +44,28 @@ public class QuotedStringTests
     }
 
     [Test]
-    public void QuoteDouble_EscapesQuotesAndAddsOuterQuotes()
+    public void QuoteDouble_AddsOuterDoubleQuotes()
     {
-        var input = "\"Product \"Items\"\"";
+        var input = "Product \\\"Items\\\"";
         var result = input.QuoteDouble();
 
-        Assert.That(result, Is.EqualTo("\"\\\"Product \\\"Items\\\"\\\"\""));
+        Assert.That(result, Is.EqualTo("\"Product \\\"Items\\\"\""));
     }
 
     [Test]
     public void QuoteDouble_EmptyString_ReturnsQuotedEmptyString()
     {
         Assert.That(string.Empty.QuoteDouble(), Is.EqualTo("\"\""));
+    }
+
+    [TestCase("O\\'Reilly", "'O\\'Reilly'")]
+    [TestCase("Product \\\"Items\\\"", "\"Product \\\"Items\\\"\"")]
+    public void Quote_AddsOuterQuotes(string input, string expected)
+    {
+        var result = input.Contains('\'')
+            ? input.QuoteSingle()
+            : input.QuoteDouble();
+
+        Assert.That(result, Is.EqualTo(expected));
     }
 }

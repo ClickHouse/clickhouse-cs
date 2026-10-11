@@ -1,1 +1,1 @@
-* Fixed `QuoteSingle`, `QuoteDouble` and `EncloseColumnName` failing to escape delimiters inside already-delimited input ([#316](https://github.com/ClickHouse/clickhouse-cs/issues/316)).
+* Fixed `EncloseColumnName` returning already-delimited input without escaping embedded backticks ([#316](https://github.com/ClickHouse/clickhouse-cs/issues/316)).
