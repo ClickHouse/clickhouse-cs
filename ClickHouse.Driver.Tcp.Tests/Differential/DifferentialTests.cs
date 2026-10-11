@@ -12,20 +12,23 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 /// <summary>
 /// The differential tests, offline: every case of <see cref="DifferentialCases"/> runs through every read and write tier
 /// of the client, for all rows and for a tail that starts above row 0 (<see cref="DifferentialEngine"/>), and the tiers
-/// must agree. Values are compared strictly (<see cref="ValueComparer"/>). When several rows fail, a tier can name any
-/// one of them, so a failure must be the failure of one of its rows (<see cref="Outcome.FailureDifference"/>).
+/// must agree by one rule (<see cref="CheckTiers"/>): a read or a write fails exactly when one of its rows fails alone,
+/// with the failure of one of those rows (when several rows fail, a tier can name any one of them), and else gives the
+/// values of its rows; tiers that read or write the same rows give the same kinds of outcome and the same values or bytes.
+/// Values are compared strictly (<see cref="ValueComparer"/>).
 /// </summary>
 [TestFixture]
 public class DifferentialTests
 {
     /// <summary>The answers of <c>CanRead</c> for the read targets and of <c>CanWrite</c> for the write inputs that are not decoded, over the case list.</summary>
-    private static readonly (int CanReadTrue, int CanReadFalse, int CanWriteTrue, int CanWriteFalse) ExpectedAnswers = (568, 19, 528, 31);
+    private static readonly (int CanReadTrue, int CanReadFalse, int CanWriteTrue, int CanWriteFalse) ExpectedAnswers = (574, 19, 537, 31);
 
     /// <summary>
-    /// The row inserts whose outcome differs from the insert of the same rows, for every input of the case and both ranges.
-    /// The <c>Geometry</c> case builds its column from decoded columns, so the insert writes it from its storage; a row
-    /// insert gathers its values as objects, and a ring and a line string (and a polygon and a multi line string) have one
-    /// CLR type, so the Variant writer refuses them.
+    /// The row inserts that the tests do not compare with the insert, with the kind of their outcome for all rows, for every
+    /// input of the case. The <c>Geometry</c> case builds its column from decoded columns, so the insert writes it from its
+    /// storage; a row insert gathers its values as objects through the converter layer, and a ring and a line string (and
+    /// a polygon and a multi line string) have one CLR type, so the Variant writer refuses those rows. They still follow
+    /// the rule of their own rows.
     /// </summary>
     private static readonly Dictionary<(string Case, string Tier), OutcomeKind> RowInsertOutcomes = new()
     {
@@ -42,8 +45,8 @@ public class DifferentialTests
 
     /// <summary>
     /// <c>Block.ReadAs</c>, POCO mapping (the compiled loop) and POCO mapping in the tier of a runtime without dynamic code
-    /// (<c>Bind</c>/<c>Fill</c>) read the same values, or all refuse, or all fail; <c>CanRead</c> is whether they read;
-    /// and each tier reads the same values for the tail alone as for those rows in the read of all rows.
+    /// (<c>Bind</c>/<c>Fill</c>), by the rule of <see cref="CheckTiers"/>; <c>CanRead</c> is whether they read. The view of
+    /// <c>Block.ReadAs</c> converts every row of the column, so its rule takes every row, also for the tail.
     /// </summary>
     [TestCaseSource(nameof(Cases))]
     public void Read_Case_TheTiersReadTheSameValues(DifferentialCase testCase)
@@ -51,96 +54,56 @@ public class DifferentialTests
         var problems = new List<string>();
         foreach (Type target in testCase.ReadTargets)
         {
-            string label = TypeNames.Of(target);
-            var ranges = new[] { All(testCase), Tail(testCase) };
-            Outcome[] readAs = Array.ConvertAll(ranges, r => Read(ClientArms.ReadAs, testCase, target, r));
-            Outcome[] poco = Array.ConvertAll(ranges, r => Read(ClientArms.Poco, testCase, target, r));
-            Outcome[] fill = Array.ConvertAll(ranges, r => Read(ClientArms.PocoFill, testCase, target, r));
+            TierRun Tier(ReadArm arm, Texts texts) => new(arm.Name, texts, arm.ReadsEveryRow, r => Read(arm, testCase, target, r), p => ReadRows(arm, testCase, target, p));
+            TierRun readAs = Tier(ClientArms.ReadAs, Texts.Exact), poco = Tier(ClientArms.Poco, Texts.Exact), fill = Tier(ClientArms.PocoFill, Texts.Exact);
+            CheckTiers(problems, TypeNames.Of(target), testCase, new[] { readAs, poco, fill }, new[] { new Pair(readAs, poco, Texts.TypeOnly), new Pair(poco, fill, Texts.Exact) });
 
             bool canRead = ClickHouseTcpTypes.CanRead(testCase.ColumnType, target);
-            Check(problems, $"{label}: CanRead is {canRead}, Block.ReadAs {readAs[0]}", canRead == (readAs[0].Kind != OutcomeKind.Refused));
-            Check(problems, $"{label}: Block.ReadAs {readAs[0].Kind}, POCO mapping {poco[0]}", readAs[0].Kind == poco[0].Kind);
-            if (readAs[0].Kind == OutcomeKind.Values)
-            {
-                Add(problems, $"{label}: POCO mapping against Block.ReadAs", Outcome.Difference(readAs[0], poco[0]));
-            }
-
-            for (int i = 0; i < ranges.Length; i++)
-            {
-                RowRange range = ranges[i];
-                IEnumerable<Outcome> RowFailuresOfPoco() => RowFailures(range, row => Read(ClientArms.Poco, testCase, target, row));
-                Add(problems, $"{label} {range}: POCO mapping", poco[i].Kind == OutcomeKind.Failed ? Outcome.FailureDifference(poco[i], RowFailuresOfPoco()) : null);
-                Add(problems, $"{label} {range}: the Fill tier against POCO mapping", poco[i].Kind == OutcomeKind.Failed && fill[i].Kind == OutcomeKind.Failed
-                    ? Outcome.FailureDifference(fill[i], RowFailuresOfPoco())
-                    : Outcome.Difference(poco[i], fill[i]));
-            }
-
-            foreach ((string tier, Outcome[] outcomes) in new[] { ("Block.ReadAs", readAs), ("POCO mapping", poco), ("the Fill tier", fill) })
-            {
-                Check(problems, $"{label}: {tier} broke a rule of its own: {outcomes[0]}; {outcomes[1]}", Array.TrueForAll(outcomes, o => o.ExceptionType != typeof(ArmInvariantException)));
-                Add(problems, $"{label}: {tier} reads the tail alone as {outcomes[1]}, all rows as {outcomes[0]}", TailDifference(outcomes[0], outcomes[1], ranges[1].CaseRow));
-            }
+            Check(problems, $"{TypeNames.Of(target)}: CanRead is {canRead}, Block.ReadAs {readAs.Range(All(testCase))}", canRead == (readAs.Range(All(testCase)).Kind != OutcomeKind.Refused));
         }
 
         Assert.That(problems, Is.Empty, string.Join(Environment.NewLine, problems));
     }
 
     /// <summary>
-    /// For each write input that the case builds or reads back: the insert write and an independent write that gathers the
-    /// values of the slice through the indexer give the same bytes, for all rows and for the tail (so the insert slices
-    /// right); the POCO insert in both gather tiers and the untyped insert give the outcome of the insert (the same bytes,
-    /// or a failure or a refusal where it fails or refuses), except the outcomes of <see cref="RowInsertOutcomes"/>; and
-    /// <c>CanWrite</c> is whether each insert takes the column. A column read back as another CLR type writes the bytes
-    /// of the source column, except where the CLR type holds less (a count finer than 100 ns).
+    /// For each write input that the case builds or reads back, by the rule of <see cref="CheckTiers"/>: the insert, an
+    /// independent write that gathers the values of each slice through the indexer (so the two give the same bytes only
+    /// when the insert slices right), the POCO insert in both gather tiers and the untyped insert. A row insert refuses
+    /// what <c>CanWrite</c> refuses, and has the outcomes of <see cref="RowInsertOutcomes"/>. <c>CanWrite</c> is whether
+    /// each insert takes the column. A column read back as another CLR type writes the bytes of the source column, except
+    /// where the CLR type holds less (a count finer than 100 ns).
     /// </summary>
     [TestCaseSource(nameof(Cases))]
     public void Write_Case_TheInsertsWriteTheSameBytes(DifferentialCase testCase)
     {
         var problems = new List<string>();
-        var ranges = new[] { All(testCase), Tail(testCase) };
         foreach (WriteInput input in testCase.WriteInputs.Where(i => i.Kind != WriteInputKind.Decoded))
         {
-            Outcome[] insert = Array.ConvertAll(ranges, r => Write(ClientArms.Write, testCase, input, r));
-            if (insert[0].Kind == OutcomeKind.Unavailable)
+            TierRun[] tiers = WriteTiers(testCase, input, ClientArms.IndexerWrite);
+            TierRun insert = tiers[0];
+            if (insert.Range(All(testCase)).Kind == OutcomeKind.Unavailable)
             {
                 continue;
             }
 
             bool canWrite = ClickHouseTcpTypes.CanWrite(testCase.ColumnType, input.ElementType);
-            Outcome[] indexer = Array.ConvertAll(ranges, r => Write(ClientArms.IndexerWrite, testCase, input, r));
-            Outcome[] poco = Array.ConvertAll(ranges, r => Write(ClientArms.PocoWrite, testCase, input, r));
-            Outcome[] viaDelegates = Array.ConvertAll(ranges, r => Write(ClientArms.PocoWriteDelegate, testCase, input, r));
-            Outcome[] untyped = Array.ConvertAll(ranges, r => Write(ClientArms.UntypedWrite, testCase, input, r));
-            for (int i = 0; i < ranges.Length; i++)
+            CheckTiers(problems, input.Label, testCase, tiers, WritePairs(testCase, tiers, canWrite));
+            CheckPinned(problems, input.Label, testCase, tiers);
+            foreach (RowRange range in new[] { All(testCase), Tail(testCase) })
             {
-                RowRange range = ranges[i];
-                string label = $"{input} {range}";
-                IEnumerable<Outcome> RowFailuresOfInsert() => RowFailures(range, row => Write(ClientArms.Write, testCase, input, row));
-                Add(problems, $"{label}: the insert", insert[i].Kind == OutcomeKind.Failed ? Outcome.FailureDifference(insert[i], RowFailuresOfInsert()) : null);
-                Add(problems, $"{label}: the write through the indexer against the insert", indexer[i].Kind switch
+                if (input.Kind == WriteInputKind.ReadBack && !HoldsCountsFinerThanTicks(TypeParser.Parse(testCase.ColumnType)) && insert.Range(range).Kind == OutcomeKind.Bytes)
                 {
-                    OutcomeKind.Refused => insert[i].Kind == OutcomeKind.Refused ? null : $"refused: {indexer[i]}; the insert {insert[i]}",
-                    OutcomeKind.Failed when insert[i].Kind == OutcomeKind.Failed => Outcome.FailureDifference(indexer[i], RowFailuresOfInsert()),
-                    _ => Outcome.Difference(insert[i], indexer[i]),
-                });
-
-                foreach ((WriteArm tier, Outcome row) in RowInserts.Zip(new[] { poco[i], viaDelegates[i], untyped[i] }))
-                {
-                    Add(problems, $"{label}: {tier.Name} against the insert", RowInsertDifference(testCase, tier, input, range, insert[i], row, canWrite));
-                }
-
-                if (input.Kind == WriteInputKind.ReadBack && !HoldsCountsFinerThanTicks(TypeParser.Parse(testCase.ColumnType)) && insert[i].Kind == OutcomeKind.Bytes)
-                {
-                    Add(problems, $"{label}: the insert against the source column", Outcome.Difference(Write(ClientArms.Write, testCase, testCase.WriteInputs[0], range), insert[i]));
+                    Add(problems, $"{input} {range}: the insert against the source column", Outcome.Difference(Write(ClientArms.Write, testCase, testCase.WriteInputs[0], range), insert.Range(range)));
                 }
             }
 
             // A Nested column is written only from a column of its own layout, never from a CLR element type, so CanWrite
             // is false for a type with a Nested in it, although the insert writes such a column.
             bool nested = testCase.ColumnType.Contains("Nested(", StringComparison.Ordinal);
-            Check(problems, $"{input}: CanWrite is {canWrite}, the insert {insert[0]}", nested || canWrite == (insert[0].Kind != OutcomeKind.Refused));
-            Check(problems, $"{input}: CanWrite is {canWrite}, the POCO insert {poco[0]}", canWrite == (poco[0].Kind != OutcomeKind.Refused));
-            Check(problems, $"{input}: CanWrite is {canWrite}, the untyped insert {untyped[0]}", canWrite == (untyped[0].Kind != OutcomeKind.Refused));
+            foreach (TierRun tier in tiers.Where(t => t != tiers[1] && (t != insert || !nested)))
+            {
+                Check(problems, $"{input}: CanWrite is {canWrite}, {tier.Name} {tier.Range(All(testCase))}", canWrite == (tier.Range(All(testCase)).Kind != OutcomeKind.Refused));
+            }
         }
 
         Assert.That(problems, Is.Empty, string.Join(Environment.NewLine, problems));
@@ -148,11 +111,11 @@ public class DifferentialTests
 
     /// <summary>
     /// The decoded column of a case is a column that its codec writes from its storage. Its insert gives back the bytes
-    /// that it was read from, and each insert of it (the columnar insert, which writes it from its storage, and the row
-    /// inserts, which gather its values) writes, for all rows and for the tail, bytes that decode to the values of the
-    /// same rows of the source column, except the outcomes of <see cref="RowInsertOutcomes"/>; a row insert refuses it where
-    /// <c>CanWrite</c> is false. Equal bytes need no decode: the write of a slice of a LowCardinality column keeps the
-    /// dictionary of the whole column, and a row insert builds the dictionary of its own values.
+    /// that it was read from. The insert and the row inserts of it follow the rule of <see cref="CheckTiers"/>, a row
+    /// insert refuses it where <c>CanWrite</c> is false, and every write of it, for all rows and for the tail, gives
+    /// bytes that decode to the values of the same rows of the source column. Equal bytes need no decode: the write of a
+    /// slice of a LowCardinality column keeps the dictionary of the whole column, and a row insert builds the dictionary
+    /// of its own values.
     /// </summary>
     [TestCaseSource(nameof(Cases))]
     public void Write_Case_TheDecodedColumnWritesItsRows(DifferentialCase testCase)
@@ -168,26 +131,19 @@ public class DifferentialTests
         WriteInput input = testCase.WriteInputs.FirstOrDefault(i => i.Kind == WriteInputKind.Decoded);
         if (input is not null)
         {
-            // A row insert takes the column when CanWrite is true, and refuses it otherwise (a Nested column, which only a
-            // column of its own layout writes).
-            bool canWrite = ClickHouseTcpTypes.CanWrite(testCase.ColumnType, input.ElementType);
-            Outcome all = Write(ClientArms.Write, testCase, input, All(testCase));
-            Add(problems, "the insert of the decoded column against the source bytes", Outcome.Difference(Outcome.OfBytes(SourceBytes(testCase)), all));
+            TierRun[] tiers = WriteTiers(testCase, input, indexer: null);
+            CheckTiers(problems, input.Label, testCase, tiers, WritePairs(testCase, tiers, ClickHouseTcpTypes.CanWrite(testCase.ColumnType, input.ElementType), sameBytes: false));
+            CheckPinned(problems, input.Label, testCase, tiers);
+            Add(problems, "the insert of the decoded column against the source bytes", Outcome.Difference(Outcome.OfBytes(SourceBytes(testCase)), tiers[0].Range(All(testCase))));
             foreach (RowRange range in new[] { All(testCase), Tail(testCase) })
             {
                 Outcome source = Write(ClientArms.Write, testCase, testCase.WriteInputs[0], range);
-                foreach (WriteArm arm in RowInserts.Prepend(ClientArms.Write))
+                foreach (TierRun tier in tiers)
                 {
-                    Outcome written = Write(arm, testCase, input, range);
-                    OutcomeKind expected = RowInsertOutcomes.TryGetValue((testCase.Id, arm.Name), out OutcomeKind pinned) ? pinned
-                        : arm == ClientArms.Write || canWrite ? OutcomeKind.Bytes : OutcomeKind.Refused;
-                    if (written.Kind != expected)
+                    Outcome written = tier.Range(range);
+                    if (source.Kind == OutcomeKind.Bytes && written.Kind == OutcomeKind.Bytes && Outcome.Difference(source, written) is not null)
                     {
-                        problems.Add($"{arm.Name} {range}: {written}, not {expected}");
-                    }
-                    else if (written.Kind == OutcomeKind.Bytes && Outcome.Difference(source, written) is not null)
-                    {
-                        Add(problems, $"{arm.Name} {range}", RowsDifference(testCase.ColumnType, source.Bytes, written.Bytes, range.Count));
+                        Add(problems, $"{tier.Name} {range}", RowsDifference(testCase.ColumnType, source.Bytes, written.Bytes, range.Count));
                     }
                 }
             }
@@ -234,6 +190,7 @@ public class DifferentialTests
             Assert.That(bySource[CaseSource.CompositeLiftMatrix].Count(), Is.EqualTo(DifferentialCases.CompositeLiftMatrixCount), "CompositeLiftMatrixTests.Cases()");
             Assert.That(bySource[CaseSource.ColumnReadProjection].Count(), Is.EqualTo(DifferentialCases.ColumnReadProjectionCount), "the read targets table of DifferentialCases");
             Assert.That(bySource[CaseSource.ColumnReadScenario].Count(), Is.EqualTo(DifferentialCases.ColumnReadScenarioCount), "the scenarios of DifferentialCases");
+            Assert.That(bySource[CaseSource.FailureScenario].Count(), Is.EqualTo(DifferentialCases.FailureScenarioCount), "the failure scenarios of DifferentialCases");
             Assert.That(cases.GroupBy(c => c.Id).Where(g => g.Count() > 1).Select(g => g.Key), Is.Empty, "case ids that are not unique");
             Assert.That(
                 (canRead.Count(a => a), canRead.Count(a => !a), canWrite.Count(a => a), canWrite.Count(a => !a)),
@@ -275,57 +232,160 @@ public class DifferentialTests
         });
     }
 
-    /// <summary>A failure of several rows is accepted when it is the failure of one of its rows alone, and only then.</summary>
+    /// <summary>A range is refused with its rows, fails with the failure of one of its failing rows alone, and gives a result when none fails.</summary>
     [Test]
-    public void FailureDifference_FailureOfOneOfTheRows_IsTheOnlyFailureThatMatches()
+    public void RangeDifference_EachKindOfRange_FollowsItsRowsAlone()
     {
-        Outcome[] rows = { Outcome.Failure(new OverflowException("row 1")), Outcome.Failure(new OverflowException("row 3")) };
+        Outcome bytes = Outcome.OfBytes(new byte[] { 1 });
+        Outcome[] rows = { bytes, Outcome.Failure(new OverflowException("row 1")), bytes, Outcome.Failure(new OverflowException("row 3")) };
 
         Assert.Multiple(() =>
         {
-            Assert.That(Outcome.FailureDifference(Outcome.Failure(new OverflowException("row 3")), rows), Is.Null);
-            Assert.That(Outcome.FailureDifference(Outcome.Failure(new OverflowException("row 2")), rows), Does.Contain("none of its rows"), "another row");
-            Assert.That(Outcome.FailureDifference(Outcome.Failure(new ArgumentException("row 1")), rows), Does.Contain("none of its rows"), "another type");
-            Assert.That(Outcome.FailureDifference(Outcome.OfBytes(new byte[] { 1 }), rows), Does.Contain("not Failed"), "no failure");
-            Assert.That(Outcome.FailureDifference(Outcome.Failure(new OverflowException("row 1")), Array.Empty<Outcome>()), Does.Contain("none of its rows"), "no row fails alone");
+            Assert.That(Outcome.RangeDifference(Outcome.Failure(new OverflowException("row 3")), rows, Texts.Exact), Is.Null, "one of the failing rows");
+            Assert.That(Outcome.RangeDifference(Outcome.Failure(new OverflowException("row 2")), rows, Texts.Exact), Does.Contain("none of its rows"), "another message");
+            Assert.That(Outcome.RangeDifference(Outcome.Failure(new OverflowException("row 2")), rows, Texts.NumbersMasked), Is.Null, "another number, masked");
+            Assert.That(Outcome.RangeDifference(Outcome.Failure(new ArgumentException("row 1")), rows, Texts.TypeOnly), Does.Contain("none of its rows"), "another type");
+            Assert.That(Outcome.RangeDifference(bytes, rows, Texts.Exact), Does.Contain("fail alone"), "a result although rows fail");
+            Assert.That(Outcome.RangeDifference(Outcome.Failure(new OverflowException("row 1")), new[] { bytes, bytes }, Texts.Exact), Does.Contain("no row fails"), "a failure although no row fails");
+            Assert.That(Outcome.RangeDifference(bytes, new[] { Outcome.Refusal(new ArgumentException("no")) }, Texts.Exact), Does.Contain("refused alone"), "a result although the rows are refused");
         });
     }
 
-    // A row insert against the insert of the same rows: the bytes of the insert where it writes them and CanWrite is true
-    // (a refusal where CanWrite is false: a Nested column); a failure where it fails, of the type of the failure of one of
-    // the rows written alone (a failure of a row insert can name the row of its block, so only the type is compared); a
-    // refusal where it refuses. A case of RowInsertOutcomes has the pinned kind of outcome.
-    private static string RowInsertDifference(DifferentialCase testCase, WriteArm tier, WriteInput input, RowRange range, Outcome insert, Outcome row, bool canWrite)
+    /// <summary>One tier of a family: its outcome for each range and the outcome of each row alone, each computed once.</summary>
+    private sealed class TierRun(string name, Texts texts, bool readsEveryRow, Func<RowRange, Outcome> range, Func<bool, Outcome[]> rows)
     {
-        if (RowInsertOutcomes.TryGetValue((testCase.Id, tier.Name), out OutcomeKind pinned))
+        private readonly Dictionary<RowRange, Outcome> ranges = new();
+        private readonly Dictionary<bool, Outcome[]> rowsAlone = new();
+
+        public string Name { get; } = name;
+
+        /// <summary>How a failure of a range is compared with the failures of its rows alone.</summary>
+        public Texts Texts { get; } = texts;
+
+        /// <summary>Whether a range reads every row of the column (<see cref="ReadArm.ReadsEveryRow"/>).</summary>
+        public bool ReadsEveryRow { get; } = readsEveryRow;
+
+        public Outcome Range(RowRange of) => ranges.TryGetValue(of, out Outcome outcome) ? outcome : ranges[of] = range(of);
+
+        /// <summary>The outcome of each row of the column, alone; of the column with a preceding row when preceded.</summary>
+        public Outcome[] Rows(bool preceded) => rowsAlone.TryGetValue(preceded, out Outcome[] outcomes) ? outcomes : rowsAlone[preceded] = rows(preceded);
+    }
+
+    /// <summary>
+    /// Two tiers that read or write the same rows. <see cref="Expected"/> gives the kind of outcome of the second from the
+    /// outcome of the first; by default the same kind. <see cref="SameResults"/> is false for two writes whose bytes can
+    /// differ for the same values (a row insert builds the LowCardinality dictionary of its own values).
+    /// </summary>
+    private sealed record Pair(TierRun First, TierRun Second, Texts Texts, Func<Outcome, OutcomeKind> Expected = null, bool SameResults = true)
+    {
+        // The second outcome against the first: the expected kind; then, for the same kind, the same values or bytes, and the
+        // same failure by texts (not compared when texts is null: two ranges can fail on different rows).
+        public string Difference(Outcome first, Outcome second, Texts? texts)
         {
-            return row.Kind == pinned ? null : $"{row}, not the pinned {pinned}";
-        }
+            OutcomeKind expected = Expected?.Invoke(first) ?? first.Kind;
+            if (second.Kind != expected)
+            {
+                return $"{second}; {First.Name} {first}";
+            }
 
-        switch (insert.Kind)
-        {
-            case OutcomeKind.Bytes when canWrite:
-                return Outcome.Difference(insert, row);
-
-            case OutcomeKind.Failed when row.Kind == OutcomeKind.Failed:
-                List<Outcome> rows = RowFailures(range, single => Write(tier, testCase, input, single)).ToList();
-                return rows.Exists(r => r.ExceptionType == row.ExceptionType) ? null : $"{row} is of the type of the failure of none of its rows ({string.Join("; ", rows)})";
-
-            default:
-                OutcomeKind expected = insert.Kind == OutcomeKind.Bytes ? OutcomeKind.Refused : insert.Kind;
-                return row.Kind == expected ? null : $"{row}; the insert {insert}";
+            return second.Kind != first.Kind ? null : second.Kind switch
+            {
+                OutcomeKind.Values or OutcomeKind.Bytes => SameResults ? Outcome.Difference(first, second) : null,
+                OutcomeKind.Failed when texts is Texts compare => Outcome.FailureDifference(first, second, compare),
+                _ => null,
+            };
         }
     }
 
-    // Why a tier reads the tail alone otherwise than the same rows of the read of all rows, or null. A read of all rows
-    // that fails can have a tail that fails or that gives values, because the tail may not hold the failing row.
-    private static string TailDifference(Outcome all, Outcome tail, int caseRow) => all.Kind switch
+    /// <summary>
+    /// The rule of every family, for every tier and both ranges (all rows and the tail):
+    /// <list type="bullet">
+    /// <item>each range follows <see cref="Outcome.RangeDifference"/> against the rows that it reads or writes, each read or
+    /// written alone by the same tier: refused with its rows, failed with the failure of one of its failing rows, a result
+    /// when none of them fails; a range of values has the values of its rows alone;</item>
+    /// <item>the two tiers of each pair give, for each row alone, the same kind of outcome (or the kind that the pair
+    /// expects), the same values or bytes, and failures that are the same by the texts of the pair; and for each range
+    /// that they both read or write, the same kind of outcome and the same values or bytes.</item>
+    /// </list>
+    /// </summary>
+    private static void CheckTiers(List<string> problems, string label, DifferentialCase testCase, IReadOnlyList<TierRun> tiers, IEnumerable<Pair> pairs)
     {
-        OutcomeKind.Values => Outcome.Difference(all.Tail(caseRow), tail),
-        OutcomeKind.Refused => Outcome.Difference(all, tail),
-        OutcomeKind.Failed when tail.Kind is not (OutcomeKind.Failed or OutcomeKind.Values) => $"the tail is {tail.Kind}",
-        _ => null,
-    };
+        var ranges = new[] { All(testCase), Tail(testCase) };
+        foreach (TierRun tier in tiers)
+        {
+            foreach (RowRange range in ranges)
+            {
+                Outcome[] rows = tier.Rows(range.Preceded);
+                Outcome[] own = rows[range.Start..(range.Start + range.Count)];
+                Outcome outcome = tier.Range(range);
+                Add(problems, $"{label}: {tier.Name} {range}", Outcome.RangeDifference(outcome, tier.ReadsEveryRow ? rows : own, tier.Texts));
+                Check(problems, $"{label}: {tier.Name} {range} broke a rule of its own: {outcome}", outcome.ExceptionType != typeof(ArmInvariantException));
+                if (outcome.Kind == OutcomeKind.Values && Array.TrueForAll(own, row => row.Kind == OutcomeKind.Values))
+                {
+                    Add(problems, $"{label}: {tier.Name} {range} against its rows alone", Outcome.Difference(Outcome.OfValues(outcome.ValueType, own.SelectMany(row => row.Values).ToArray()), outcome));
+                }
+            }
+        }
+
+        foreach (Pair pair in pairs)
+        {
+            foreach (bool preceded in ranges.Select(range => range.Preceded).Distinct())
+            {
+                Outcome[] first = pair.First.Rows(preceded), second = pair.Second.Rows(preceded);
+                for (int row = 0; row < first.Length; row++)
+                {
+                    Add(problems, $"{label}: {pair.Second.Name} against {pair.First.Name}, row {row} alone{(preceded ? " after a preceding row" : string.Empty)}", pair.Difference(first[row], second[row], pair.Texts));
+                }
+            }
+
+            foreach (RowRange range in ranges.Where(_ => pair.First.ReadsEveryRow == pair.Second.ReadsEveryRow))
+            {
+                Add(problems, $"{label}: {pair.Second.Name} against {pair.First.Name}, {range}", pair.Difference(pair.First.Range(range), pair.Second.Range(range), texts: null));
+            }
+        }
+    }
+
+    // A row insert of RowInsertOutcomes has the pinned kind of outcome for all rows, so a pin cannot stay when it no longer
+    // holds.
+    private static void CheckPinned(List<string> problems, string label, DifferentialCase testCase, IEnumerable<TierRun> tiers)
+    {
+        foreach (TierRun tier in tiers)
+        {
+            if (RowInsertOutcomes.TryGetValue((testCase.Id, tier.Name), out OutcomeKind pinned) && tier.Range(All(testCase)).Kind != pinned)
+            {
+                problems.Add($"{label}: {tier.Name} {tier.Range(All(testCase))}, not the pinned {pinned}");
+            }
+        }
+    }
+
+    // The tiers of a write input: the insert, the write through the indexer when there is one, and the row inserts.
+    private static TierRun[] WriteTiers(DifferentialCase testCase, WriteInput input, WriteArm indexer)
+    {
+        TierRun Tier(WriteArm arm, Texts texts) => new(arm.Name, texts, readsEveryRow: false, r => Write(arm, testCase, input, r), p => WriteRows(arm, testCase, input, p));
+        return new[] { ClientArms.Write, indexer }.Where(arm => arm is not null).Select(arm => Tier(arm, Texts.Exact))
+            .Concat(RowInserts.Select(arm => Tier(arm, Texts.NumbersMasked)))
+            .ToArray();
+    }
+
+    // The insert against the write through the indexer and against each row insert, and the two POCO tiers against each
+    // other. A row insert refuses what CanWrite refuses (a Nested column, which only a column of its own layout writes),
+    // and has the outcome of RowInsertOutcomes; it words a failure in its own terms, so only the type is compared with the
+    // failure of the insert. sameBytes is false for a decoded column, which the insert writes from its storage and a row
+    // insert from its values; the family compares the values of those bytes instead.
+    private static Pair[] WritePairs(DifferentialCase testCase, TierRun[] tiers, bool canWrite, bool sameBytes = true)
+    {
+        TierRun insert = tiers[0];
+        TierRun[] rows = tiers[^3..];
+        OutcomeKind RowInsert(Outcome insertOutcome) => insertOutcome.Kind == OutcomeKind.Bytes && !canWrite ? OutcomeKind.Refused : insertOutcome.Kind;
+        var pairs = new List<Pair> { new(rows[0], rows[1], Texts.Exact) };
+        pairs.AddRange(new[] { rows[0], rows[2] }.Where(row => !RowInsertOutcomes.ContainsKey((testCase.Id, row.Name))).Select(row => new Pair(insert, row, Texts.TypeOnly, RowInsert, sameBytes)));
+        if (tiers.Length == 5)
+        {
+            pairs.Add(new Pair(insert, tiers[1], Texts.Exact));
+        }
+
+        return pairs.ToArray();
+    }
 
     // The first row whose values differ in two column writes of a type, or null.
     private static string RowsDifference(string columnType, byte[] expected, byte[] actual, int rows)

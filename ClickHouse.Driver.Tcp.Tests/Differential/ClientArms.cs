@@ -22,7 +22,13 @@ internal abstract class ReadArm(string name)
 {
     public string Name { get; } = name;
 
+    /// <summary>Whether a read of some rows converts every row of the column, so that a failure of any row fails it.</summary>
+    public virtual bool ReadsEveryRow => false;
+
     public abstract RowReader<T> Bind<T>(Block block);
+
+    /// <summary>Binds a reader of one row at a time, in the terms of the tier. The default is <see cref="Bind{T}"/>.</summary>
+    public virtual RowReader<T> BindRows<T>(Block block) => Bind<T>(block);
 
     /// <inheritdoc/>
     public override string ToString() => Name;
@@ -73,6 +79,36 @@ internal static class ClientArms
 
     private sealed class ReadAsArm() : ReadArm("Client.ReadAs")
     {
+        public override bool ReadsEveryRow => true;
+
+        // The view of Block.ReadAs converts every row at its first access, so a row alone is read with the same tree as the
+        // view, and a NULL that the target cannot hold gets the message of the view. A column of T is its own view.
+        public override RowReader<T> BindRows<T>(Block block)
+        {
+            IColumn column = block[0];
+            if (column is IColumn<T> same)
+            {
+                return (start, count) => same.Values.Slice(start, count).ToArray();
+            }
+
+            Derivation derivation = ColumnCodecRegistry.Default.Converters.Derive(column.TypeName, block.Context, typeof(T), ConversionDirection.Read);
+            BoundReader<T> bound = derivation.Succeeded ? ((ColumnReader<T>)derivation.Converter).Bind(column) : throw new InvalidCastException(derivation.Refusal);
+            return (start, count) =>
+            {
+                var values = new T[count];
+                try
+                {
+                    bound.Fill(start, values);
+                }
+                catch (NullValueException failure)
+                {
+                    throw DerivedColumn.NullFailure(column, typeof(T), failure.Row, failure);
+                }
+
+                return values;
+            };
+        }
+
         public override RowReader<T> Bind<T>(Block block)
         {
             IColumn<T> view = block.ReadAs<T>(0);

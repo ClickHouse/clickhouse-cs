@@ -38,9 +38,11 @@ internal readonly record struct RowRange(int Start, int Count, bool Preceded, in
 internal static class DifferentialEngine
 {
     private static readonly ConcurrentDictionary<(string Id, bool Preceded), byte[]> Sources = new();
+    private static readonly ConcurrentDictionary<(string Id, Type Target), Outcome> ReadBacks = new();
 
     private static readonly MethodInfo ReadMethod = typeof(DifferentialEngine).GetMethod(nameof(ReadTyped), BindingFlags.NonPublic | BindingFlags.Static);
     private static readonly MethodInfo WriteMethod = typeof(DifferentialEngine).GetMethod(nameof(WriteTyped), BindingFlags.NonPublic | BindingFlags.Static);
+    private static readonly MethodInfo ReadRowsMethod = typeof(DifferentialEngine).GetMethod(nameof(ReadRowsTyped), BindingFlags.NonPublic | BindingFlags.Static);
 
     /// <summary>The context that every case resolves its codecs with.</summary>
     internal static ResolveContext Context { get; } = new() { ServerTimezone = "UTC" };
@@ -92,9 +94,15 @@ internal static class DifferentialEngine
     public static Outcome Write(WriteArm arm, DifferentialCase testCase, WriteInput input, RowRange range)
         => (Outcome)Invoke(WriteMethod, input.ElementType, arm, testCase, input, range);
 
-    /// <summary>The failures of the rows of a range, each read or written alone.</summary>
-    public static IEnumerable<Outcome> RowFailures(RowRange range, Func<RowRange, Outcome> run)
-        => Enumerable.Range(0, range.Count).Select(i => run(range.Row(i))).Where(o => o.Kind == OutcomeKind.Failed);
+    /// <summary>Reads each row of the decoded column alone (of the column with a preceding row when preceded), with one block.</summary>
+    public static Outcome[] ReadRows(ReadArm arm, DifferentialCase testCase, Type target, bool preceded)
+        => (Outcome[])Invoke(ReadRowsMethod, target, arm, testCase, preceded);
+
+    /// <summary>Writes each row of a write input alone (of the column with a preceding row when preceded).</summary>
+    public static Outcome[] WriteRows(WriteArm arm, DifferentialCase testCase, WriteInput input, bool preceded)
+        => Enumerable.Range(0, testCase.RowCount + (preceded ? 1 : 0))
+            .Select(row => Write(arm, testCase, input, new RowRange(row, 1, preceded, preceded ? Math.Max(row - 1, 0) : row)))
+            .ToArray();
 
     private static object Invoke(MethodInfo method, Type typeArgument, params object[] arguments)
         => RowWriteArms.Invoke(method, typeArgument, arguments);
@@ -102,19 +110,37 @@ internal static class DifferentialEngine
     private static Outcome ReadTyped<T>(ReadArm arm, DifferentialCase testCase, RowRange range)
     {
         using Block block = Decode(testCase, range.Preceded);
-        RowReader<T> reader;
+        Outcome bound = Bind(() => arm.Bind<T>(block), out RowReader<T> reader);
+        return bound ?? ReadRange(reader, range.Start, range.Count);
+    }
+
+    private static Outcome[] ReadRowsTyped<T>(ReadArm arm, DifferentialCase testCase, bool preceded)
+    {
+        using Block block = Decode(testCase, preceded);
+        Outcome bound = Bind(() => arm.BindRows<T>(block), out RowReader<T> reader);
+        return Enumerable.Range(0, block.RowCount).Select(row => bound ?? ReadRange(reader, row, 1)).ToArray();
+    }
+
+    // A refusal, or null with the reader.
+    private static Outcome Bind<T>(Func<RowReader<T>> bind, out RowReader<T> reader)
+    {
         try
         {
-            reader = arm.Bind<T>(block);
+            reader = bind();
+            return null;
         }
         catch (Exception e)
         {
+            reader = null;
             return Outcome.Refusal(e);
         }
+    }
 
+    private static Outcome ReadRange<T>(RowReader<T> reader, int start, int count)
+    {
         try
         {
-            return Outcome.OfValues(reader(range.Start, range.Count));
+            return Outcome.OfValues(reader(start, count));
         }
         catch (Exception e)
         {
@@ -138,7 +164,7 @@ internal static class DifferentialEngine
                 break;
 
             default:
-                Outcome values = Read(ClientArms.ReadAs, testCase, input.ElementType, All(testCase));
+                Outcome values = ReadBacks.GetOrAdd((testCase.Id, input.ElementType), key => Read(ClientArms.ReadAs, testCase, key.Target, All(testCase)));
                 if (values.Kind != OutcomeKind.Values)
                 {
                     return Outcome.Unavailable($"Block.ReadAs gives no values: {values}");

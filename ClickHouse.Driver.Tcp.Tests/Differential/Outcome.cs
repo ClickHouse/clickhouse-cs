@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
@@ -25,6 +26,22 @@ internal enum OutcomeKind
 
     /// <summary>The write has no input: a read back whose read gave no values.</summary>
     Unavailable,
+}
+
+/// <summary>How two failures of the same rows are compared.</summary>
+internal enum Texts
+{
+    /// <summary>The exception type and the message.</summary>
+    Exact,
+
+    /// <summary>
+    /// The exception type, and the message with every number masked: a failure of a row insert names the row of its block,
+    /// which is not the row of the insert in a block that starts after row 0.
+    /// </summary>
+    NumbersMasked,
+
+    /// <summary>The exception type only: two tiers that word the same failure in their own terms.</summary>
+    TypeOnly,
 }
 
 /// <summary>A refusal whose message the differential tests do not compare with the refusal of another tier.</summary>
@@ -105,23 +122,38 @@ internal sealed record Outcome(OutcomeKind Kind, Type ValueType = null, object[]
     }
 
     /// <summary>
-    /// Compares the failure of a read or a write of several rows with the failures of its rows alone. When several rows
-    /// fail, which one a tier names is not specified, so the failure must be the failure of one of its rows: the same
-    /// exception type and message, which names the row of that value where it names a row.
+    /// The rule of every tier and every range. A tier refuses a column for all of its rows, so a range is refused when its
+    /// rows are refused alone. Else it fails when one of the rows that it reads or writes fails alone, with the failure of
+    /// one of those rows (which one is not specified), and it gives a result when none of them fails.
     /// </summary>
-    /// <param name="actual">The outcome of the read or the write.</param>
-    /// <param name="rowFailures">The failures of the rows of the range, each read or written alone.</param>
-    /// <returns>Null when the outcome is one of the failures, otherwise why not.</returns>
-    public static string FailureDifference(Outcome actual, IEnumerable<Outcome> rowFailures)
+    /// <param name="range">The outcome of the range.</param>
+    /// <param name="rowsAlone">The outcome of each row that the range reads or writes, read or written alone by the same tier.</param>
+    /// <param name="texts">How a failure is compared with the failures of the rows.</param>
+    /// <returns>Null when the outcome follows the rule, otherwise why not.</returns>
+    public static string RangeDifference(Outcome range, IReadOnlyCollection<Outcome> rowsAlone, Texts texts)
     {
-        if (actual.Kind != OutcomeKind.Failed)
+        if (rowsAlone.Any(row => row.Kind == OutcomeKind.Refused))
         {
-            return $"the kind is {actual.Kind}, not {OutcomeKind.Failed}";
+            return range.Kind == OutcomeKind.Refused ? null : $"{range}, but its rows are refused alone";
         }
 
-        List<Outcome> rows = rowFailures.ToList();
-        return rows.Exists(row => ExceptionDifference(row, actual) is null) ? null : $"the failure is the failure of none of its rows ({string.Join("; ", rows)})";
+        List<Outcome> failures = rowsAlone.Where(row => row.Kind == OutcomeKind.Failed).ToList();
+        if (failures.Count == 0)
+        {
+            return range.Kind is OutcomeKind.Values or OutcomeKind.Bytes ? null : $"{range}, but no row fails alone";
+        }
+
+        return range.Kind != OutcomeKind.Failed ? $"{range}, but {failures.Count} of its rows fail alone, for example: {failures[0]}"
+            : failures.Exists(row => FailureDifference(row, range, texts) is null) ? null
+            : $"{range} is the failure of none of its rows ({string.Join("; ", failures)})";
     }
+
+    /// <summary>Compares two failures by <paramref name="texts"/>.</summary>
+    /// <returns>Null when they are the same, otherwise the difference.</returns>
+    public static string FailureDifference(Outcome expected, Outcome actual, Texts texts)
+        => expected.ExceptionType != actual.ExceptionType ? $"the exception is {actual.ExceptionType.Name}, not {expected.ExceptionType.Name}"
+            : texts == Texts.TypeOnly || string.Equals(Mask(expected.Message, texts), Mask(actual.Message, texts), StringComparison.Ordinal) ? null
+            : $"the message is \"{actual.Message}\", not \"{expected.Message}\"";
 
     /// <inheritdoc/>
     public override string ToString()
@@ -138,10 +170,9 @@ internal sealed record Outcome(OutcomeKind Kind, Type ValueType = null, object[]
         return text.Length <= 400 ? text : text[..400] + " ...";
     }
 
-    private static string ExceptionDifference(Outcome expected, Outcome actual)
-        => expected.ExceptionType != actual.ExceptionType ? $"the exception is {actual.ExceptionType.Name}, not {expected.ExceptionType.Name}"
-            : string.Equals(expected.Message, actual.Message, StringComparison.Ordinal) ? null
-            : $"the message is \"{actual.Message}\", not \"{expected.Message}\"";
+    private static string ExceptionDifference(Outcome expected, Outcome actual) => FailureDifference(expected, actual, Texts.Exact);
+
+    private static string Mask(string message, Texts texts) => texts == Texts.NumbersMasked ? Regex.Replace(message ?? string.Empty, "[0-9]+", "#") : message;
 }
 
 /// <summary>

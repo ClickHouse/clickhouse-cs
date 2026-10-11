@@ -198,13 +198,14 @@ placeholder, the `Nullable` case is where that gets proven.
 
 **The differential tests (`Differential/`) run every case through every tier, offline.** Their case list is every
 `InsertRoundTripCase` case, `CompositeLiftMatrixTests.Cases()`, a table of column types with read targets, and the read
-scenarios in `DifferentialCases`. For each case they read through `Block.ReadAs<T>` and POCO mapping (both
+and failure scenarios in `DifferentialCases`. For each case they read through `Block.ReadAs<T>` and POCO mapping (both
 tiers), write through the insert plan and the row inserts, and check that the tiers agree: `CanRead` and `CanWrite`
 agree with the reads and the inserts, a decoded column writes the bytes that it was read from, and a slice that starts
-after row 0 writes the values of its rows. When several rows fail, a tier can throw the failure of any one of them, so
-a failure must be the failure of one of its rows read or written alone. A new `InsertRoundTripCase` case is a
-differential case too; the tests pin the number of cases and the answers of `CanRead` and `CanWrite` over them, so a new
-case changes those counts.
+after row 0 writes the values of its rows. Every tier and range follows one rule: a read or a write fails exactly when
+one of its rows fails alone, with the failure of one of those rows (when several rows fail, a tier can throw the failure
+of any one of them), and else gives the values of its rows. A new `InsertRoundTripCase` case is a differential case
+too; the tests pin the number of cases and the answers of `CanRead` and `CanWrite` over them, so a new case changes those
+counts.
 
 **A codec unit test asserts only what the wire layer does:**
 
