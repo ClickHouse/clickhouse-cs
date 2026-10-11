@@ -48,7 +48,7 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool CanWrite(IColumn column) => column is DateTimeColumn;
+    public bool WritesFromStorage(IColumn column) => column is DateTimeColumn;
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)

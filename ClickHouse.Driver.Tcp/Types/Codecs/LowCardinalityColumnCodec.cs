@@ -105,7 +105,7 @@ internal static class LowCardinalityWire
 /// <para>
 /// Each Native block ships a self-contained, block-local dictionary. There is no cross-block dictionary state,
 /// so the codec keeps none. Cached <see cref="ILowCardinalityShape"/> instances handle typed columns. The codec writes
-/// a decoded column only (<see cref="CanWrite"/>), with its dictionary and keys; the converter layer interns every
+/// a decoded column only (<see cref="WritesFromStorage"/>), with its dictionary and keys; the converter layer interns every
 /// other column into a dictionary.
 /// </para>
 /// </summary>
@@ -337,8 +337,8 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // A decoded LowCardinality column whose dictionary the inner codec writes.
-    public bool CanWrite(IColumn column)
-        => shape.CanWrite(column) && inner.CanWrite(((ILowCardinalityColumn)column).Dictionary);
+    public bool WritesFromStorage(IColumn column)
+        => shape.WritesFromStorage(column) && inner.WritesFromStorage(((ILowCardinalityColumn)column).Dictionary);
 
     /// <inheritdoc/>
     // The prefix is a fixed version marker.

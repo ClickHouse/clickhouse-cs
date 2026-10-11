@@ -43,7 +43,7 @@ public class InsertColumnWriteTests
 
         InsertColumnWrite write = InsertColumnWrite.For(codec, decoded, type, ConverterHarness.Context, ConverterDerivation.Default);
 
-        Assert.That(codec.CanWrite(decoded), Is.True);
+        Assert.That(codec.WritesFromStorage(decoded), Is.True);
         Assert.That(Convert.ToHexString(await WriteAsync(write, decoded, 0, rows)), Is.EqualTo(Convert.ToHexString(wire)));
     }
 
@@ -60,7 +60,7 @@ public class InsertColumnWriteTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(column), Is.False);
+            Assert.That(codec.WritesFromStorage(column), Is.False);
             Assert.That(InsertColumnWrite.For(codec, column, "LowCardinality(String)", ConverterHarness.Context, ConverterDerivation.Default), Is.Not.Null);
         });
     }
@@ -113,7 +113,7 @@ public class InsertColumnWriteTests
 
         Assert.Multiple(async () =>
         {
-            Assert.That(codec.CanWrite(column), Is.False);
+            Assert.That(codec.WritesFromStorage(column), Is.False);
             Assert.That(
                 Convert.ToHexString(await WriteAsync(write, column, 1, 2)),
                 Is.EqualTo(Convert.ToHexString(await ConverterHarness.WriteNewAsync(ConverterDerivation.Default.Writer<DateTimeOffset[]>(type, ConverterHarness.Context), rows, 1, 2))));

@@ -196,7 +196,7 @@ internal sealed class NestedColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // The only column that the codec writes is its own decoded column, whose field columns the field codecs write.
-    public bool CanWrite(IColumn column)
+    public bool WritesFromStorage(IColumn column)
     {
         if (column is not NestedColumn nested || nested.FieldCount != children.Length)
         {
@@ -205,7 +205,7 @@ internal sealed class NestedColumnCodec : IColumnCodec
 
         for (int i = 0; i < children.Length; i++)
         {
-            if (!children[i].CanWrite(nested.GetField(i)))
+            if (!children[i].WritesFromStorage(nested.GetField(i)))
             {
                 return false;
             }

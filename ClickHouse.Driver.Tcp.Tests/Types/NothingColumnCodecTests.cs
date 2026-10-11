@@ -37,7 +37,7 @@ public class NothingColumnCodecTests
     // Nothing has no storage that a write can take: the codec does not write even the column that its read gives, and
     // the converter layer refuses every write of the type.
     [Test]
-    public async Task CanWrite_DecodedColumn_IsFalseAndTheInsertRefusesTheColumn()
+    public async Task WritesFromStorage_DecodedColumn_IsFalseAndTheInsertRefusesTheColumn()
     {
         using var reader = ReaderOver(new byte[] { 0 });
         IColumnCodec codec = NothingColumnCodec.Instance;
@@ -45,7 +45,7 @@ public class NothingColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(decoded), Is.False);
+            Assert.That(codec.WritesFromStorage(decoded), Is.False);
             Assert.Throws<InvalidOperationException>(() => InsertWrite(codec, decoded, "Nothing", ResolveContext.ForWrite));
             Assert.ThrowsAsync<NotSupportedException>(() => WriteAsync(w => codec.WriteColumn(w, decoded, 0, 1, null)));
         });

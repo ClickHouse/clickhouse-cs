@@ -136,7 +136,7 @@ public class VariantColumnCodecTests
     // the codec of each alternative writes the child column from its storage. An insert gives each other column to the
     // converter layer.
     [Test]
-    public void CanWrite_DenseColumn_IsTrueOnlyForTheSameAlternativesWithStoredChildren()
+    public void WritesFromStorage_DenseColumn_IsTrueOnlyForTheSameAlternativesWithStoredChildren()
     {
         IColumnCodec codec = Resolve(StringUInt64);
         using IColumn text = DecodedColumns.Of("v", "String", "hi");
@@ -155,9 +155,9 @@ public class VariantColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(same), Is.True, "the decoded children in the order of the type");
-            Assert.That(codec.CanWrite(otherOrder), Is.False, "the same alternatives in another order");
-            Assert.That(codec.CanWrite(callerChild), Is.False, "a child column that the caller built");
+            Assert.That(codec.WritesFromStorage(same), Is.True, "the decoded children in the order of the type");
+            Assert.That(codec.WritesFromStorage(otherOrder), Is.False, "the same alternatives in another order");
+            Assert.That(codec.WritesFromStorage(callerChild), Is.False, "a child column that the caller built");
         });
     }
 

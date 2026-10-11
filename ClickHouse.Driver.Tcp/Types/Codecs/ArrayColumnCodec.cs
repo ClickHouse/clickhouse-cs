@@ -66,7 +66,7 @@ internal static class ArrayColumnCodec
 /// <see cref="ArrayValueColumn{TElement}"/> and slice inner values without boxing; the registry pipeline is
 /// non-generic, so <see cref="ArrayColumnCodec"/> closes this over the inner codec's runtime element type. The
 /// inner codec stays non-generic (<see cref="IColumnCodec"/>), so its column is cast to <c>IColumn&lt;TElement&gt;</c>
-/// once at the read boundary. The codec writes a dense column only (<see cref="CanWrite"/>): its offsets, rebased to
+/// once at the read boundary. The codec writes a dense column only (<see cref="WritesFromStorage"/>): its offsets, rebased to
 /// the slice, then its inner column through the inner codec, with no copy. The converter layer writes every other
 /// column.
 /// </para>
@@ -185,7 +185,7 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
 
     /// <inheritdoc/>
     // A dense array whose inner column the inner codec writes.
-    public bool CanWrite(IColumn column) => column is IDenseArrayColumn dense && inner.CanWrite(dense.Inner);
+    public bool WritesFromStorage(IColumn column) => column is IDenseArrayColumn dense && inner.WritesFromStorage(dense.Inner);
 
     /// <inheritdoc/>
     // The range of the elements of the slice, and the state of the inner write.

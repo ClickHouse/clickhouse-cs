@@ -62,7 +62,7 @@ internal sealed class FixedWidthColumnCodec<T> : IColumnCodec
 
     /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool CanWrite(IColumn column) => column is PrimitiveColumn<T>;
+    public bool WritesFromStorage(IColumn column) => column is PrimitiveColumn<T>;
 
     /// <inheritdoc/>
     // The stored bytes are the wire bytes, so the slice is one copy.

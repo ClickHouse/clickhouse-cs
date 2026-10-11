@@ -71,7 +71,7 @@ internal sealed class JsonStringColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool CanWrite(IColumn column) => column is StringColumn;
+    public bool WritesFromStorage(IColumn column) => column is StringColumn;
 
     /// <inheritdoc/>
     // The prefix is a fixed version marker, independent of the data; the column/slice is unused.

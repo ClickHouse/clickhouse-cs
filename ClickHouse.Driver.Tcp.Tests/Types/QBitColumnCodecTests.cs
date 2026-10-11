@@ -227,16 +227,16 @@ public class QBitColumnCodecTests
     [TestCase(Float32X4, "QBit(Float64, 4)", false)]
     [TestCase("QBit(Int8, 4)", "QBit(Int8, 4)", true)]
     [TestCase("QBit(Int8, 4)", Float32X4, false)]
-    public async Task CanWrite_DecodedColumn_IsTrueOnlyForTheSameLayout(string codecType, string columnType, bool expected)
+    public async Task WritesFromStorage_DecodedColumn_IsTrueOnlyForTheSameLayout(string codecType, string columnType, bool expected)
     {
         using IColumn decoded = await DecodedRowAsync(columnType);
 
-        Assert.That(Codec(codecType).CanWrite(decoded), Is.EqualTo(expected));
+        Assert.That(Codec(codecType).WritesFromStorage(decoded), Is.EqualTo(expected));
     }
 
     // An insert gives the vectors that a caller builds to the converter layer.
     [Test]
-    public void CanWrite_ColumnThatTheCallerBuilt_IsFalse()
+    public void WritesFromStorage_ColumnThatTheCallerBuilt_IsFalse()
     {
         using var floats = new ArrayColumn<float[]>("v", Float32X4, new[] { new[] { 1f, 2f, 3f, 4f } });
         using var bytes = new ArrayColumn<sbyte[]>("v", "QBit(Int8, 4)", new[] { new sbyte[4] });
@@ -244,9 +244,9 @@ public class QBitColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(Codec(Float32X4).CanWrite(floats), Is.False);
-            Assert.That(Codec("QBit(Int8, 4)").CanWrite(bytes), Is.False);
-            Assert.That(Codec(Float32X4).CanWrite(scalars), Is.False);
+            Assert.That(Codec(Float32X4).WritesFromStorage(floats), Is.False);
+            Assert.That(Codec("QBit(Int8, 4)").WritesFromStorage(bytes), Is.False);
+            Assert.That(Codec(Float32X4).WritesFromStorage(scalars), Is.False);
         });
     }
 

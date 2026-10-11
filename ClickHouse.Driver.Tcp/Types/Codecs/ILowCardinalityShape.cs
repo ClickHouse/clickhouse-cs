@@ -32,5 +32,5 @@ internal interface ILowCardinalityShape
     /// </summary>
     /// <param name="column">The column to test.</param>
     /// <returns>Whether the column is a decoded column of this shape.</returns>
-    bool CanWrite(IColumn column);
+    bool WritesFromStorage(IColumn column);
 }

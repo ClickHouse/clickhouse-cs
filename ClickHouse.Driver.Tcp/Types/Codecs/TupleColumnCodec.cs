@@ -22,7 +22,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </para>
 ///
 /// <para>
-/// The codec writes a dense <c>TupleColumn</c> only (<see cref="CanWrite"/>): each child column through its child
+/// The codec writes a dense <c>TupleColumn</c> only (<see cref="WritesFromStorage"/>): each child column through its child
 /// codec, with no copy. The converter layer writes every other column.
 /// </para>
 /// </summary>
@@ -183,7 +183,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // A tuple of this element type whose child columns the child codecs write from their storage.
-    public bool CanWrite(IColumn column)
+    public bool WritesFromStorage(IColumn column)
     {
         if (column is not ITupleColumn dense || !icolumnOfTupleType.IsInstanceOfType(column) || dense.Children.Count != children.Length)
         {
@@ -192,7 +192,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
 
         for (int i = 0; i < children.Length; i++)
         {
-            if (!children[i].CanWrite(dense.Children[i]))
+            if (!children[i].WritesFromStorage(dense.Children[i]))
             {
                 return false;
             }

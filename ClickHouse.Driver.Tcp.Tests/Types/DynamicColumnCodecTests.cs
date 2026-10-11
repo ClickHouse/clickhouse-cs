@@ -184,7 +184,7 @@ public class DynamicColumnCodecTests
     /// column from its storage: a type column that a caller builds goes to the converter layer with the whole column.
     /// </summary>
     [Test]
-    public void CanWrite_DynamicColumnWithATypeColumnThatACallerBuilt_IsFalse()
+    public void WritesFromStorage_DynamicColumnWithATypeColumnThatACallerBuilt_IsFalse()
     {
         IColumnCodec codec = Resolve("Dynamic");
         IColumn decodedText = DecodedColumns.Of("d", "String", "a");
@@ -195,8 +195,8 @@ public class DynamicColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(stored), Is.True, "every type column is a decoded column");
-            Assert.That(codec.CanWrite(built), Is.False, "the String column is a caller's ArrayColumn");
+            Assert.That(codec.WritesFromStorage(stored), Is.True, "every type column is a decoded column");
+            Assert.That(codec.WritesFromStorage(built), Is.False, "the String column is a caller's ArrayColumn");
         });
     }
 

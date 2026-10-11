@@ -141,7 +141,7 @@ public class LowCardinalityColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_DictionaryThatTheInnerCodecDoesNotWrite_IsFalse()
+    public void WritesFromStorage_DictionaryThatTheInnerCodecDoesNotWrite_IsFalse()
     {
         // The codec writes the dictionary through the String codec, which writes a decoded String column only.
         IColumnCodec codec = Resolve("LowCardinality(String)");
@@ -151,8 +151,8 @@ public class LowCardinalityColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(decoded), Is.True);
-            Assert.That(codec.CanWrite(callerDictionary), Is.False, "the dictionary is an ArrayColumn<string>");
+            Assert.That(codec.WritesFromStorage(decoded), Is.True);
+            Assert.That(codec.WritesFromStorage(callerDictionary), Is.False, "the dictionary is an ArrayColumn<string>");
         });
     }
 
@@ -339,7 +339,7 @@ public class LowCardinalityColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_NullableInnerAndDecodedColumnWithoutTheNullSlot_IsFalse()
+    public void WritesFromStorage_NullableInnerAndDecodedColumnWithoutTheNullSlot_IsFalse()
     {
         // The dictionary of LowCardinality(T) has one reserved slot. LowCardinality(Nullable(T)) reads key 0 as NULL,
         // so its codec writes only a decoded column of its own type.
@@ -352,10 +352,10 @@ public class LowCardinalityColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(reference.CanWrite(nullableStrings), Is.True);
-            Assert.That(reference.CanWrite(strings), Is.False, "a decoded LowCardinality(String) column has no NULL slot");
-            Assert.That(value.CanWrite(nullableNumbers), Is.True);
-            Assert.That(value.CanWrite(numbers), Is.False, "a decoded LowCardinality(UInt32) column has no NULL slot");
+            Assert.That(reference.WritesFromStorage(nullableStrings), Is.True);
+            Assert.That(reference.WritesFromStorage(strings), Is.False, "a decoded LowCardinality(String) column has no NULL slot");
+            Assert.That(value.WritesFromStorage(nullableNumbers), Is.True);
+            Assert.That(value.WritesFromStorage(numbers), Is.False, "a decoded LowCardinality(UInt32) column has no NULL slot");
         });
     }
 

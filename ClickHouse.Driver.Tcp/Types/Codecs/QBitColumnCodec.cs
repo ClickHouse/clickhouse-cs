@@ -105,7 +105,7 @@ internal abstract class QBitColumnCodec : IColumnCodec
     /// <inheritdoc/>
     // The decoded column of the same layout: the same element type, dimension and plane grouping. Equal body sizes do
     // not imply equal layouts.
-    public bool CanWrite(IColumn column)
+    public bool WritesFromStorage(IColumn column)
         => column is QBitColumn dense
             && dense.Dimension == Dimension
             && dense.BitWidth == BitWidth

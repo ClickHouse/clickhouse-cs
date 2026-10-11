@@ -51,7 +51,7 @@ public class NullableColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(dense), Is.True, "the codec writes the column from its storage");
+            Assert.That(codec.WritesFromStorage(dense), Is.True, "the codec writes the column from its storage");
             Assert.That(dense.RowCount, Is.EqualTo(3), "the row count comes from the inner column, not a separate argument");
             Assert.That(((IColumn<int?>)read).Values.ToArray(), Is.EqualTo(new int?[] { 7, null, 9 }));
         });
@@ -113,7 +113,7 @@ public class NullableColumnCodecTests
     }
 
     [Test]
-    public async Task CanWrite_NullableNothing_ReturnsFalse()
+    public async Task WritesFromStorage_NullableNothing_ReturnsFalse()
     {
         // The Nothing codec writes no column. Thus the Nullable(Nothing) codec does not write the column that it
         // reads.
@@ -121,7 +121,7 @@ public class NullableColumnCodecTests
         using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(new byte[] { 1, 1, 0, 0 });
         using IColumn decoded = await codec.ReadColumnAsync(reader, "c", "Nullable(Nothing)", 2, CodecTestHarness.None);
 
-        Assert.That(codec.CanWrite(decoded), Is.False);
+        Assert.That(codec.WritesFromStorage(decoded), Is.False);
     }
 
     [Test]

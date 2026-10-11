@@ -63,7 +63,7 @@ internal sealed class EmptyTupleColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool CanWrite(IColumn column) => column is ArrayColumn<ValueTuple>;
+    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<ValueTuple>;
 
     /// <inheritdoc/>
     // The rows hold no data: each is one placeholder byte.

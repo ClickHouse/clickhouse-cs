@@ -60,7 +60,7 @@ internal sealed class IPv4ColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool CanWrite(IColumn column) => column is ArrayColumn<IPAddress>;
+    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<IPAddress>;
 
     /// <inheritdoc/>
     // The decoded column holds the addresses: their wire values are written a chunk at a time.
@@ -138,7 +138,7 @@ internal sealed class IPv6ColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool CanWrite(IColumn column) => column is ArrayColumn<IPAddress>;
+    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<IPAddress>;
 
     /// <inheritdoc/>
     // The wire form is the 16 network-order bytes verbatim. The decoded column holds the addresses: their 16 bytes are

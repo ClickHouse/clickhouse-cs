@@ -495,7 +495,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
                 PrimitiveColumn<ulong>.FromValues("value", "UInt64", new ulong[] { 100, 200, 300 }),
             };
             var dense = new VariantColumn("value", "Variant(String, UInt64)", discriminators, typeColumns, expected.Length, pooledDiscriminators: false, ownsColumns: false);
-            Assert.That(ColumnCodecRegistry.Default.Resolve("Variant(String, UInt64)", default).CanWrite(dense), Is.True, "the codec writes the column from its storage");
+            Assert.That(ColumnCodecRegistry.Default.Resolve("Variant(String, UInt64)", default).WritesFromStorage(dense), Is.True, "the codec writes the column from its storage");
 
             IColumn[] columns = { PrimitiveColumn<uint>.FromValues("id", "UInt32", RowIds(expected.Length)), dense };
             await connection.InsertAsync($"INSERT INTO {table} (id, value) VALUES", columns, maxRowsPerBlock: 2, settings: settings, cancellationToken: None);
@@ -649,7 +649,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
                 expected.Length,
                 pooledDiscriminators: false,
                 ownsColumns: false);
-            Assert.That(ColumnCodecRegistry.Default.Resolve("Dynamic", default).CanWrite(dense), Is.True, "the codec writes the column from its storage");
+            Assert.That(ColumnCodecRegistry.Default.Resolve("Dynamic", default).WritesFromStorage(dense), Is.True, "the codec writes the column from its storage");
 
             IColumn[] columns = { PrimitiveColumn<uint>.FromValues("id", "UInt32", RowIds(expected.Length)), dense };
             await connection.InsertAsync(

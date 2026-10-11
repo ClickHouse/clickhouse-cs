@@ -11,7 +11,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Utilities;
 /// <summary>
 /// Shared write/read plumbing for the per-codec unit tests: encode to a buffer, then read it back. A write goes the way
 /// that an insert writes a column (<see cref="InsertColumnWrite.For"/>): the codec writes a column from its storage
-/// (<see cref="IColumnCodec.CanWrite"/>), and the converter tree of the column's CLR type writes any other column.
+/// (<see cref="IColumnCodec.WritesFromStorage"/>), and the converter tree of the column's CLR type writes any other column.
 /// <see cref="WriteStoredAsync"/> writes through the codec only.
 /// </summary>
 internal static class CodecTestHarness
@@ -131,7 +131,7 @@ internal static class CodecTestHarness
     /// </summary>
     public static Task<byte[]> WriteStoredAsync(IColumnCodec codec, IColumn column, int start, int length, bool prefix = false)
     {
-        Assert.That(codec.CanWrite(column), Is.True, $"the {codec.TypeName} codec writes the {column.GetType().Name} from its storage");
+        Assert.That(codec.WritesFromStorage(column), Is.True, $"the {codec.TypeName} codec writes the {column.GetType().Name} from its storage");
         return WriteAsync(w =>
         {
             IColumnWriteState state = codec.BeginWrite(column, start, length);

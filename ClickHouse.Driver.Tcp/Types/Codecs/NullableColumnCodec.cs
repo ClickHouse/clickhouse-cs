@@ -20,7 +20,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </para>
 ///
 /// <para>
-/// The codec writes the decoded column only (<see cref="CanWrite"/>): its null map, then its inner column through the
+/// The codec writes the decoded column only (<see cref="WritesFromStorage"/>): its null map, then its inner column through the
 /// inner codec. The converter layer writes every other column.
 /// </para>
 /// </summary>
@@ -115,12 +115,12 @@ internal sealed class NullableColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // A decoded Nullable column: the null map and the inner column that the inner codec writes.
-    public bool CanWrite(IColumn column)
+    public bool WritesFromStorage(IColumn column)
     {
         Type type = column.GetType();
         return type.IsGenericType
             && (type.GetGenericTypeDefinition() == typeof(NullableValueColumn<>) || type.GetGenericTypeDefinition() == typeof(NullableReferenceColumn<>))
-            && inner.CanWrite(((INullableColumn)column).Inner);
+            && inner.WritesFromStorage(((INullableColumn)column).Inner);
     }
 
     /// <inheritdoc/>

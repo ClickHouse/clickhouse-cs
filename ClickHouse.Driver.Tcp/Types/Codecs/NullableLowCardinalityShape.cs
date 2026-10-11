@@ -15,7 +15,7 @@ internal abstract class NullableLowCardinalityShape<T> : ILowCardinalityShape
     public abstract IColumn Wrap(string name, string typeName, IColumn dictionary, int[] keys, int rowCount, bool pooledKeys);
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is IDenseLowCardinality<T>;
+    public bool WritesFromStorage(IColumn column) => column is IDenseLowCardinality<T>;
 }
 
 /// <summary>The nullable bridge for a value-type inner: the column surfaces <c>T?</c>.</summary>
