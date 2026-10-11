@@ -131,6 +131,22 @@ public class TupleFieldValueTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task GetFieldValue_JaggedArrayOfValueTuples_ReturnsJaggedArray()
+    {
+        var value = await ReadFieldAsync<(int, string)[][]>(
+            "SELECT [[tuple(toInt32(1), 'a')], [tuple(toInt32(2), 'b'), tuple(toInt32(3), 'c')]]");
+        Assert.That(value, Is.EqualTo(new[] { new[] { (1, "a") }, new[] { (2, "b"), (3, "c") } }));
+    }
+
+    [Test]
+    public void GetFieldValue_RectangularArrayOfValueTuples_ThrowsInvalidCastException()
+    {
+        // A rectangular target takes the multidimensional array path, which casts each element and does not convert it.
+        Assert.ThrowsAsync<InvalidCastException>(() =>
+            ReadFieldAsync<(int, string)[,]>("SELECT [[tuple(toInt32(1), 'a')], [tuple(toInt32(2), 'b')]]"));
+    }
+
+    [Test]
     public async Task GetFieldValue_WideTupleColumnAcrossRows_ReturnsEachRow()
     {
         using var reader = await client.ExecuteReaderAsync(

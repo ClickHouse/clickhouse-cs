@@ -10,25 +10,23 @@ namespace ClickHouse.Driver.Benchmark;
 
 /// <summary>
 /// Reading a <c>Tuple(...)</c> column into a <see cref="ValueTuple"/> through <c>GetFieldValue&lt;T&gt;</c>, against
-/// the hand-written alternative: <c>GetValue</c>, a cast to <see cref="ITuple"/> and a cast per element.
+/// the hand-written alternative: <c>GetValue</c>, a cast to <see cref="ITuple"/> and a cast per element. Each shape is
+/// a class of its own, so each <c>GetFieldValue</c> row is compared with the manual cast of the same shape.
 ///
 /// <list type="bullet">
-/// <item><c>Wide*</c> — ten elements, read from an object[]-backed tuple through the <c>TRest</c> chain.</item>
-/// <item><c>Small*</c> — two elements, where the converter copies the typed <c>System.Tuple</c> properties.</item>
-/// <item><c>Array*</c> — an <c>Array</c> of ten-element tuples, ten per row.</item>
+/// <item><see cref="TupleReadWideBenchmark"/> — ten elements, read from an object[]-backed tuple through the <c>TRest</c> chain.</item>
+/// <item><see cref="TupleReadSmallBenchmark"/> — two elements, where the converter copies the typed <c>System.Tuple</c> properties.</item>
+/// <item><see cref="TupleReadArrayBenchmark"/> — an <c>Array</c> of ten-element tuples, ten per row.</item>
 /// </list>
 /// </summary>
-[BenchmarkCategory(BenchmarkCategories.HttpInvestigation)]
-[Config(typeof(ComparisonConfig))]
-[MemoryDiagnoser(true)]
-public class TupleReadBenchmark
+public abstract class TupleReadBenchmark
 {
-    private const string WideTuple =
+    protected const string WideTuple =
         "tuple(toInt32(number), toInt64(number), toInt64(2), toInt64(3), toInt64(4), toInt32(5), " +
         "toDate('2025-01-15'), toDate('2025-01-31'), toDate('2025-02-01'), toInt8(1))";
 
-    private readonly Consumer consumer = new();
-    private ClickHouseConnection connection;
+    protected readonly Consumer consumer = new();
+    protected ClickHouseConnection connection;
 
     [Params(100000)]
     public int Count { get; set; }
@@ -43,8 +41,18 @@ public class TupleReadBenchmark
     [GlobalCleanup]
     public void Cleanup() => connection?.Dispose();
 
+    protected static (int, long, long, long, long, int, DateTime, DateTime, DateTime, sbyte) FromTuple(ITuple tuple) =>
+        ((int)tuple[0], (long)tuple[1], (long)tuple[2], (long)tuple[3], (long)tuple[4], (int)tuple[5],
+            (DateTime)tuple[6], (DateTime)tuple[7], (DateTime)tuple[8], (sbyte)tuple[9]);
+}
+
+[BenchmarkCategory(BenchmarkCategories.HttpInvestigation)]
+[Config(typeof(ComparisonConfig))]
+[MemoryDiagnoser(true)]
+public class TupleReadWideBenchmark : TupleReadBenchmark
+{
     [Benchmark(Baseline = BenchmarkModes.MethodBaseline)]
-    public async Task Wide_ManualCast()
+    public async Task ManualCast()
     {
         using var reader = await connection.ExecuteReaderAsync($"SELECT {WideTuple} FROM system.numbers LIMIT {Count}");
         while (reader.Read())
@@ -52,15 +60,21 @@ public class TupleReadBenchmark
     }
 
     [Benchmark]
-    public async Task Wide_GetFieldValue()
+    public async Task GetFieldValue()
     {
         using var reader = await connection.ExecuteReaderAsync($"SELECT {WideTuple} FROM system.numbers LIMIT {Count}");
         while (reader.Read())
             consumer.Consume(reader.GetFieldValue<(int, long, long, long, long, int, DateTime, DateTime, DateTime, sbyte)>(0));
     }
+}
 
-    [Benchmark]
-    public async Task Small_ManualCast()
+[BenchmarkCategory(BenchmarkCategories.HttpInvestigation)]
+[Config(typeof(ComparisonConfig))]
+[MemoryDiagnoser(true)]
+public class TupleReadSmallBenchmark : TupleReadBenchmark
+{
+    [Benchmark(Baseline = BenchmarkModes.MethodBaseline)]
+    public async Task ManualCast()
     {
         using var reader = await connection.ExecuteReaderAsync($"SELECT tuple(toInt32(number), toInt64(number)) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
@@ -71,15 +85,24 @@ public class TupleReadBenchmark
     }
 
     [Benchmark]
-    public async Task Small_GetFieldValue()
+    public async Task GetFieldValue()
     {
         using var reader = await connection.ExecuteReaderAsync($"SELECT tuple(toInt32(number), toInt64(number)) FROM system.numbers LIMIT {Count}");
         while (reader.Read())
             consumer.Consume(reader.GetFieldValue<(int, long)>(0));
     }
+}
 
-    [Benchmark]
-    public async Task Array_ManualCast()
+[BenchmarkCategory(BenchmarkCategories.HttpInvestigation)]
+[Config(typeof(ComparisonConfig))]
+[MemoryDiagnoser(true)]
+public class TupleReadArrayBenchmark : TupleReadBenchmark
+{
+    private string ArraySql =>
+        $"SELECT groupArray({WideTuple}) FROM (SELECT number FROM system.numbers LIMIT {Count}) GROUP BY intDiv(number, 10)";
+
+    [Benchmark(Baseline = BenchmarkModes.MethodBaseline)]
+    public async Task ManualCast()
     {
         using var reader = await connection.ExecuteReaderAsync(ArraySql);
         while (reader.Read())
@@ -93,17 +116,10 @@ public class TupleReadBenchmark
     }
 
     [Benchmark]
-    public async Task Array_GetFieldValue()
+    public async Task GetFieldValue()
     {
         using var reader = await connection.ExecuteReaderAsync(ArraySql);
         while (reader.Read())
             consumer.Consume(reader.GetFieldValue<(int, long, long, long, long, int, DateTime, DateTime, DateTime, sbyte)[]>(0));
     }
-
-    private string ArraySql =>
-        $"SELECT groupArray({WideTuple}) FROM (SELECT number FROM system.numbers LIMIT {Count}) GROUP BY intDiv(number, 10)";
-
-    private static (int, long, long, long, long, int, DateTime, DateTime, DateTime, sbyte) FromTuple(ITuple tuple) =>
-        ((int)tuple[0], (long)tuple[1], (long)tuple[2], (long)tuple[3], (long)tuple[4], (int)tuple[5],
-            (DateTime)tuple[6], (DateTime)tuple[7], (DateTime)tuple[8], (sbyte)tuple[9]);
 }

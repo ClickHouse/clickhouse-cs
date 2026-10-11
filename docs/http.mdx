@@ -549,10 +549,11 @@ while (reader.Read())
 
 #### Reading tuples as typed values {#reading-tuples}
 
-`GetValue` returns a `Tuple(...)` column as `System.Tuple<...>` (up to 7 elements) or as an `ITuple`
-(more than 7). `GetFieldValue<T>` can also return it as a C# `ValueTuple` of any length, or as a
-`System.Tuple` of more than 7 elements, whose last type argument holds the remaining elements. The
-same works for an array of tuples and for a tuple nested in another tuple:
+`GetValue` returns a `Tuple(...)` column as `System.Tuple<...>` (1 to 7 elements) or as an `ITuple`
+(an empty `Tuple()`, or more than 7 elements). `GetFieldValue<T>` can also return it as a C#
+`ValueTuple` of any length, or as a `System.Tuple` of more than 7 elements, whose last type argument
+holds the remaining elements. The same works for a one-dimensional or jagged array of tuples (`T[]`,
+`T[][]`) and for a tuple nested in another tuple:
 
 ```csharp
 var reader = await client.ExecuteReaderAsync(@"
@@ -574,7 +575,9 @@ more than 7 elements must itself be a `System.Tuple`, as the `System.Tuple` cons
 target that mixes the two kinds there, such as `Tuple<int, int, int, int, int, int, int, (int, string)>`,
 throws `InvalidCastException` whatever the data. Read such a column as a `ValueTuple` instead. A
 nullable `ValueTuple` such as `(int, string)?` is not converted: a non-NULL value throws
-`InvalidCastException`.
+`InvalidCastException`. Neither is a rectangular array such as `(int, string)[,]`: it takes the
+[multidimensional array](#clickhouse-native-type-map-reading) path, which casts each element, so a
+`ValueTuple` element throws `InvalidCastException`. Read such a column as a jagged array instead.
 
 Each element is cast to its target type the same way `GetFieldValue<T>` casts a whole column, from
 the element's [framework type](#clickhouse-native-type-map-reading): an `Int32` element reads as
