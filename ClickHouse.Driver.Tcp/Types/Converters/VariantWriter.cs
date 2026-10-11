@@ -27,6 +27,8 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 internal sealed class VariantWriter : ColumnWriter<object>
 {
     // The placements of the CLR types that the writes meet. The writer is cached and shared, so the cache has a limit.
+    // The count check does not lock. Each call adds one entry at most after its check, so the cache can pass the limit
+    // by fewer entries than the number of calls that run at the same time.
     internal const int MaxCachedPlacements = 1024;
 
     private readonly string typeName;
