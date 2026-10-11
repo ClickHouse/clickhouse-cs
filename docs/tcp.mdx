@@ -530,6 +530,11 @@ read those values. The block keeps one view for each column and type, so a secon
 view. The view is valid only while the block is: the block releases the converted values when the
 enumeration advances. Reading one row of a view converts all of its rows, so read `Values` once into a local.
 
+A value that has no reading as `T` makes the first access throw. When several values of a column
+have no reading, the exception is the failure of one of them, which can differ between `ReadAs<T>`
+and `QueryAsync<T>`; a message that names a row names the row of that value. A `LowCardinality`
+dictionary entry that has no reading fails a read only when a row of the read uses it.
+
 A column reads as the types in the [reading tables](#type-map-reading). In addition, these rules apply to
 the whole column type, the same as in `QueryAsync<T>` POCO mapping:
 
@@ -598,7 +603,9 @@ insert completes before that block is released.
   [write rules](#write-rules). `ClickHouseTcpTypes.CanWrite` gives the answer of this conversion. A
   value that the target type cannot hold (a text that is too long for a `FixedString(N)`, a decimal
   past its precision, a `NULL` in a column that cannot hold it) is refused with its row, and the
-  insert stops. The insert then closes its connection; the next operation uses another one.
+  insert stops. When several values are refused, the message names one of them, which can differ
+  between `InsertAsync` and the row inserts. The insert then closes its connection; the next
+  operation uses another one.
   An array column that `ClickHouseTcpColumn.CreateArray` builds over a column of your own is written
   as its offsets and its inner column, which is converted in the same way, with no copy of the
   rows into arrays.
