@@ -34,12 +34,6 @@ internal enum Texts
     /// <summary>The exception type and the message.</summary>
     Exact,
 
-    /// <summary>
-    /// The exception type, and the message with every number masked: a failure of a row insert names the row of its block,
-    /// which is not the row of the insert in a block that starts after row 0.
-    /// </summary>
-    NumbersMasked,
-
     /// <summary>The exception type only: two tiers that word the same failure in their own terms.</summary>
     TypeOnly,
 }
@@ -152,8 +146,26 @@ internal sealed record Outcome(OutcomeKind Kind, Type ValueType = null, object[]
     /// <returns>Null when they are the same, otherwise the difference.</returns>
     public static string FailureDifference(Outcome expected, Outcome actual, Texts texts)
         => expected.ExceptionType != actual.ExceptionType ? $"the exception is {actual.ExceptionType.Name}, not {expected.ExceptionType.Name}"
-            : texts == Texts.TypeOnly || string.Equals(Mask(expected.Message, texts), Mask(actual.Message, texts), StringComparison.Ordinal) ? null
+            : texts == Texts.TypeOnly || string.Equals(expected.Message, actual.Message, StringComparison.Ordinal) ? null
             : $"the message is \"{actual.Message}\", not \"{expected.Message}\"";
+
+    /// <summary>
+    /// A failure of a row insert, with the rows that its message names as rows of the source column. A row insert writes
+    /// each block from row 0, so a failure of the converter layer names the row ("row N") or the position ("index N") in
+    /// its block, which is row <paramref name="blockStart"/> + N of the source. A failure that the row insert finds when it
+    /// gathers a row names the row of the insert ("row N of the insert", "row N holds", "Row N"), which stays. An element
+    /// of an Array or a Map ("element N") has no row of its own, so that number alone is masked.
+    /// </summary>
+    /// <param name="outcome">The outcome of the row insert.</param>
+    /// <param name="blockStart">The row of the source that the block of the write starts at.</param>
+    /// <returns>The outcome, with the rows of the source in its message.</returns>
+    public static Outcome InSourceRows(Outcome outcome, int blockStart)
+        => outcome.Kind != OutcomeKind.Failed ? outcome : outcome with
+        {
+            Message = BlockPosition.Replace(outcome.Message, match => match.Groups["insert"].Success ? match.Value
+                : match.Groups["noun"].Value == "element" ? "element #"
+                : $"{match.Groups["noun"].Value} {blockStart + int.Parse(match.Groups["number"].Value, CultureInfo.InvariantCulture)}"),
+        };
 
     /// <inheritdoc/>
     public override string ToString()
@@ -170,9 +182,9 @@ internal sealed record Outcome(OutcomeKind Kind, Type ValueType = null, object[]
         return text.Length <= 400 ? text : text[..400] + " ...";
     }
 
-    private static string ExceptionDifference(Outcome expected, Outcome actual) => FailureDifference(expected, actual, Texts.Exact);
+    private static readonly Regex BlockPosition = new(@"\b(?<noun>row|index|element) (?<number>[0-9]+)(?<insert> of the insert| holds)?", RegexOptions.CultureInvariant);
 
-    private static string Mask(string message, Texts texts) => texts == Texts.NumbersMasked ? Regex.Replace(message ?? string.Empty, "[0-9]+", "#") : message;
+    private static string ExceptionDifference(Outcome expected, Outcome actual) => FailureDifference(expected, actual, Texts.Exact);
 }
 
 /// <summary>
