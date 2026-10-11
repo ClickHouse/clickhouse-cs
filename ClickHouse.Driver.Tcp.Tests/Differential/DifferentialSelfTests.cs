@@ -20,6 +20,10 @@ public class DifferentialSelfTests
     private const string LowCardinalityStringCase = "ColumnReadProjection: LowCardinality(String)";
     private const string OneRowArrayCase = "InsertRoundTrip: Array(Int16) [1 rows]";
 
+    // The bytes of the UInt8 case [0, 1, 128, 255], for all rows and for the tail [2, 4).
+    private static readonly byte[] UInt8Bytes = { 0, 1, 128, 255 };
+    private static readonly byte[] UInt8TailBytes = { 128, 255 };
+
     [Test]
     public void Run_CandidateThatReadsOtherValues_ReportsTheFirstDifferentValue()
     {
@@ -249,6 +253,34 @@ public class DifferentialSelfTests
         {
             Assert.That(report.Mismatches, Has.Some.Contains("Client.ReadAs already gives that").And.Contains("A deliberate change must differ from the reference."));
             Assert.That(report.Mismatches, Has.Some.Contains("Poco as ReadAs gives 5 values").And.Contains("the kind is Values, not Refused"));
+        });
+    }
+
+    [Test]
+    public void Run_DeclaredChangeOfTheTailOnly_ReportsNothing()
+    {
+        CaseReport report = RunWith(UInt8Case, r =>
+        {
+            r.Add(new TailExtraByteWriteArm(), expectedFacets: 1);
+            r.DeclareChange(UInt8Case, Tier.Write, "insert", Expectation.Bytes(UInt8Bytes, UInt8TailBytes.Append((byte)0xEE).ToArray()), "a test");
+        });
+
+        Assert.That(report.Mismatches, Is.Empty);
+    }
+
+    [Test]
+    public void Run_DeclaredChangeThatIsTheReferenceOutcomeForAllRowsAndTheTail_ReportsThatItIsNoChange()
+    {
+        CaseReport report = RunWith(UInt8Case, r =>
+        {
+            r.Add(new TailExtraByteWriteArm(), expectedFacets: 1);
+            r.DeclareChange(UInt8Case, Tier.Write, "insert", Expectation.Bytes(UInt8Bytes, UInt8TailBytes), "a test");
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Mismatches, Has.Some.Contains("Write[insert]: the deliberate change").And.Contains("already gives that").And.Contains("A deliberate change must differ from the reference."));
+            Assert.That(report.Mismatches, Has.Some.Contains("Write[insert] rows [2, 4): Tail extra byte gives 3 bytes"));
         });
     }
 
@@ -567,6 +599,30 @@ public class DifferentialSelfTests
             {
                 inner(writer, start, length);
                 writer.WriteByte(0xEE);
+            };
+        }
+    }
+
+    /// <summary>The client's write, then one more byte after a slice with a start above zero. Covers Write[insert] of the UInt8 case.</summary>
+    private sealed class TailExtraByteWriteArm : WriteArm
+    {
+        public TailExtraByteWriteArm()
+            : base("Tail extra byte")
+        {
+        }
+
+        public override bool Covers(Facet facet) => facet.Case.Id == UInt8Case && facet.Input.Label == "insert";
+
+        public override SliceWriter Bind<T>(IColumn<T> column, string columnType, ResolveContext context)
+        {
+            SliceWriter inner = ClientArms.Write.Bind(column, columnType, context);
+            return (writer, start, length) =>
+            {
+                inner(writer, start, length);
+                if (start > 0)
+                {
+                    writer.WriteByte(0xEE);
+                }
             };
         }
     }

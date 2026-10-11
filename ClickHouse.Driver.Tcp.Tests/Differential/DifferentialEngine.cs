@@ -544,10 +544,11 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
     private void CompareWithChange(Facet facet, DeliberateChange change, FacetResult result)
     {
         Expectation expected = change.ExpectationFor(facet);
-        if (result.Reference is not null && expected.Verify(result.Reference.All, Rows.All, tailCaseRow, this) is null)
+        if (result.Reference is not null && IsReferenceOutcome(expected, result.Reference))
         {
             mismatches.Add(
-                $"{facet}: the deliberate change '{change.Name}' expects {expected}, and {result.ReferenceArm.Name} already gives that ({result.Reference.All}). " +
+                $"{facet}: the deliberate change '{change.Name}' expects {expected}, and {result.ReferenceArm.Name} already gives that " +
+                $"({result.Reference.All}{(result.Reference.Tail is null ? string.Empty : $"; for the tail, {result.Reference.Tail}")}). " +
                 "A deliberate change must differ from the reference.");
         }
 
@@ -570,6 +571,11 @@ internal sealed class DifferentialEngine : IReferenceOutcomes
             }
         }
     }
+
+    // True when the expectation accepts the reference outcome of each row range that the facet has. A change of the
+    // tail only keeps the outcome of all rows.
+    private bool IsReferenceOutcome(Expectation expected, RangeOutcomes reference)
+        => new[] { Rows.All, Rows.Tail }.All(rows => reference.For(rows) is not { } outcome || expected.Verify(outcome, rows, tailCaseRow, this) is null);
 
     // Each outcome that the source test states must be the outcome of the reference, or of the first candidate when
     // the tier has no reference.
