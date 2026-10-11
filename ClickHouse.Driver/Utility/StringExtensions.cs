@@ -9,10 +9,10 @@ internal static class StringExtensions
     public static string Escape(this string str) => str.Replace("\\", "\\\\").Replace("\'", "\\\'").Replace("\n", "\\n").Replace("\t", "\\t");
 
     [SuppressMessage("Performance", "CA1865:Use char overload", Justification = "Not available in net462")]
-    public static string QuoteSingle(this string str) => str.StartsWith("'", StringComparison.InvariantCulture) && str.EndsWith("'", StringComparison.InvariantCulture) ? str : $"'{str}'";
+    public static string QuoteSingle(this string str) => $"'{str.Replace("'", "\\'")}'";
 
     [SuppressMessage("Performance", "CA1865:Use char overload", Justification = "Not available in net462")]
-    public static string QuoteDouble(this string str) => str.StartsWith("\"", StringComparison.InvariantCulture) && str.EndsWith("\"", StringComparison.InvariantCulture) ? str : $"\"{str}\"";
+    public static string QuoteDouble(this string str) => $"\"{str.Replace("\"", "\\\"")}\"";
 
     /// <summary>
     /// Appends a value prefixed with its length, so that a concatenation of appended values maps back to
@@ -26,7 +26,7 @@ internal static class StringExtensions
 
     /// <summary>
     /// Encloses column name in backticks (`). Escapes ` symbol if met inside name
-    /// Does nothing if column is already enclosed
+    /// The input is always treated as an unquoted column name.
     /// </summary>
     /// <param name="str">Column name</param>
     /// <returns>Backticked column name</returns>
@@ -34,8 +34,6 @@ internal static class StringExtensions
     {
         if (string.IsNullOrEmpty(str))
             return str;
-        if (str[0] == '`' && str[str.Length - 1] == '`')
-            return str; // Early return if already enclosed
 
         var builder = new StringBuilder();
         builder.Append('`');
