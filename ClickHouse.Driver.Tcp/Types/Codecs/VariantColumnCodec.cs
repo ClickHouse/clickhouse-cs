@@ -51,7 +51,7 @@ internal static class VariantWire
 /// </para>
 ///
 /// <para>
-/// The codec writes a decoded <see cref="VariantColumn"/> of the same alternatives only (<see cref="CanWrite"/>): its
+/// The codec writes a decoded <see cref="VariantColumn"/> of the same alternatives only (<see cref="WritesFromStorage"/>): its
 /// discriminator stream, then its per-type child columns, with no copy. The converter layer writes every other
 /// column, and places each value by its CLR type.
 /// </para>
@@ -188,7 +188,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
     // class's constructor establishes (every discriminator is either a valid alternative index or the NULL marker,
     // and LocalIndices is exactly as long as the column with a correct per-type running index). A caller's
     // implementation of the interface goes to the converter layer, which validates as it goes.
-    public bool CanWrite(IColumn column)
+    public bool WritesFromStorage(IColumn column)
     {
         if (column is not VariantColumn dense || !HasTheSameAlternatives(dense))
         {
@@ -197,7 +197,7 @@ internal sealed class VariantColumnCodec : IColumnCodec
 
         for (int i = 0; i < children.Length; i++)
         {
-            if (!children[i].CanWrite(dense.GetTypeColumn(i)))
+            if (!children[i].WritesFromStorage(dense.GetTypeColumn(i)))
             {
                 return false;
             }

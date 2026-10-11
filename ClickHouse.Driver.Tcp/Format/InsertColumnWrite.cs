@@ -97,7 +97,7 @@ internal abstract class InsertColumnWrite
     public static InsertColumnWrite For(IColumnCodec codec, IColumn values, string typeName, in ResolveContext context, ConverterDerivation derivation, out string refusal)
     {
         refusal = null;
-        bool stored = codec.CanWrite(values);
+        bool stored = codec.WritesFromStorage(values);
         string source = SourceType(values);
         if (source is not null && !string.Equals(source, typeName, StringComparison.Ordinal))
         {
@@ -210,7 +210,7 @@ internal abstract class InsertColumnWrite
         out string refusal)
     {
         refusal = null;
-        bool stored = codec.CanWrite(values);
+        bool stored = codec.WritesFromStorage(values);
         if (stored && (hidden is null || sameType))
         {
             return new CodecWrite(codec);

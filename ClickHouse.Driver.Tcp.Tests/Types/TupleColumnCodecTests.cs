@@ -90,7 +90,7 @@ public class TupleColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_TupleColumnWithCallerBuiltChildren_ReturnsFalse()
+    public void WritesFromStorage_TupleColumnWithCallerBuiltChildren_ReturnsFalse()
     {
         // A tuple built from rows has caller-built child columns, so the converter layer writes it.
         const string type = "Tuple(Int32, String)";
@@ -102,14 +102,14 @@ public class TupleColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(decoded), Is.True, "the column that a query of the type reads");
-            Assert.That(codec.CanWrite(fromRows), Is.False, "a tuple built from rows");
-            Assert.That(codec.CanWrite(flat), Is.False, "a column of tuple values");
+            Assert.That(codec.WritesFromStorage(decoded), Is.True, "the column that a query of the type reads");
+            Assert.That(codec.WritesFromStorage(fromRows), Is.False, "a tuple built from rows");
+            Assert.That(codec.WritesFromStorage(flat), Is.False, "a column of tuple values");
         });
     }
 
     [Test]
-    public async Task CanWrite_NestedChildWithoutDenseNamedFieldColumn_ReturnsFalse()
+    public async Task WritesFromStorage_NestedChildWithoutDenseNamedFieldColumn_ReturnsFalse()
     {
         // The converter layer writes no Nested column. Thus an insert writes the tuple only through the codec, and
         // only when the Nested child is the NestedColumn that a query reads.
@@ -132,9 +132,9 @@ public class TupleColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(decoded), Is.True, "the column that a query of the type reads");
-            Assert.That(codec.CanWrite(ergonomic), Is.False, "a column of tuple values has no named field columns");
-            Assert.That(codec.CanWrite(wrongDense), Is.False, "the Nested child is not a NestedColumn");
+            Assert.That(codec.WritesFromStorage(decoded), Is.True, "the column that a query of the type reads");
+            Assert.That(codec.WritesFromStorage(ergonomic), Is.False, "a column of tuple values has no named field columns");
+            Assert.That(codec.WritesFromStorage(wrongDense), Is.False, "the Nested child is not a NestedColumn");
         });
     }
 
@@ -238,7 +238,7 @@ public class TupleColumnCodecTests
     }
 
     [Test]
-    public async Task CanWrite_NonWritableElement_IsFalse()
+    public async Task WritesFromStorage_NonWritableElement_IsFalse()
     {
         // The Nothing codec writes no column. Thus the codec of a tuple with a Nothing element does not write the
         // column that a query of the type reads.
@@ -249,8 +249,8 @@ public class TupleColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(Resolve("Int32").CanWrite(((ITupleColumn)decoded).Children[0]), Is.True, "the Int32 child is the column that a query reads");
-            Assert.That(codec.CanWrite(decoded), Is.False);
+            Assert.That(Resolve("Int32").WritesFromStorage(((ITupleColumn)decoded).Children[0]), Is.True, "the Int32 child is the column that a query reads");
+            Assert.That(codec.WritesFromStorage(decoded), Is.False);
         });
     }
 
@@ -392,7 +392,7 @@ public class TupleColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_DenseTupleColumnOfADifferentArity_ReturnsFalse()
+    public void WritesFromStorage_DenseTupleColumnOfADifferentArity_ReturnsFalse()
     {
         IColumnCodec codec = Resolve("Tuple(Int32, String)");
         var narrower = new TupleColumn<int>(
@@ -404,8 +404,8 @@ public class TupleColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(Resolve("Tuple(Int32)").CanWrite(narrower), Is.True, "the codec of its own arity writes it");
-            Assert.That(codec.CanWrite(narrower), Is.False);
+            Assert.That(Resolve("Tuple(Int32)").WritesFromStorage(narrower), Is.True, "the codec of its own arity writes it");
+            Assert.That(codec.WritesFromStorage(narrower), Is.False);
         });
     }
 

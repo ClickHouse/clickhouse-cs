@@ -98,15 +98,15 @@ public class FixedWidthColumnCodecTests
     // The storage of a fixed-width type is the PrimitiveColumn<T> that its read gives. An ArrayColumn<int> that a caller
     // builds has the element type of the codec, but the converter layer writes it.
     [Test]
-    public void CanWrite_PrimitiveColumnOfTheType_IsTrueAndEveryOtherColumnIsFalse()
+    public void WritesFromStorage_PrimitiveColumnOfTheType_IsTrueAndEveryOtherColumnIsFalse()
     {
         var codec = new FixedWidthColumnCodec<int>("Int32");
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 1 })), Is.True);
-            Assert.That(codec.CanWrite(PrimitiveColumn<long>.FromValues("c", "Int64", new[] { 1L })), Is.False);
-            Assert.That(codec.CanWrite(new ArrayColumn<int>("c", "Int32", new[] { 1 })), Is.False);
+            Assert.That(codec.WritesFromStorage(PrimitiveColumn<int>.FromValues("c", "Int32", new[] { 1 })), Is.True);
+            Assert.That(codec.WritesFromStorage(PrimitiveColumn<long>.FromValues("c", "Int64", new[] { 1L })), Is.False);
+            Assert.That(codec.WritesFromStorage(new ArrayColumn<int>("c", "Int32", new[] { 1 })), Is.False);
         });
     }
 

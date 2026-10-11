@@ -54,7 +54,7 @@ ClickHouse.Driver.Tcp/
 Two layers handle a column type:
 
 - **The wire layer** (`Types/Codecs/`, one `IColumnCodec` for each ClickHouse type). `ReadColumnAsync` decodes a
-  column into the class that a query of the type gives. `CanWrite` is true only for a column that the codec writes
+  column into the class that a query of the type gives. `WritesFromStorage` is true only for a column that the codec writes
   from its storage: that class, or a dense composite column (for example `ClickHouseTcpColumn.CreateArray` over a
   decoded column) whose child columns the child codecs write from their storage. A parameter that gives a stored value
   its meaning must be the same (the scale of a `DateTime64` or a `Time64`, the members of an `Enum`, the width of a
@@ -93,7 +93,7 @@ When you add or change a type, consider every path that touches it:
   than one row fails, they can throw the failures of different rows; each failure names its own row. The differential
   tests run every tree both ways. `Fill` is the path of a runtime without dynamic code, so do not add a reader that has
   only an `Emit`.
-- The codec: its read, and its write from storage. `CanWrite` is true for the column class that its read gives, and a
+- The codec: its read, and its write from storage. `WritesFromStorage` is true for the column class that its read gives, and a
   composite codec asks the codec of each child about the child column.
 - POCO mapping in `Poco/` uses the same trees.
 - parameter formatting in `Parameters/TcpParameterFormatter.cs`. It duplicates the HTTP client's
@@ -211,7 +211,7 @@ counts.
 
 - reads of hand-written bytes, and their protocol errors;
 - type resolution: `FormatException`/`NotSupportedException`, `ElementType`, `TypeName`, field and label metadata;
-- the storage check `CanWrite`, most of all its rejections (a caller-built child, another arity, another order of
+- the storage check `WritesFromStorage`, most of all its rejections (a caller-built child, another arity, another order of
   `Variant` alternatives, a `Nothing` child);
 - the write of a decoded or dense column: bytes, prefixes, slices. Write it with `CodecTestHarness.WriteStoredAsync`,
   which fails when the codec does not write the column from its storage, so the test cannot pass through the converter

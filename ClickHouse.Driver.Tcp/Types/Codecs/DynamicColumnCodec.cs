@@ -206,7 +206,7 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     // class's constructor establishes (the type-name list matches the child-column count, and every discriminator
     // is a valid type index or the NULL marker). A caller's column goes to the converter layer, which infers and
     // validates per value.
-    public bool CanWrite(IColumn column)
+    public bool WritesFromStorage(IColumn column)
     {
         if (column is not DynamicColumn dense)
         {
@@ -215,7 +215,7 @@ internal sealed class DynamicColumnCodec : IColumnCodec
 
         for (int i = 0; i < dense.TypeCount; i++)
         {
-            if (!registry.Resolve(dense.TypeNames[i], in context).CanWrite(dense.GetTypeColumn(i)))
+            if (!registry.Resolve(dense.TypeNames[i], in context).WritesFromStorage(dense.GetTypeColumn(i)))
             {
                 return false;
             }

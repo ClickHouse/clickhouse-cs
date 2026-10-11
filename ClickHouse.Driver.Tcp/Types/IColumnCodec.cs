@@ -43,7 +43,7 @@ internal interface IColumnCodec
     /// </summary>
     /// <param name="column">The column to test.</param>
     /// <returns>Whether the codec writes the column.</returns>
-    bool CanWrite(IColumn column) => false;
+    bool WritesFromStorage(IColumn column) => false;
 
     /// <summary>
     /// Whether <paramref name="value"/> belongs to this type rather than to a sibling that takes the same CLR type.
@@ -70,7 +70,7 @@ internal interface IColumnCodec
     bool ClaimsValue(object value) => true;
 
     /// <summary>Prepares state shared by the prefix and body. The caller disposes it after the body.</summary>
-    /// <param name="column">The column about to be written, which <see cref="CanWrite"/> accepts.</param>
+    /// <param name="column">The column about to be written, which <see cref="WritesFromStorage"/> accepts.</param>
     /// <param name="start">The zero-based first row the write will cover.</param>
     /// <param name="length">The number of rows the write will cover.</param>
     /// <returns>The per-operation write state, or <see langword="null"/> when the codec needs none.</returns>
@@ -78,7 +78,7 @@ internal interface IColumnCodec
 
     /// <summary>Writes the serialization prefix, with the state from <see cref="BeginWrite"/>. The default writes nothing.</summary>
     /// <param name="writer">The writer to encode into.</param>
-    /// <param name="column">The column whose prefix to write, which <see cref="CanWrite"/> accepts.</param>
+    /// <param name="column">The column whose prefix to write, which <see cref="WritesFromStorage"/> accepts.</param>
     /// <param name="start">The zero-based first row the following body will write.</param>
     /// <param name="length">The number of rows the following body will write.</param>
     /// <param name="state">The state from <see cref="BeginWrite"/>; null only for a codec that returns null from it.</param>
@@ -88,7 +88,7 @@ internal interface IColumnCodec
 
     /// <summary>Writes the selected rows, with the state from <see cref="BeginWrite"/>.</summary>
     /// <param name="writer">The writer to encode into.</param>
-    /// <param name="column">The column whose values to write, which <see cref="CanWrite"/> accepts.</param>
+    /// <param name="column">The column whose values to write, which <see cref="WritesFromStorage"/> accepts.</param>
     /// <param name="start">The zero-based first row to write.</param>
     /// <param name="length">The number of rows to write.</param>
     /// <param name="state">The state from <see cref="BeginWrite"/>; null only for a codec that returns null from it.</param>

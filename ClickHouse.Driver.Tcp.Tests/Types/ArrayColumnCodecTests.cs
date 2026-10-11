@@ -82,7 +82,7 @@ public class ArrayColumnCodecTests
     }
 
     [Test]
-    public async Task CanWrite_NestedInnerWithoutDenseNamedFieldColumn_ReturnsFalse()
+    public async Task WritesFromStorage_NestedInnerWithoutDenseNamedFieldColumn_ReturnsFalse()
     {
         // The converter layer writes no Nested column. Thus an insert writes the array only through the codec, and
         // only when the Nested inner column is the NestedColumn that a query reads.
@@ -102,9 +102,9 @@ public class ArrayColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(decoded), Is.True, "the column that a query of the type reads");
-            Assert.That(codec.CanWrite(ergonomic), Is.False, "a column of row arrays has no named field columns");
-            Assert.That(codec.CanWrite(wrongDense), Is.False, "the Nested inner column is not a NestedColumn");
+            Assert.That(codec.WritesFromStorage(decoded), Is.True, "the column that a query of the type reads");
+            Assert.That(codec.WritesFromStorage(ergonomic), Is.False, "a column of row arrays has no named field columns");
+            Assert.That(codec.WritesFromStorage(wrongDense), Is.False, "the Nested inner column is not a NestedColumn");
         });
     }
 

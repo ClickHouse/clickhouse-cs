@@ -77,7 +77,7 @@ internal sealed class FixedStringColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is FixedStringColumn dense && dense.Size == size;
+    public bool WritesFromStorage(IColumn column) => column is FixedStringColumn dense && dense.Size == size;
 
     /// <inheritdoc/>
     // A FixedStringColumn of this width holds its rows back to back at the stride of the wire, so the slice is one copy.

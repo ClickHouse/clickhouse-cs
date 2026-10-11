@@ -124,7 +124,7 @@ public class DifferentialTests
         IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(testCase.ColumnType, Context);
         using (IColumn decoded = DecodeColumn(testCase.ColumnType, SourceBytes(testCase), testCase.RowCount))
         {
-            Check(problems, $"the codec does not write the decoded {decoded.GetType().Name} from its storage", codec.CanWrite(decoded));
+            Check(problems, $"the codec does not write the decoded {decoded.GetType().Name} from its storage", codec.WritesFromStorage(decoded));
             Check(problems, $"the decoded column has the element type {decoded.ElementType}, and the codec {codec.ElementType}", decoded.ElementType == codec.ElementType);
         }
 

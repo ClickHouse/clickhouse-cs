@@ -117,7 +117,7 @@ public class NestedColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_NestedColumnWithCallerBuiltOrMismatchedFields_ReturnsFalse()
+    public void WritesFromStorage_NestedColumnWithCallerBuiltOrMismatchedFields_ReturnsFalse()
     {
         IColumnCodec codec = Resolve("Nested(a UInt8, b String)");
         var matching = Nested("Nested(a UInt8, b String)", new[] { "a", "b" }, new[] { Field<byte>("UInt8", 1), Field<string>("String", "x") }, new[] { 0, 1 });
@@ -131,10 +131,10 @@ public class NestedColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(matching), Is.True, "fields that a query of the field types reads");
-            Assert.That(codec.CanWrite(callerBuilt), Is.False, "caller-built field columns");
-            Assert.That(codec.CanWrite(wrongFieldType), Is.False, "a UInt8 column in the String field");
-            Assert.That(codec.CanWrite(wrongFieldCount), Is.False, "one field, not two");
+            Assert.That(codec.WritesFromStorage(matching), Is.True, "fields that a query of the field types reads");
+            Assert.That(codec.WritesFromStorage(callerBuilt), Is.False, "caller-built field columns");
+            Assert.That(codec.WritesFromStorage(wrongFieldType), Is.False, "a UInt8 column in the String field");
+            Assert.That(codec.WritesFromStorage(wrongFieldCount), Is.False, "one field, not two");
         });
     }
 

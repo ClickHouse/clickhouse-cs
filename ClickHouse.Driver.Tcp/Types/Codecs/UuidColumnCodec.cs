@@ -69,7 +69,7 @@ internal sealed class UuidColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool CanWrite(IColumn column) => column is ArrayColumn<Guid>;
+    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<Guid>;
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)

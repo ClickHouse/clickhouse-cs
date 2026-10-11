@@ -82,7 +82,7 @@ internal sealed class DecimalColumnCodec<TMantissa, TValue> : IColumnCodec
 
     /// <inheritdoc/>
     // The column that a query of the type reads.
-    public bool CanWrite(IColumn column) => column is ArrayColumn<TValue>;
+    public bool WritesFromStorage(IColumn column) => column is ArrayColumn<TValue>;
 
     /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)

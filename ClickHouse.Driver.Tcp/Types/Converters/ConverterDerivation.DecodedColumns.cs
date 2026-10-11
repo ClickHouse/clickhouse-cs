@@ -150,7 +150,7 @@ internal sealed partial class ConverterDerivation
             return ReadColumnRoute.Column;
         }
 
-        if (!sourceCodec.CanWrite(column))
+        if (!sourceCodec.WritesFromStorage(column))
         {
             return ReadColumnRoute.Column;
         }

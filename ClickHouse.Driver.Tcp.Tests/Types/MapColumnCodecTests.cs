@@ -115,7 +115,7 @@ public class MapColumnCodecTests
     }
 
     [Test]
-    public async Task CanWrite_NestedValueWithoutDenseNamedFieldColumn_ReturnsFalse()
+    public async Task WritesFromStorage_NestedValueWithoutDenseNamedFieldColumn_ReturnsFalse()
     {
         // The converter layer writes no Nested column. Thus an insert writes the map only through the codec, and
         // only when the Nested value column is the NestedColumn that a query reads.
@@ -139,9 +139,9 @@ public class MapColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.CanWrite(decoded), Is.True, "the column that a query of the type reads");
-            Assert.That(codec.CanWrite(ergonomic), Is.False, "a column of pair arrays has no named field columns");
-            Assert.That(codec.CanWrite(wrongDense), Is.False, "the Nested value column is not a NestedColumn");
+            Assert.That(codec.WritesFromStorage(decoded), Is.True, "the column that a query of the type reads");
+            Assert.That(codec.WritesFromStorage(ergonomic), Is.False, "a column of pair arrays has no named field columns");
+            Assert.That(codec.WritesFromStorage(wrongDense), Is.False, "the Nested value column is not a NestedColumn");
         });
     }
 

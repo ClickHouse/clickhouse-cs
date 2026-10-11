@@ -93,7 +93,7 @@ internal sealed class StringColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is StringColumn;
+    public bool WritesFromStorage(IColumn column) => column is StringColumn;
 
     /// <inheritdoc/>
     // A column this client decoded holds the bytes the wire carried, so the write gives those again rather than the

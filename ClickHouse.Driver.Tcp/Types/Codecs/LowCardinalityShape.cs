@@ -14,5 +14,5 @@ internal sealed class LowCardinalityShape<T> : ILowCardinalityShape
         => new LowCardinalityColumn<T>(name, typeName, (IColumn<T>)dictionary, keys, rowCount, pooledKeys);
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => column is LowCardinalityColumn<T>;
+    public bool WritesFromStorage(IColumn column) => column is LowCardinalityColumn<T>;
 }

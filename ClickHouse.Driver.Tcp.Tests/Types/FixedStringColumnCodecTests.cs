@@ -91,7 +91,7 @@ public class FixedStringColumnCodecTests
     }
 
     [Test]
-    public void CanWrite_DecodedColumnOfAnotherWidth_IsFalse()
+    public void WritesFromStorage_DecodedColumnOfAnotherWidth_IsFalse()
     {
         // A FixedString(2) read-back is not a body for a FixedString(4) column: its blob holds half the bytes that the
         // header promises. So the codec does not write it, and the insert refuses each row on its width. No server
@@ -101,8 +101,8 @@ public class FixedStringColumnCodecTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(Codec(4).CanWrite(wide), Is.True);
-            Assert.That(Codec(4).CanWrite(narrow), Is.False);
+            Assert.That(Codec(4).WritesFromStorage(wide), Is.True);
+            Assert.That(Codec(4).WritesFromStorage(narrow), Is.False);
         });
 
         ArgumentException thrown = Assert.ThrowsAsync<ArgumentException>(() => CodecTestHarness.WriteSliceAsync(Codec(4), narrow, 0, narrow.RowCount));

@@ -162,7 +162,7 @@ internal static class ClientArms
         public override SliceWriter Bind<T>(IColumn<T> column, string columnType, ResolveContext context)
         {
             IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(columnType, context);
-            if (codec.CanWrite(column))
+            if (codec.WritesFromStorage(column))
             {
                 return (writer, start, length) =>
                 {

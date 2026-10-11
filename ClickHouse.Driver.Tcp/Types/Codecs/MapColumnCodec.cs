@@ -21,7 +21,7 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// <para>
 /// The generic bridge from the non-generic key/value codecs to the right typed <see cref="MapColumn{TKey, TValue}"/>
 /// lives in the cached per-type-pair <see cref="IMapShape"/>; the codec itself stays non-generic. The codec writes a
-/// decoded column only (<see cref="CanWrite"/>): its offsets, rebased to the slice, then its key and value columns
+/// decoded column only (<see cref="WritesFromStorage"/>): its offsets, rebased to the slice, then its key and value columns
 /// through the key and value codecs, with no copy. The converter layer writes every other column.
 /// </para>
 /// </summary>
@@ -164,11 +164,11 @@ internal sealed class MapColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     // A decoded Map column whose key and value columns the key and value codecs write.
-    public bool CanWrite(IColumn column)
+    public bool WritesFromStorage(IColumn column)
         => shape.IsDense(column)
             && column is IMapColumn dense
-            && keyCodec.CanWrite(dense.KeyColumn)
-            && valueCodec.CanWrite(dense.ValueColumn);
+            && keyCodec.WritesFromStorage(dense.KeyColumn)
+            && valueCodec.WritesFromStorage(dense.ValueColumn);
 
     /// <inheritdoc/>
     // The range of the pairs of the slice, and the states of the key and value writes.

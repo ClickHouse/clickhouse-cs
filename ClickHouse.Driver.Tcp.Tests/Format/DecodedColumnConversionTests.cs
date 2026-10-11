@@ -33,56 +33,56 @@ public class DecodedColumnConversionTests
     };
 
     [Test]
-    public void CanWrite_DecodedDateTime64ColumnOfAnotherScale_IsFalse()
+    public void WritesFromStorage_DecodedDateTime64ColumnOfAnotherScale_IsFalse()
     {
         using IColumn decoded = DecodedColumns.Of("c", "DateTime64(3, 'UTC')", Instants);
 
         Assert.Multiple(() =>
         {
-            Assert.That(Codec("DateTime64(3, 'UTC')").CanWrite(decoded), Is.True);
-            Assert.That(Codec("DateTime64(3, 'Asia/Tokyo')").CanWrite(decoded), Is.True, "a count is an instant in every timezone");
-            Assert.That(Codec("DateTime64(6, 'UTC')").CanWrite(decoded), Is.False);
-            Assert.That(Codec("DateTime64(0, 'UTC')").CanWrite(decoded), Is.False);
+            Assert.That(Codec("DateTime64(3, 'UTC')").WritesFromStorage(decoded), Is.True);
+            Assert.That(Codec("DateTime64(3, 'Asia/Tokyo')").WritesFromStorage(decoded), Is.True, "a count is an instant in every timezone");
+            Assert.That(Codec("DateTime64(6, 'UTC')").WritesFromStorage(decoded), Is.False);
+            Assert.That(Codec("DateTime64(0, 'UTC')").WritesFromStorage(decoded), Is.False);
         });
     }
 
     [Test]
-    public void CanWrite_DecodedTime64ColumnOfAnotherScale_IsFalse()
+    public void WritesFromStorage_DecodedTime64ColumnOfAnotherScale_IsFalse()
     {
         using IColumn decoded = DecodedColumns.Of("c", "Time64(3)", TimeSpan.FromMilliseconds(3_723_456));
 
         Assert.Multiple(() =>
         {
-            Assert.That(Codec("Time64(3)").CanWrite(decoded), Is.True);
-            Assert.That(Codec("Time64(6)").CanWrite(decoded), Is.False);
+            Assert.That(Codec("Time64(3)").WritesFromStorage(decoded), Is.True);
+            Assert.That(Codec("Time64(6)").WritesFromStorage(decoded), Is.False);
         });
     }
 
     [Test]
-    public void CanWrite_DecodedEnumColumnOfOtherMembers_IsFalse()
+    public void WritesFromStorage_DecodedEnumColumnOfOtherMembers_IsFalse()
     {
         using IColumn decoded = DecodedColumns.Of("c", "Enum8('a' = 1, 'b' = 2)", "a", "b");
 
         Assert.Multiple(() =>
         {
-            Assert.That(Codec("Enum8('a' = 1, 'b' = 2)").CanWrite(decoded), Is.True);
-            Assert.That(Codec("Enum8('b' = 2, 'a' = 1)").CanWrite(decoded), Is.True, "the same members in another order");
-            Assert.That(Codec("Enum8('a' = 2, 'b' = 1)").CanWrite(decoded), Is.False, "the ordinals mean other labels");
-            Assert.That(Codec("Enum8('a' = 1, 'b' = 2, 'c' = 3)").CanWrite(decoded), Is.False, "another member");
-            Assert.That(Codec("Enum16('a' = 1, 'b' = 2)").CanWrite(decoded), Is.False, "another width");
+            Assert.That(Codec("Enum8('a' = 1, 'b' = 2)").WritesFromStorage(decoded), Is.True);
+            Assert.That(Codec("Enum8('b' = 2, 'a' = 1)").WritesFromStorage(decoded), Is.True, "the same members in another order");
+            Assert.That(Codec("Enum8('a' = 2, 'b' = 1)").WritesFromStorage(decoded), Is.False, "the ordinals mean other labels");
+            Assert.That(Codec("Enum8('a' = 1, 'b' = 2, 'c' = 3)").WritesFromStorage(decoded), Is.False, "another member");
+            Assert.That(Codec("Enum16('a' = 1, 'b' = 2)").WritesFromStorage(decoded), Is.False, "another width");
         });
     }
 
     /// <summary>A composite codec asks the codec of each child, so a child of other parameters makes it refuse the column.</summary>
     [TestCaseSource(nameof(CompositeCases))]
-    public void CanWrite_DecodedCompositeWithAChildOfOtherParameters_IsFalse(string source, string target, Array values)
+    public void WritesFromStorage_DecodedCompositeWithAChildOfOtherParameters_IsFalse(string source, string target, Array values)
     {
         using IColumn decoded = Decode(source, values);
 
         Assert.Multiple(() =>
         {
-            Assert.That(Codec(source).CanWrite(decoded), Is.True, "the codec of the type that the column was read as");
-            Assert.That(Codec(target).CanWrite(decoded), Is.False);
+            Assert.That(Codec(source).WritesFromStorage(decoded), Is.True, "the codec of the type that the column was read as");
+            Assert.That(Codec(target).WritesFromStorage(decoded), Is.False);
         });
     }
 
@@ -192,9 +192,9 @@ public class DecodedColumnConversionTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(Codec("Decimal(18, 4)").CanWrite(decimals), Is.True);
+            Assert.That(Codec("Decimal(18, 4)").WritesFromStorage(decimals), Is.True);
             Assert.That(ConverterHarness.ReadAs<decimal>(decimalsRead, 0, 2), Is.EqualTo(new[] { 1.23m, -4.5m }));
-            Assert.That(Codec("DateTime('Asia/Tokyo')").CanWrite(instants), Is.True);
+            Assert.That(Codec("DateTime('Asia/Tokyo')").WritesFromStorage(instants), Is.True);
         });
     }
 
@@ -803,7 +803,7 @@ public class DecodedColumnConversionTests
     private static async Task AssertConvertsAsync<T>(string source, string target, T[] values)
     {
         using IColumn decoded = DecodedColumns.Of("c", source, values);
-        Assert.That(Codec(target).CanWrite(decoded), Is.False, "the codec of the target does not write the column from its storage");
+        Assert.That(Codec(target).WritesFromStorage(decoded), Is.False, "the codec of the target does not write the column from its storage");
 
         foreach (int start in new[] { 0, 1 })
         {
@@ -834,7 +834,7 @@ public class DecodedColumnConversionTests
         {
             if (storageOfTheTarget is bool storage)
             {
-                Assert.That(Codec(target).CanWrite(decoded), Is.EqualTo(storage), "whether the codec of the target writes the column from its storage");
+                Assert.That(Codec(target).WritesFromStorage(decoded), Is.EqualTo(storage), "whether the codec of the target writes the column from its storage");
             }
 
             Assert.That(Convert.ToHexString(all), Is.EqualTo(expected), "all rows");
