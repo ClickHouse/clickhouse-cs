@@ -21,6 +21,21 @@ public class DifferentialTests
     /// <summary>The answers of <c>CanRead</c> for the read targets and of <c>CanWrite</c> for the write inputs that are not decoded, over the case list.</summary>
     private static readonly (int CanReadTrue, int CanReadFalse, int CanWriteTrue, int CanWriteFalse) ExpectedAnswers = (568, 19, 528, 31);
 
+    /// <summary>
+    /// The row inserts whose outcome differs from the insert of the same rows, for every input of the case and both ranges.
+    /// The <c>Geometry</c> case builds its column from decoded columns, so the insert writes it from its storage; a row
+    /// insert gathers its values as objects, and a ring and a line string (and a polygon and a multi line string) have one
+    /// CLR type, so the Variant writer refuses them.
+    /// </summary>
+    private static readonly Dictionary<(string Case, string Tier), OutcomeKind> RowInsertOutcomes = new()
+    {
+        [("InsertRoundTrip: Geometry", ClientArms.PocoWrite.Name)] = OutcomeKind.Failed,
+        [("InsertRoundTrip: Geometry", ClientArms.PocoWriteDelegate.Name)] = OutcomeKind.Failed,
+        [("InsertRoundTrip: Geometry", ClientArms.UntypedWrite.Name)] = OutcomeKind.Failed,
+    };
+
+    private static readonly WriteArm[] RowInserts = { ClientArms.PocoWrite, ClientArms.PocoWriteDelegate, ClientArms.UntypedWrite };
+
     public static IEnumerable<DifferentialCase> Cases() => DifferentialCases.All();
 
     public static IEnumerable<DifferentialCase> ScenarioCases() => DifferentialCases.All().Where(c => c.Scenario is not null);
@@ -73,7 +88,8 @@ public class DifferentialTests
     /// <summary>
     /// For each write input that the case builds or reads back: the insert write and an independent write that gathers the
     /// values of the slice through the indexer give the same bytes, for all rows and for the tail (so the insert slices
-    /// right); the POCO insert in both gather tiers and the untyped insert write the bytes of the insert; and
+    /// right); the POCO insert in both gather tiers and the untyped insert give the outcome of the insert (the same bytes,
+    /// or a failure or a refusal where it fails or refuses), except the outcomes of <see cref="RowInsertOutcomes"/>; and
     /// <c>CanWrite</c> is whether each insert takes the column. A column read back as another CLR type writes the bytes
     /// of the source column, except where the CLR type holds less (a count finer than 100 ns).
     /// </summary>
@@ -90,6 +106,7 @@ public class DifferentialTests
                 continue;
             }
 
+            bool canWrite = ClickHouseTcpTypes.CanWrite(testCase.ColumnType, input.ElementType);
             Outcome[] indexer = Array.ConvertAll(ranges, r => Write(ClientArms.IndexerWrite, testCase, input, r));
             Outcome[] poco = Array.ConvertAll(ranges, r => Write(ClientArms.PocoWrite, testCase, input, r));
             Outcome[] viaDelegates = Array.ConvertAll(ranges, r => Write(ClientArms.PocoWriteDelegate, testCase, input, r));
@@ -107,13 +124,9 @@ public class DifferentialTests
                     _ => Outcome.Difference(insert[i], indexer[i]),
                 });
 
-                // A failure of a row insert can name the row of its block, so only its type is compared.
-                Add(problems, $"{label}: the POCO insert of the Delegate tier against the compiled one", poco[i].Kind == OutcomeKind.Failed && viaDelegates[i].Kind == OutcomeKind.Failed
-                    ? (poco[i].ExceptionType == viaDelegates[i].ExceptionType ? null : $"{viaDelegates[i]}; compiled {poco[i]}")
-                    : Outcome.Difference(poco[i], viaDelegates[i]));
-                foreach ((string tier, Outcome row) in new[] { ("the POCO insert", poco[i]), ("the untyped insert", untyped[i]) })
+                foreach ((WriteArm tier, Outcome row) in RowInserts.Zip(new[] { poco[i], viaDelegates[i], untyped[i] }))
                 {
-                    Add(problems, $"{label}: {tier} against the insert", row.Kind == OutcomeKind.Bytes && insert[i].Kind == OutcomeKind.Bytes ? Outcome.Difference(insert[i], row) : null);
+                    Add(problems, $"{label}: {tier.Name} against the insert", RowInsertDifference(testCase, tier, input, range, insert[i], row, canWrite));
                 }
 
                 if (input.Kind == WriteInputKind.ReadBack && !HoldsCountsFinerThanTicks(TypeParser.Parse(testCase.ColumnType)) && insert[i].Kind == OutcomeKind.Bytes)
@@ -124,7 +137,6 @@ public class DifferentialTests
 
             // A Nested column is written only from a column of its own layout, never from a CLR element type, so CanWrite
             // is false for a type with a Nested in it, although the insert writes such a column.
-            bool canWrite = ClickHouseTcpTypes.CanWrite(testCase.ColumnType, input.ElementType);
             bool nested = testCase.ColumnType.Contains("Nested(", StringComparison.Ordinal);
             Check(problems, $"{input}: CanWrite is {canWrite}, the insert {insert[0]}", nested || canWrite == (insert[0].Kind != OutcomeKind.Refused));
             Check(problems, $"{input}: CanWrite is {canWrite}, the POCO insert {poco[0]}", canWrite == (poco[0].Kind != OutcomeKind.Refused));
@@ -138,8 +150,9 @@ public class DifferentialTests
     /// The decoded column of a case is a column that its codec writes from its storage. Its insert gives back the bytes
     /// that it was read from, and each insert of it (the columnar insert, which writes it from its storage, and the row
     /// inserts, which gather its values) writes, for all rows and for the tail, bytes that decode to the values of the
-    /// same rows of the source column. Equal bytes need no decode: the write of a slice of a LowCardinality column keeps
-    /// the dictionary of the whole column, and a row insert builds the dictionary of its own values.
+    /// same rows of the source column, except the outcomes of <see cref="RowInsertOutcomes"/>; a row insert refuses it where
+    /// <c>CanWrite</c> is false. Equal bytes need no decode: the write of a slice of a LowCardinality column keeps the
+    /// dictionary of the whole column, and a row insert builds the dictionary of its own values.
     /// </summary>
     [TestCaseSource(nameof(Cases))]
     public void Write_Case_TheDecodedColumnWritesItsRows(DifferentialCase testCase)
@@ -155,18 +168,26 @@ public class DifferentialTests
         WriteInput input = testCase.WriteInputs.FirstOrDefault(i => i.Kind == WriteInputKind.Decoded);
         if (input is not null)
         {
+            // A row insert takes the column when CanWrite is true, and refuses it otherwise (a Nested column, which only a
+            // column of its own layout writes).
+            bool canWrite = ClickHouseTcpTypes.CanWrite(testCase.ColumnType, input.ElementType);
             Outcome all = Write(ClientArms.Write, testCase, input, All(testCase));
             Add(problems, "the insert of the decoded column against the source bytes", Outcome.Difference(Outcome.OfBytes(SourceBytes(testCase)), all));
             foreach (RowRange range in new[] { All(testCase), Tail(testCase) })
             {
                 Outcome source = Write(ClientArms.Write, testCase, testCase.WriteInputs[0], range);
-                var written = new[] { ClientArms.Write, ClientArms.PocoWrite, ClientArms.PocoWriteDelegate, ClientArms.UntypedWrite }.ToDictionary(arm => arm, arm => Write(arm, testCase, input, range));
-                Check(problems, $"{range}: the POCO insert of the Delegate tier {written[ClientArms.PocoWriteDelegate]}, the compiled one {written[ClientArms.PocoWrite]}", written[ClientArms.PocoWrite].Kind == written[ClientArms.PocoWriteDelegate].Kind);
-                foreach ((WriteArm arm, Outcome bytes) in written)
+                foreach (WriteArm arm in RowInserts.Prepend(ClientArms.Write))
                 {
-                    if (source.Kind == OutcomeKind.Bytes && bytes.Kind == OutcomeKind.Bytes && Outcome.Difference(source, bytes) is not null)
+                    Outcome written = Write(arm, testCase, input, range);
+                    OutcomeKind expected = RowInsertOutcomes.TryGetValue((testCase.Id, arm.Name), out OutcomeKind pinned) ? pinned
+                        : arm == ClientArms.Write || canWrite ? OutcomeKind.Bytes : OutcomeKind.Refused;
+                    if (written.Kind != expected)
                     {
-                        Add(problems, $"{arm.Name} {range}", RowsDifference(testCase.ColumnType, source.Bytes, bytes.Bytes, range.Count));
+                        problems.Add($"{arm.Name} {range}: {written}, not {expected}");
+                    }
+                    else if (written.Kind == OutcomeKind.Bytes && Outcome.Difference(source, written) is not null)
+                    {
+                        Add(problems, $"{arm.Name} {range}", RowsDifference(testCase.ColumnType, source.Bytes, written.Bytes, range.Count));
                     }
                 }
             }
@@ -268,6 +289,32 @@ public class DifferentialTests
             Assert.That(Outcome.FailureDifference(Outcome.OfBytes(new byte[] { 1 }), rows), Does.Contain("not Failed"), "no failure");
             Assert.That(Outcome.FailureDifference(Outcome.Failure(new OverflowException("row 1")), Array.Empty<Outcome>()), Does.Contain("none of its rows"), "no row fails alone");
         });
+    }
+
+    // A row insert against the insert of the same rows: the bytes of the insert where it writes them and CanWrite is true
+    // (a refusal where CanWrite is false: a Nested column); a failure where it fails, of the type of the failure of one of
+    // the rows written alone (a failure of a row insert can name the row of its block, so only the type is compared); a
+    // refusal where it refuses. A case of RowInsertOutcomes has the pinned kind of outcome.
+    private static string RowInsertDifference(DifferentialCase testCase, WriteArm tier, WriteInput input, RowRange range, Outcome insert, Outcome row, bool canWrite)
+    {
+        if (RowInsertOutcomes.TryGetValue((testCase.Id, tier.Name), out OutcomeKind pinned))
+        {
+            return row.Kind == pinned ? null : $"{row}, not the pinned {pinned}";
+        }
+
+        switch (insert.Kind)
+        {
+            case OutcomeKind.Bytes when canWrite:
+                return Outcome.Difference(insert, row);
+
+            case OutcomeKind.Failed when row.Kind == OutcomeKind.Failed:
+                List<Outcome> rows = RowFailures(range, single => Write(tier, testCase, input, single)).ToList();
+                return rows.Exists(r => r.ExceptionType == row.ExceptionType) ? null : $"{row} is of the type of the failure of none of its rows ({string.Join("; ", rows)})";
+
+            default:
+                OutcomeKind expected = insert.Kind == OutcomeKind.Bytes ? OutcomeKind.Refused : insert.Kind;
+                return row.Kind == expected ? null : $"{row}; the insert {insert}";
+        }
     }
 
     // Why a tier reads the tail alone otherwise than the same rows of the read of all rows, or null. A read of all rows
