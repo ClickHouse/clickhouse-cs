@@ -1,5 +1,7 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
@@ -301,10 +303,20 @@ public class TupleFieldValueTests : AbstractConnectionTestFixture
         Assert.That(ex.Message, Does.Contain("not a valid tuple type"));
     }
 
-    [Test]
-    public void GetFieldValue_NullColumn_ThrowsInvalidCastException()
+    private static IEnumerable<TestCaseData> TargetsForANullColumn()
     {
-        var ex = Assert.ThrowsAsync<InvalidCastException>(() => ReadFieldAsync<(int, int)>("SELECT NULL"));
+        yield return new TestCaseData((Func<ClickHouseDataReader, object>)(r => r.GetFieldValue<(int, int)>(0)))
+            .SetArgDisplayNames("Tuple");
+        yield return new TestCaseData((Func<ClickHouseDataReader, object>)(r => r.GetFieldValue<(int, int)[]>(0)))
+            .SetArgDisplayNames("ArrayOfTuples");
+    }
+
+    [TestCaseSource(nameof(TargetsForANullColumn))]
+    public async Task GetFieldValue_NullColumn_ThrowsInvalidCastException(Func<ClickHouseDataReader, object> read)
+    {
+        using var reader = await client.ExecuteReaderAsync("SELECT NULL");
+        Assert.That(reader.Read(), Is.True);
+        var ex = Assert.Throws<InvalidCastException>(() => read(reader));
         Assert.That(ex.Message, Does.Contain("A null value"));
     }
 
@@ -417,6 +429,16 @@ public class TupleFieldValueTests : AbstractConnectionTestFixture
             "SELECT arrayFilter(x -> 0, [tuple(toInt32(1), toInt32(2), toInt32(3), toInt32(4), toInt32(5), toInt32(6), toInt32(7), toInt32(8))])",
             (Func<ClickHouseDataReader, object>)(r => r.GetFieldValue<ValueTuple<int, int, int, int, int, int, int, int>[]>(0)))
             .SetArgDisplayNames("RestIsNotATupleOverWideTuples");
+        yield return new TestCaseData(
+            "SELECT tuple(toInt32(1), toInt32(2), toInt32(3), toInt32(4), toInt32(5), toInt32(6), toInt32(7), toInt32(8))",
+            (Func<ClickHouseDataReader, object>)(r => r.GetFieldValue<Tuple<int, int, int, int, int, int, int, int>>(0)))
+            .SetArgDisplayNames("SystemTupleRestIsNotATuple");
+        yield return new TestCaseData(
+            "SELECT tuple(toInt32(1), toInt32(2), toInt32(3), toInt32(4), toInt32(5), toInt32(6), toInt32(7), " +
+            "toInt32(8), toInt32(9), toInt32(10), toInt32(11), toInt32(12), toInt32(13), toInt32(14), toInt32(15))",
+            (Func<ClickHouseDataReader, object>)(r =>
+                r.GetFieldValue<ValueTuple<int, int, int, int, int, int, int, ValueTuple<int, int, int, int, int, int, int, int>>>(0)))
+            .SetArgDisplayNames("RestOfTheRestIsNotATuple");
         yield return new TestCaseData(
             "SELECT arrayFilter(x -> 0, [tuple(toInt32(0), tuple(toInt32(1), toInt32(2), toInt32(3), toInt32(4), toInt32(5), toInt32(6), toInt32(7), toInt32(8)))])",
             (Func<ClickHouseDataReader, object>)(r => r.GetFieldValue<(int, ValueTuple<int, int, int, int, int, int, int, int>)[]>(0)))
@@ -618,6 +640,21 @@ public class TupleFieldValueTests : AbstractConnectionTestFixture
     [TestCase(typeof(List<(int, string)>), ExpectedResult = false)]
     public bool RequiresConversion_TargetType_ReturnsWhetherItHoldsValueTupleOrTupleOfEight(Type type) =>
         TupleFieldConverter.RequiresConversion(type);
+
+    [Test]
+    public void Convert_EmptyListWithoutGenericIList_ReturnsEmptyArray()
+    {
+        // The reader produces only arrays and List<T>, so a list that implements no IList<T> cannot come from a query.
+        // Its element type is unknown, which passes the empty array check as an object element does.
+        var value = TupleFieldConverter.Convert<(int, int)[]>(new UntypedList());
+        Assert.That(value, Is.Empty);
+    }
+
+    // Implements a generic interface other than IList<T> as well, so the lookup has to skip one of each kind.
+    private sealed class UntypedList : ArrayList, IEnumerable<int>
+    {
+        IEnumerator<int> IEnumerable<int>.GetEnumerator() => Enumerable.Empty<int>().GetEnumerator();
+    }
 
     private sealed class RecordingConverter : IReadValueConverter
     {
