@@ -25,7 +25,7 @@ internal static class StringExtensions
         builder.Append(value.Length).Append(':').Append(value);
 
     /// <summary>
-    /// Encloses column name in backticks (`). Escapes ` symbol if met inside name
+    /// Encloses a column name in backticks (`) and escapes backslashes and backticks inside the name.
     /// The input is always treated as an unquoted column name.
     /// </summary>
     /// <param name="str">Column name</param>
@@ -37,7 +37,7 @@ internal static class StringExtensions
 
         var builder = new StringBuilder();
         builder.Append('`');
-        builder.Append(str.Replace("`", "\\`"));
+        builder.Append(str.Replace("\\", "\\\\").Replace("`", "\\`"));
         builder.Append('`');
         return builder.ToString();
     }

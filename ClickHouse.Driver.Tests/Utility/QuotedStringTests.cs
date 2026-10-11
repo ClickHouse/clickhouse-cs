@@ -68,4 +68,12 @@ public class QuotedStringTests
 
         Assert.That(result, Is.EqualTo(expected));
     }
+
+    [Test]
+    public void EncloseColumnName_EscapesBackslashesBeforeBackticks()
+    {
+        var result = "`a\\`b`".EncloseColumnName();
+
+        Assert.That(result, Is.EqualTo("`\\`a\\\\\\`b\\``"));
+    }
 }
