@@ -25,7 +25,7 @@ public class DictionaryEntryCacheTests
     {
         using IColumn column = await LowCardinalityAsync();
         var leaf = new CountingReader<string>(ConverterDerivation.Default.Reader<string>("String", ConverterHarness.Context));
-        var reader = new DictionaryReader<string>(leaf, DictionaryOrder.FirstEntry);
+        var reader = new DictionaryReader<string>(leaf);
 
         string[] values = ReadInWindows(column, (start, count) => ConverterHarness.ReadEmit(reader, column, start, count));
 
@@ -41,7 +41,7 @@ public class DictionaryEntryCacheTests
     {
         using IColumn column = await LowCardinalityAsync();
         var leaf = new CountingReader<string>(ConverterDerivation.Default.Reader<string>("String", ConverterHarness.Context));
-        var reader = new DictionaryReader<string>(leaf, DictionaryOrder.FirstEntry);
+        var reader = new DictionaryReader<string>(leaf);
 
         string[] values = ReadInWindows(column, (start, count) => ConverterHarness.ReadFill(reader, column, start, count));
 
@@ -61,7 +61,7 @@ public class DictionaryEntryCacheTests
             type,
             new ArrayColumn<string[]>("c", type, new[] { new[] { "x", "y" }, Array.Empty<string>(), new[] { "y" }, new[] { "x", "z" }, new[] { "z" } }));
         var leaf = new CountingReader<string>(ConverterDerivation.Default.Reader<string>("String", ConverterHarness.Context));
-        var reader = new ArrayReader<string>(new DictionaryReader<string>(leaf, DictionaryOrder.FirstEntry));
+        var reader = new ArrayReader<string>(new DictionaryReader<string>(leaf));
 
         string[][] values = ReadInWindows(column, (start, count) => ConverterHarness.ReadEmit(reader, column, start, count));
 
@@ -78,7 +78,7 @@ public class DictionaryEntryCacheTests
         const string type = "LowCardinality(Nullable(Int32))";
         using IColumn column = await ConverterHarness.DecodeAsync(type, new ArrayColumn<int?>("c", type, new int?[] { 1, null, 2, 1, null }));
         var leaf = new CountingReader<int>(ConverterDerivation.Default.Reader<int>("Int32", ConverterHarness.Context));
-        var reader = new LiftingDictionaryReader<int>(leaf, DictionaryOrder.FirstEntry);
+        var reader = new LiftingDictionaryReader<int>(leaf);
 
         int?[] values = ReadInWindows(column, (start, count) => ConverterHarness.ReadEmit(reader, column, start, count));
 
@@ -95,7 +95,7 @@ public class DictionaryEntryCacheTests
         using IColumn first = await LowCardinalityAsync();
         using IColumn second = await ConverterHarness.DecodeAsync("LowCardinality(String)", new ArrayColumn<string>("c", "LowCardinality(String)", new[] { "q" }));
         var leaf = new CountingReader<string>(ConverterDerivation.Default.Reader<string>("String", ConverterHarness.Context));
-        var reader = new DictionaryReader<string>(leaf, DictionaryOrder.FirstEntry);
+        var reader = new DictionaryReader<string>(leaf);
 
         string[] firstValues = ConverterHarness.ReadEmit(reader, first, 0, first.RowCount);
         string[] secondValues = ConverterHarness.ReadEmit(reader, second, 0, second.RowCount);
@@ -115,7 +115,7 @@ public class DictionaryEntryCacheTests
         using IColumn column = await LowCardinalityAsync();
         var lowCardinality = (ILowCardinalityColumn)column;
         ColumnReader<string> leaf = ConverterDerivation.Default.Reader<string>("String", ConverterHarness.Context);
-        var cache = new DictionaryEntryCache<string>(c => DictionaryEntries<string>.Convert(leaf, c, DictionaryOrder.FirstEntry, static values => values));
+        var cache = new DictionaryEntryCache<string>(c => DictionaryEntries<string>.Convert(leaf, c, static values => values));
         const int threads = 8;
         using var start = new Barrier(threads);
 
@@ -137,7 +137,7 @@ public class DictionaryEntryCacheTests
     public void For_ColumnThatNothingElseHolds_IsNotKeptAlive()
     {
         ColumnReader<string> leaf = ConverterDerivation.Default.Reader<string>("String", ConverterHarness.Context);
-        var cache = new DictionaryEntryCache<string>(c => DictionaryEntries<string>.Convert(leaf, c, DictionaryOrder.FirstEntry, static values => values));
+        var cache = new DictionaryEntryCache<string>(c => DictionaryEntries<string>.Convert(leaf, c, static values => values));
 
         WeakReference column = ConvertOneColumn(cache);
         GC.Collect();
