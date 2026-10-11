@@ -257,6 +257,35 @@ public class ReadCombinatorTests
         AssertFailsAsTheOldRead<(TimeOnly, TimeOnly)>(type, column, "1.03:46:40");
     }
 
+    // Row 1 is NULL, and only row 1 refers to the dictionary entry 90000, which is no time of day. The read does not
+    // convert a value under a NULL, so that entry does not fail it.
+    [Test]
+    public async Task Read_NullableTupleWithAFailingDictionaryEntryOnlyUnderANull_GivesTheValuesAsTheOldReadDoes()
+    {
+        const string type = "Nullable(Tuple(LowCardinality(Time), UInt8))";
+        IColumnCodec codec = ConverterHarness.Codec(type);
+        byte[] bytes = await CodecTestHarness.WriteAsync(w =>
+        {
+            w.WriteInt64(LowCardinalityWire.StatePrefixVersion);
+            w.WriteBytes(new byte[] { 0, 1 });
+            w.WriteUInt64(LowCardinalityWire.NativeFlags | (ulong)LowCardinalityWire.KeyUInt8);
+            w.WriteUInt64(3);
+            w.WriteInt32(0);
+            w.WriteInt32(1);
+            w.WriteInt32(90_000);
+            w.WriteUInt64(2);
+            w.WriteBytes(new byte[] { 1, 2 });
+            w.WriteBytes(new byte[] { 0, 0 });
+        });
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
+        using IColumn column = await codec.ReadColumnAsync(reader, "c", type, 2, CodecTestHarness.None);
+        var expected = new (TimeOnly, byte)?[] { (new TimeOnly(0, 0, 1), 0), null };
+
+        AssertBothPaths(Reader<(TimeOnly, byte)?>(type), column, expected);
+        Assert.That(ConverterHarness.ReadOld<(TimeOnly, byte)?>(column, 0, 2), Is.EqualTo(expected), "the old read");
+    }
+
     [TestCase("Nullable(Int32)", typeof(int?))]
     [TestCase("Nullable(String)", typeof(string))]
     [TestCase("Array(Int32)", typeof(int[]))]

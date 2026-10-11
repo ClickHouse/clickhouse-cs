@@ -67,7 +67,8 @@ internal sealed partial class ConverterDerivation
     }
 
     // Nullable(X): T? lifts a value type, a reference type holds the NULL itself, and a bare value type cannot hold it.
-    // A value-type lift accepts only a child that does not need the column.
+    // A value-type lift accepts only a child that does not need the column. It converts each value alone, so its child
+    // reads a dictionary in row order (DictionaryOrder.Row): an entry that only NULL rows use does not fail the read.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     private Derivation DeriveNullable(TypeNode node, TypeNode root, in ResolveContext context, Type clrType, DictionaryOrder order)
     {
@@ -75,7 +76,7 @@ internal sealed partial class ConverterDerivation
         Type value = Nullable.GetUnderlyingType(clrType);
         if (value is not null)
         {
-            Derivation inner = DeriveNode(innerNode, root, in context, value, ConversionDirection.Read, order);
+            Derivation inner = DeriveNode(innerNode, root, in context, value, ConversionDirection.Read, DictionaryOrder.Row);
             if (!inner.Succeeded)
             {
                 return inner;
