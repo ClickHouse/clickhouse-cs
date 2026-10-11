@@ -220,7 +220,7 @@ internal sealed class DictionaryEntries<TEntry>
         int first = Math.Min(nullKey + 1, values.Length);
         if (first == values.Length)
         {
-            return new(wrap(values), null, -1, nullKey, order);
+            return new(Null(wrap(values), nullKey), null, -1, nullKey, order);
         }
 
         BoundReader<TInner> bound = inner.Bind(dictionary);
