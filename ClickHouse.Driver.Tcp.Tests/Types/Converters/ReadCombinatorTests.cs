@@ -118,6 +118,30 @@ public class ReadCombinatorTests
         AssertBothPaths(Reader<TimeOnly?>("LowCardinality(Nullable(Time))"), column, new TimeOnly?[] { null, new TimeOnly(0, 0, 1) });
     }
 
+    // The dictionary holds only the NULL slot, so every row is NULL.
+    [Test]
+    public async Task Read_NullableDictionaryWithOnlyTheNullSlotAsNullable_GivesNullAsTheOldReadDoes()
+    {
+        using IColumn column = await NullableDictionaryAsync("Time", 1, w => w.WriteInt32(0), keys: new byte[] { 0, 0 });
+        var expected = new TimeOnly?[] { null, null };
+
+        AssertBothPaths(Reader<TimeOnly?>("LowCardinality(Nullable(Time))"), column, expected);
+        Assert.That(ConverterHarness.ReadOld<TimeOnly?>(column, 0, 2), Is.EqualTo(expected), "the old read");
+    }
+
+    [Test]
+    public async Task Read_NullableDictionaryWithOnlyTheNullSlotAsValueType_FailsAtTheFirstNull()
+    {
+        using IColumn column = await NullableDictionaryAsync("Int32", 1, w => w.WriteInt32(0), keys: new byte[] { 0, 0 });
+        ColumnReader<int> reader = Reader<int>("LowCardinality(Nullable(Int32))");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ConverterHarness.Catch(() => ConverterHarness.ReadFill(reader, column, 0, 2)), Is.TypeOf<NullValueException>().With.Property("Row").EqualTo(0), "Fill");
+            Assert.That(ConverterHarness.Catch(() => ConverterHarness.ReadEmit(reader, column, 0, 2)), Is.TypeOf<NullValueException>().With.Property("Row").EqualTo(0), "Emit");
+        });
+    }
+
     [Test]
     public async Task Read_NullableAsValueTypeWithANullBeforeAFailingRow_FailsAtTheNull()
     {
