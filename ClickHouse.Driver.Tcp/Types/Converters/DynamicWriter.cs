@@ -25,6 +25,8 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 internal sealed class DynamicWriter : ColumnWriter<object>
 {
     // The writers of the types that the writes meet. The writer is cached and shared, so the cache has a limit.
+    // The count check does not lock. Each call adds one entry at most after its check, so the cache can pass the limit
+    // by fewer entries than the number of calls that run at the same time.
     private const int MaxCachedTypes = 1024;
 
     private readonly Func<string, VariantChild> derive;

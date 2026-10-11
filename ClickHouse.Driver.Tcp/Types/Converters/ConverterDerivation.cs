@@ -91,7 +91,7 @@ internal sealed partial class ConverterDerivation
     private readonly ConcurrentDictionary<(string Type, string Timezone, Type ClrType, ConversionDirection Direction), Derivation> cache = new();
 
     // The answers of HoldsNull by type string, because each row insert asks for each target column. The session timezone
-    // does not change an answer. The cache has the limit of the cache of the trees.
+    // does not change an answer. The cache has the limit and the count check of the cache of the trees.
     private readonly ConcurrentDictionary<string, bool> holdsNullCache = new(StringComparer.Ordinal);
 
     /// <summary>Initializes a derivation over the codecs of one registry.</summary>
