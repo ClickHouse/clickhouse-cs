@@ -170,18 +170,13 @@ internal sealed partial class ConverterDerivation
     /// <returns>The tree, or the reason that there is none.</returns>
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     internal Derivation DeriveNode(TypeNode node, TypeNode root, in ResolveContext context, Type clrType, ConversionDirection direction)
-        => DeriveNode(node, root, in context, clrType, direction, DictionaryOrder.FirstEntry);
-
-    // order: the dictionary order of the reads in the tree (see DictionaryOrder).
-    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    private Derivation DeriveNode(TypeNode node, TypeNode root, in ResolveContext context, Type clrType, ConversionDirection direction, DictionaryOrder order)
     {
         string name = registry.TryCanonicalName(node.Name, out string canonical) ? canonical : node.Name;
         switch (name)
         {
             // The function name is only in the type string: the column is its value type.
             case "SimpleAggregateFunction":
-                return DeriveNode(node.Arguments[1], root, in context, clrType, direction, order);
+                return DeriveNode(node.Arguments[1], root, in context, clrType, direction);
 
             default:
                 if (LeafTable.TryGet(name, out Leaf leaf))
@@ -190,7 +185,7 @@ internal sealed partial class ConverterDerivation
                 }
 
                 return direction == ConversionDirection.Read
-                    ? DeriveCompositeRead(name, node, root, in context, clrType, order)
+                    ? DeriveCompositeRead(name, node, root, in context, clrType)
                     : DeriveCompositeWrite(name, node, root, in context, clrType);
         }
     }

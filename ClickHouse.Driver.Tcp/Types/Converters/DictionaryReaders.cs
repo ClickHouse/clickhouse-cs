@@ -21,7 +21,7 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// </para>
 /// <para>
 /// An entry that the child cannot convert does not fail the conversion of the dictionary: a read throws its failure
-/// when it reaches a row that is not NULL, as <see cref="DictionaryOrder"/> says.
+/// only at a row whose key is that entry. An entry that no row of the read uses does not fail the read.
 /// </para>
 /// <para>
 /// The reader keeps the converted entries of each column (<see cref="DictionaryEntryCache{TEntry}"/>), so all the reads
@@ -42,11 +42,10 @@ internal sealed class DictionaryReader<T> : ColumnReader<T>
 
     /// <summary>Initializes the reader over the reader of the dictionary type.</summary>
     /// <param name="inner">Reads the dictionary column.</param>
-    /// <param name="order">Which failure a read throws when an entry cannot be converted.</param>
-    public DictionaryReader(ColumnReader<T> inner, DictionaryOrder order)
+    public DictionaryReader(ColumnReader<T> inner)
     {
         ArgumentNullException.ThrowIfNull(inner);
-        entries = new DictionaryEntryCache<T>(column => DictionaryEntries<T>.Convert(inner, column, order, static values => values));
+        entries = new DictionaryEntryCache<T>(column => DictionaryEntries<T>.Convert(inner, column, static values => values));
     }
 
     /// <inheritdoc/>
@@ -103,11 +102,10 @@ internal sealed class LiftingDictionaryReader<T> : ColumnReader<T?>
 
     /// <summary>Initializes the reader over the reader of the dictionary type.</summary>
     /// <param name="inner">Reads the dictionary column.</param>
-    /// <param name="order">Which failure a read throws when an entry cannot be converted.</param>
-    public LiftingDictionaryReader(ColumnReader<T> inner, DictionaryOrder order)
+    public LiftingDictionaryReader(ColumnReader<T> inner)
     {
         ArgumentNullException.ThrowIfNull(inner);
-        entries = new DictionaryEntryCache<T?>(column => DictionaryEntries<T?>.Convert(inner, column, order, Lift));
+        entries = new DictionaryEntryCache<T?>(column => DictionaryEntries<T?>.Convert(inner, column, Lift));
     }
 
     /// <inheritdoc/>
@@ -165,53 +163,30 @@ internal sealed class LiftingDictionaryReader<T> : ColumnReader<T?>
     }
 }
 
-/// <summary>Which failure a dictionary read throws when the child cannot convert an entry.</summary>
-internal enum DictionaryOrder
-{
-    /// <summary>
-    /// The first row that is not NULL throws the failure of the first entry, in slot order, that cannot be converted, also
-    /// when no row refers to it. This is the order of a reading of the whole column, which converts every entry before
-    /// it gives the first value.
-    /// </summary>
-    FirstEntry,
-
-    /// <summary>
-    /// A row throws the failure of its own entry, so a read fails at the first row, in row order, whose entry cannot be
-    /// converted. This is the order of a reading that converts each value alone, as the read rules do.
-    /// </summary>
-    Row,
-}
-
 /// <summary>The converted entries of one dictionary, and the failure of each entry that the child cannot convert.</summary>
 /// <typeparam name="TEntry">The type of one entry.</typeparam>
 internal sealed class DictionaryEntries<TEntry>
 {
     private readonly TEntry[] entries;
     private readonly Exception[] failures;
-    private readonly int firstFailure;
-    private readonly int nullKey;
-    private readonly DictionaryOrder order;
 
-    private DictionaryEntries(TEntry[] entries, Exception[] failures, int firstFailure, int nullKey, DictionaryOrder order)
+    private DictionaryEntries(TEntry[] entries, Exception[] failures)
     {
         this.entries = entries;
         this.failures = failures;
-        this.firstFailure = firstFailure;
-        this.nullKey = nullKey;
-        this.order = order;
     }
 
     /// <summary>
     /// Converts the entries of a dictionary with one bulk read. When that read fails, converts each entry alone and keeps
-    /// the failure of each entry that fails. Never throws a failure of the child.
+    /// the failure of each entry that fails, so that a read throws it only at a row that uses the entry. Never throws a
+    /// failure of the child.
     /// </summary>
     /// <typeparam name="TInner">The type that the child gives for one entry.</typeparam>
     /// <param name="inner">The child reader.</param>
     /// <param name="column">The LowCardinality column.</param>
-    /// <param name="order">Which failure a read throws.</param>
     /// <param name="wrap">Makes the entries from the values of the child (for example, lifts them to a nullable type).</param>
     /// <returns>The entries.</returns>
-    public static DictionaryEntries<TEntry> Convert<TInner>(ColumnReader<TInner> inner, ILowCardinalityColumn column, DictionaryOrder order, Func<TInner[], TEntry[]> wrap)
+    public static DictionaryEntries<TEntry> Convert<TInner>(ColumnReader<TInner> inner, ILowCardinalityColumn column, Func<TInner[], TEntry[]> wrap)
     {
         IColumn dictionary = column.Dictionary;
         var values = new TInner[dictionary.RowCount];
@@ -219,19 +194,18 @@ internal sealed class DictionaryEntries<TEntry>
         int first = Math.Min(nullKey + 1, values.Length);
         if (first == values.Length)
         {
-            return new(Null(wrap(values), nullKey), null, -1, nullKey, order);
+            return new(Null(wrap(values), nullKey), null);
         }
 
         BoundReader<TInner> bound = inner.Bind(dictionary);
         try
         {
             bound.Fill(first, values.AsSpan(first));
-            return new(Null(wrap(values), nullKey), null, -1, nullKey, order);
+            return new(Null(wrap(values), nullKey), null);
         }
         catch (Exception)
         {
             var failures = new Exception[values.Length];
-            int firstFailure = -1;
             for (int slot = first; slot < values.Length; slot++)
             {
                 try
@@ -242,11 +216,10 @@ internal sealed class DictionaryEntries<TEntry>
                 {
                     failures[slot] = failure;
                     values[slot] = default;
-                    firstFailure = firstFailure < 0 ? slot : firstFailure;
                 }
             }
 
-            return new(Null(wrap(values), nullKey), firstFailure < 0 ? null : failures, firstFailure, nullKey, order);
+            return new(Null(wrap(values), nullKey), failures);
         }
     }
 
@@ -272,12 +245,12 @@ internal sealed class DictionaryEntries<TEntry>
         return Interlocked.CompareExchange(ref entries, made, null) ?? made;
     }
 
-    /// <summary>The value of a row with <paramref name="key"/>, or the failure of the dictionary order.</summary>
+    /// <summary>The value of a row with <paramref name="key"/>, or the failure of that entry.</summary>
     /// <param name="key">The key of the row.</param>
     /// <returns>The entry of the key.</returns>
     public TEntry ValueAt(int key) => failures is null ? entries[key] : Checked(key);
 
-    /// <summary>Gives the values of the rows with <paramref name="keys"/>, in row order, with the failures of the dictionary order.</summary>
+    /// <summary>Gives the values of the rows with <paramref name="keys"/>, or throws the failure of an entry that a row uses.</summary>
     /// <param name="keys">The keys of the rows.</param>
     /// <param name="destination">Receives the values.</param>
     public void Fill(ReadOnlySpan<int> keys, Span<TEntry> destination)
@@ -309,15 +282,10 @@ internal sealed class DictionaryEntries<TEntry>
         return values;
     }
 
+    // The NULL slot has no failure: the child does not convert it.
     private TEntry Checked(int key)
     {
-        if (key == nullKey)
-        {
-            return entries[key];
-        }
-
-        Exception failure = order == DictionaryOrder.Row ? failures[key] : failures[firstFailure];
-        if (failure is not null)
+        if (failures[key] is Exception failure)
         {
             ExceptionDispatchInfo.Throw(failure);
         }

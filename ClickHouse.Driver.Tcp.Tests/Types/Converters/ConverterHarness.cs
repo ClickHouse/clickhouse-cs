@@ -200,6 +200,19 @@ internal static class ConverterHarness
     }
 
     /// <summary>
+    /// Asserts the failure of a read or a write of several failing values: it is the failure of one of them, with its
+    /// exception type and a text of its message. Where a message names a row, the text names the row of that value.
+    /// </summary>
+    public static void AssertFailsOnOneOf(Exception actual, string path, params (Type Exception, string Text)[] failures)
+    {
+        Assert.That(actual, Is.Not.Null, $"{path}: no failure.");
+        Assert.That(
+            failures.Any(f => actual.GetType() == f.Exception && actual.Message.Contains(f.Text, StringComparison.Ordinal)),
+            Is.True,
+            $"{path}: {actual.GetType().Name}: {actual.Message} is the failure of none of: {string.Join("; ", failures.Select(f => $"{f.Exception.Name} \"{f.Text}\""))}");
+    }
+
+    /// <summary>
     /// Asserts that a failure is the pinned one: the name of the exception type, the parameter name of an
     /// <see cref="ArgumentException"/> (null for another exception), and the message.
     /// </summary>

@@ -4,6 +4,8 @@ using System.Linq;
 using System.Net;
 using System.Text;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Poco;
+using ClickHouse.Driver.Tcp.Tests.Differential;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Converters;
@@ -313,6 +315,34 @@ public class WriteCombinatorTests
             failure.Message,
             Does.StartWith("A FixedString(2) value at row 2 is 3 bytes in UTF-8; a text value can have at most 2 bytes."),
             "slot 0 is the placeholder, slot 1 is \"a\", so the text would take slot 2");
+    }
+
+    /// <summary>
+    /// A column with two values that the type refuses (rows 1 and 3 are not 2 bytes long): the insert, the POCO insert in
+    /// its two gather tiers and the untyped insert each fail on one of them, and name the row of that value.
+    /// </summary>
+    [Test]
+    public void Write_ColumnWithTwoRefusedValues_FailsOnOneOfThemInEveryTier()
+    {
+        const string type = "FixedString(2)";
+        byte[][] values = { new byte[] { 1, 2 }, new byte[] { 3 }, new byte[] { 4, 5 }, new byte[] { 6, 7, 8 } };
+        WriteArm[] tiers = { ClientArms.Write, ClientArms.PocoWrite, new RowWriteArms.ClientPocoArm("Client.PocoWrite: Delegate", PocoGatherTier.Delegate), ClientArms.UntypedWrite };
+
+        Assert.Multiple(() =>
+        {
+            foreach (WriteArm tier in tiers)
+            {
+                using var column = new ArrayColumn<byte[]>("value", type, values);
+                Exception failure = ConverterHarness.Catch(
+                    () => CodecTestHarness.WriteAsync(w => tier.Bind(column, type, ConverterHarness.Context)(w, 0, values.Length)).GetAwaiter().GetResult());
+
+                ConverterHarness.AssertFailsOnOneOf(
+                    failure,
+                    tier.Name,
+                    (typeof(ArgumentException), "A FixedString(2) value at row 1 is 1 bytes"),
+                    (typeof(ArgumentException), "A FixedString(2) value at row 3 is 3 bytes"));
+            }
+        });
     }
 
     /// <summary>Two lone surrogates have the same UTF-8 bytes (EF BF BD), so they share one dictionary entry.</summary>
