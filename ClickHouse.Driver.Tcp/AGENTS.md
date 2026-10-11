@@ -89,7 +89,9 @@ When you add or change a type, consider every path that touches it:
   `ReadRules.cs` and `WriteRules.cs`, and apply to the whole column type in every tier. A leaf or a combinator does not
   repeat them.
 - **`Fill` and `Emit`.** Every reader has a bulk `Bind`/`Fill` and an `Emit` (an expression for one row, which the POCO
-  tier compiles into its loop). The two give the same values and the same failures, and the differential tests run
+  tier compiles into its loop). The two give the same values, and a read that fails in one
+  fails in the other. When more than one row fails, they can throw the failures of different rows; each failure names
+  its own row. The differential tests run
   every tree both ways. `Fill` is the path of a runtime without dynamic code, so do not add a reader that has only an
   `Emit`.
 - The codec: its read, and its write from storage. `CanWrite` is true for the column class that its read gives, and a
