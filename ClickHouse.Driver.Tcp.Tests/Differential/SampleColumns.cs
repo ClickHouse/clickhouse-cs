@@ -17,7 +17,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 /// The values of a leaf type are valid for every reading of that type: for example, every <c>Time</c> value is a
 /// time of day, so the <see cref="TimeOnly"/> reading gives values too. A <c>Nullable</c> column has NULL in row 1
 /// and row 4, a <c>LowCardinality</c> column repeats values, and an <c>Array</c> or a <c>Map</c> has 0, 1 or 2
-/// elements in a row.
+/// elements in a row. Each depth of a nested <c>Array</c> has elements and empty arrays.
 /// </remarks>
 internal static class SampleColumns
 {
@@ -58,11 +58,13 @@ internal static class SampleColumns
 
             case "Array":
             {
+                // Element i is the value of row + i. In rows 1 and 4, each depth has one element. In row 2, each depth
+                // has two elements: the first has elements, and the second (row 3) is empty when it is an Array.
                 TypeNode inner = node.Arguments[0];
                 Array elements = Array.CreateInstance(ElementType(inner), row % 3);
                 for (int i = 0; i < elements.Length; i++)
                 {
-                    elements.SetValue(Value(inner, (row * 3) + i), i);
+                    elements.SetValue(Value(inner, row + i), i);
                 }
 
                 return elements;

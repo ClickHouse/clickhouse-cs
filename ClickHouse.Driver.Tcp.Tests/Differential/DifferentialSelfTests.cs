@@ -19,6 +19,7 @@ public class DifferentialSelfTests
     private const string NullableDateTimeCase = "ColumnReadProjection: Nullable(DateTime('UTC'))";
     private const string LowCardinalityStringCase = "ColumnReadProjection: LowCardinality(String)";
     private const string OneRowArrayCase = "InsertRoundTrip: Array(Int16) [1 rows]";
+    private const string DeepDateTime64Case = "CompositeLiftMatrix: Array(Array(Array(DateTime64(3, 'UTC'))))";
 
     // The bytes of the UInt8 case [0, 1, 128, 255], for all rows and for the tail [2, 4).
     private static readonly byte[] UInt8Bytes = { 0, 1, 128, 255 };
@@ -281,6 +282,63 @@ public class DifferentialSelfTests
         {
             Assert.That(report.Mismatches, Has.Some.Contains("Write[insert]: the deliberate change").And.Contains("already gives that").And.Contains("A deliberate change must differ from the reference."));
             Assert.That(report.Mismatches, Has.Some.Contains("Write[insert] rows [2, 4): Tail extra byte gives 3 bytes"));
+        });
+    }
+
+    [TestCase("Array(UInt8)", 1)]
+    [TestCase("Array(Array(UInt8))", 2)]
+    [TestCase("Array(Array(Array(UInt8)))", 3)]
+    [TestCase("Array(Array(Array(Array(UInt8))))", 4)]
+    [TestCase("Array(Array(Array(DateTime64(3, 'UTC'))))", 3)]
+    public void Build_NestedArray_HasValuesAndAnEmptyArrayAtEachDepth(string columnType, int depth)
+    {
+        var leaves = new List<object>();
+        var depthsWithAnEmptyArray = new SortedSet<int>();
+
+        void Walk(object value, int level)
+        {
+            if (level > depth)
+            {
+                leaves.Add(value);
+                return;
+            }
+
+            var array = (Array)value;
+            if (array.Length == 0)
+            {
+                depthsWithAnEmptyArray.Add(level);
+            }
+
+            foreach (object element in array)
+            {
+                Walk(element, level + 1);
+            }
+        }
+
+        using (IColumn column = SampleColumns.Build("value", columnType))
+        {
+            for (int row = 0; row < column.RowCount; row++)
+            {
+                Walk(column.GetValue(row), 1);
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(leaves, Is.Not.Empty);
+            Assert.That(depthsWithAnEmptyArray, Is.EqualTo(Enumerable.Range(1, depth)));
+        });
+    }
+
+    [Test]
+    public void Run_CandidateThatReadsAnotherValueAtTheThirdArrayDepth_ReportsTheValue()
+    {
+        CaseReport report = RunWith(DeepDateTime64Case, r => r.Add(new LeafShiftingReadArm(DeepDateTime64Case, typeof(DateTime[][][])), expectedFacets: 1));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<DateTime[][][]> rows [0, 5): Leaf shifting gives"));
+            Assert.That(report.Mismatches, Has.Some.Contains("ReadAs<DateTime[][][]> rows [2, 5): Leaf shifting gives"));
         });
     }
 
@@ -624,6 +682,49 @@ public class DifferentialSelfTests
                     writer.WriteByte(0xEE);
                 }
             };
+        }
+    }
+
+    /// <summary>The client's read, with one millisecond added to each DateTime in the arrays. Covers one ReadAs facet.</summary>
+    private sealed class LeafShiftingReadArm : ReadArm
+    {
+        private readonly string caseId;
+        private readonly Type target;
+
+        public LeafShiftingReadArm(string caseId, Type target)
+            : base("Leaf shifting", Tier.ReadAs)
+        {
+            this.caseId = caseId;
+            this.target = target;
+        }
+
+        public override bool Covers(Facet facet) => facet.Case.Id == caseId && facet.Target == target;
+
+        public override RowReader<T> Bind<T>(Block block)
+        {
+            RowReader<T> inner = ClientArms.ReadAs.Bind<T>(block);
+            return (start, count) => inner(start, count).Select(value => (T)Shift(value)).ToArray();
+        }
+
+        private static object Shift(object value)
+        {
+            if (value is DateTime stamp)
+            {
+                return stamp.AddMilliseconds(1);
+            }
+
+            if (value is not Array array)
+            {
+                return value;
+            }
+
+            Array shifted = Array.CreateInstance(array.GetType().GetElementType(), array.Length);
+            for (int i = 0; i < array.Length; i++)
+            {
+                shifted.SetValue(Shift(array.GetValue(i)), i);
+            }
+
+            return shifted;
         }
     }
 
