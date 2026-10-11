@@ -27,7 +27,7 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 internal sealed class VariantWriter : ColumnWriter<object>
 {
     // The placements of the CLR types that the writes meet. The writer is cached and shared, so the cache has a limit.
-    private const int MaxCachedPlacements = 1024;
+    internal const int MaxCachedPlacements = 1024;
 
     private readonly string typeName;
     private readonly IColumnCodec[] alternatives;
@@ -358,7 +358,7 @@ internal sealed class VariantWriter : ColumnWriter<object>
             rowChildren = null;
         }
 
-        // Splits the values of one alternative into runs of one writer. An alternative with no value writes one empty
+        // Splits the values of one alternative into runs of one CLR type. An alternative with no value writes one empty
         // run of its canonical writer, for its prefix. Called for each alternative in order.
         public void BeginRuns(int alternative, VariantChild canonicalChild, string column, string alternativeType, string variantType)
         {
@@ -376,7 +376,7 @@ internal sealed class VariantWriter : ColumnWriter<object>
             int end = first + count;
             for (int i = first + 1; i <= end; i++)
             {
-                if (i < end && ReferenceEquals(groupedChildren[i], groupedChildren[start]))
+                if (i < end && SameClrType(groupedChildren[i], groupedChildren[start]))
                 {
                     continue;
                 }
@@ -412,6 +412,11 @@ internal sealed class VariantWriter : ColumnWriter<object>
             groupedChildren = null;
             Discriminators = null;
         }
+
+        // In one alternative, the CLR type of a value selects its writer. A placement that the full cache does not keep
+        // gives a new child for each value, so two children of one CLR type can be different objects.
+        private static bool SameClrType(VariantChild child, VariantChild other)
+            => ReferenceEquals(child, other) || child.ValueType == other.ValueType;
     }
 }
 

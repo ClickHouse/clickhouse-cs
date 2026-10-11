@@ -96,6 +96,32 @@ public class VariantWriterTests
     }
 
     /// <summary>
+    /// A composite alternative takes the values of one CLR type in one write also when the placement cache of the writer
+    /// is full and does not keep that type. Refused values of distinct CLR types fill the cache first.
+    /// </summary>
+    [Test]
+    public async Task Write_CompositeAlternativeFromAClrTypeThatTheFullCacheDoesNotKeep_WritesOneRun()
+    {
+        const string type = "Variant(Array(String), UInt64)";
+
+        // A derivation of its own, so the writer and its placement cache are not those of the other tests.
+        ColumnWriter<object> writer = new ConverterDerivation(ColumnCodecRegistry.Default).Writer<object>(type, ConverterHarness.Context);
+        foreach (object refused in ValuesOfDistinctClrTypes(VariantWriter.MaxCachedPlacements))
+        {
+            Assert.Throws<ArgumentException>(() => writer.Begin(ValueSource<object>.Of(new[] { refused })).Dispose());
+        }
+
+        object[] values = { new[] { new byte[] { 0x61 } }, 1UL, new[] { new byte[] { 0x62 }, new byte[] { 0x63 } } };
+
+        byte[] actual = await ConverterHarness.WriteNewAsync(writer, values, 0, values.Length);
+
+        // Mode 0; the discriminators; the Array offsets 1 and 3, the strings "a", "b", "c"; the UInt64 1.
+        Assert.That(
+            Convert.ToHexString(actual),
+            Is.EqualTo("0000000000000000" + "000100" + "0100000000000000" + "0300000000000000" + "0161" + "0162" + "0163" + "0100000000000000"));
+    }
+
+    /// <summary>
     /// A value that two alternatives are written from, and that neither claims, is refused: it does not say which one
     /// it means.
     /// </summary>
@@ -321,6 +347,20 @@ public class VariantWriterTests
                 2 => new[] { new[] { (byte)i } },
                 _ => null,
             };
+        }
+
+        return values;
+    }
+
+    // Default values of distinct ValueTuple types of three numeric fields. Variant(Array(String), UInt64) refuses them.
+    private static object[] ValuesOfDistinctClrTypes(int count)
+    {
+        Type[] fields = { typeof(byte), typeof(sbyte), typeof(short), typeof(ushort), typeof(int), typeof(uint), typeof(long), typeof(ulong), typeof(float), typeof(double), typeof(char) };
+        var values = new object[count];
+        for (int i = 0; i < count; i++)
+        {
+            Type tuple = typeof(ValueTuple<,,>).MakeGenericType(fields[i % 11], fields[i / 11 % 11], fields[i / 121 % 11]);
+            values[i] = Activator.CreateInstance(tuple);
         }
 
         return values;
