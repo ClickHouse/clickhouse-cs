@@ -150,6 +150,24 @@ public class DerivedColumnTests
     }
 
     [Test]
+    public void Indexer_RowOutsideAColumnThatFailsToConvert_ThrowsIndexOutOfRangeAndDoesNotConvert()
+    {
+        var pool = new CountingPool<int>();
+        var reader = new CountingReader<int>(row => row == 1 ? throw NullValueException.At(1) : row);
+        var view = new DerivedColumn<int>(new ArrayColumn<int?>("value", "Nullable(Int32)", new int?[] { 1, null, 3 }), reader, pool);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => view[3], Throws.TypeOf<IndexOutOfRangeException>());
+            Assert.That(() => view[-1], Throws.TypeOf<IndexOutOfRangeException>());
+            Assert.That(() => view.GetValue(3), Throws.TypeOf<IndexOutOfRangeException>());
+            Assert.That(reader.Fills, Is.Empty, "a row outside the column does not convert it");
+            Assert.That(pool.Rented, Is.Empty);
+            Assert.That(() => view[0], Throws.InvalidOperationException.With.Message.EqualTo(NullFailure), "a row inside the column converts it");
+        });
+    }
+
+    [Test]
     public void Values_ZeroRows_RentsNothing()
     {
         var pool = new CountingPool<int>();
