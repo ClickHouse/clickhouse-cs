@@ -18,6 +18,9 @@ public enum CaseSource
 
     /// <summary>A value or error scenario of <c>DifferentialCases</c>: its own values, read as its target.</summary>
     ColumnReadScenario,
+
+    /// <summary>A scenario of <c>DifferentialCases</c> with values that fail some rows of every insert, or of every read.</summary>
+    FailureScenario,
 }
 
 /// <summary>What a <see cref="WriteInput"/> writes.</summary>

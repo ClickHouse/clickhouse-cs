@@ -11,8 +11,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
 /// <summary>
 /// The case list of the differential tests: every case of <c>InsertRoundTripCase</c> and of
-/// <c>CompositeLiftMatrixTests</c>, a table of column types with read targets, and a list of value and error scenarios
-/// of <c>ReadAs</c>.
+/// <c>CompositeLiftMatrixTests</c>, a table of column types with read targets, a list of value and error scenarios
+/// of <c>ReadAs</c>, and a list of failure scenarios.
 /// </summary>
 public static class DifferentialCases
 {
@@ -27,6 +27,9 @@ public static class DifferentialCases
 
     /// <summary>The number of value and error scenarios (<see cref="CaseSource.ColumnReadScenario"/>).</summary>
     public const int ColumnReadScenarioCount = 39;
+
+    /// <summary>The number of failure scenarios (<see cref="CaseSource.FailureScenario"/>).</summary>
+    public const int FailureScenarioCount = 5;
 
     /// <summary>
     /// The column types that the read tests of the client read, each with the CLR types that a case reads it as: the
@@ -106,6 +109,7 @@ public static class DifferentialCases
         cases.AddRange(UniqueIds(CaseSource.CompositeLiftMatrix, FromCompositeLiftMatrix()));
         cases.AddRange(UniqueIds(CaseSource.ColumnReadProjection, FromColumnReadProjection()));
         cases.AddRange(UniqueIds(CaseSource.ColumnReadScenario, FromColumnReadScenarios()));
+        cases.AddRange(UniqueIds(CaseSource.FailureScenario, FromFailureScenarios()));
         return cases;
     }
 
@@ -281,6 +285,38 @@ public static class DifferentialCases
         // ordinals, but a clear failure is better than a wrong label.
         ColumnReadScenario.Throws<sbyte, string, KeyNotFoundException>("Enum8('a' = -1, 'b' = 127) as string: ordinal 0", "Enum8('a' = -1, 'b' = 127)", 0, "Enum8('a' = -1, 'b' = 127)", "ordinal 0"),
     };
+
+    // Values that fail some rows of every insert, at two rows (rows 1 and 3, so the tail [2, 5) holds one) or only in the
+    // first half (so the tail writes), with failures that name a row, a value, or nothing. The source of the reads is the
+    // sample column of the type. The last case fails its reads at row 0 only: the tail of POCO mapping reads values, and the
+    // tail of Block.ReadAs fails, because its view converts every row.
+    private static IEnumerable<(string, Func<string, DifferentialCase>)> FromFailureScenarios()
+    {
+        yield return Refused("Int32 from int? with NULL in rows 1 and 3", "Int32", new int?[] { 1, null, 3, null, 5 });
+        yield return Refused("Int32 from int? with NULL in row 0 only", "Int32", new int?[] { null, 2, 3, 4, 5 });
+        yield return Refused("FixedString(2) from bytes of another length in rows 1 and 3", "FixedString(2)", new[] { new byte[] { 1, 2 }, new byte[] { 3 }, new byte[] { 4, 5 }, new byte[] { 6, 7, 8 }, new byte[] { 9, 10 } });
+        yield return Refused("Enum8('a' = 1, 'b' = 2) from labels it does not declare in rows 1 and 3", "Enum8('a' = 1, 'b' = 2)", new[] { "a", "x", "b", "y", "a" });
+        yield return ("Nullable(Int32) with NULL in row 0 only, as int", id => new DifferentialCase(
+            id,
+            CaseSource.FailureScenario,
+            "Nullable(Int32)",
+            5,
+            new[] { typeof(int?), typeof(int) },
+            new[] { WriteInput.Built("canonical", typeof(int?), name => new ArrayColumn<int?>(name, "Nullable(Int32)", new int?[] { null, 1, 2, 3, 4 })) }));
+    }
+
+    private static (string, Func<string, DifferentialCase>) Refused<T>(string name, string columnType, T[] values)
+        => (name, id => new DifferentialCase(
+            id,
+            CaseSource.FailureScenario,
+            columnType,
+            values.Length,
+            new[] { Codec(columnType).ElementType },
+            new[]
+            {
+                WriteInput.Built("canonical", Codec(columnType).ElementType, column => SampleColumns.Build(column, columnType)),
+                WriteInput.Built("refused values", typeof(T), column => new ArrayColumn<T>(column, columnType, (T[])values.Clone())),
+            }));
 
     private static ColumnReadScenario NoTimeOfDay<TSource>(string name, string columnType, TSource value)
         => ColumnReadScenario.Throws<TSource, TimeOnly, InvalidOperationException>(name, columnType, value, "is not a time of day", "TimeSpan");
