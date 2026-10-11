@@ -89,12 +89,29 @@ internal static class BlockWriter
             IColumnCodec codec = registry.Resolve(column.TypeName, in context);
             InsertColumnWrite write = InsertColumnWrite.For(codec, column, column.TypeName, in context, registry.Converters)
                 ?? throw new ArgumentException(
-                    $"Column '{column.Name}' cannot be written as {column.TypeName}: {registry.Converters.Derive(column.TypeName, in context, column.ElementType, ConversionDirection.Write).Refusal}",
+                    $"Column '{column.Name}' cannot be written as {column.TypeName}: {WriteRefusal(column, registry.Converters, in context)}",
                     nameof(columns));
             planned[i] = new InsertColumn(column.Name, column.TypeName, codec, column, write);
         }
 
         return WriteDataBlockAsync(writer, negotiated, planned, start: 0, rowCount, flushThresholdBytes, cancellationToken);
+    }
+
+    // Why the type of the column is not written from its CLR type. A column that implements IColumn<> zero times or more
+    // than once has no single CLR type, so the reason names the class of the column.
+    private static string WriteRefusal(IColumn column, ConverterDerivation derivation, in ResolveContext context)
+    {
+        Type elementType;
+        try
+        {
+            elementType = column.ElementType;
+        }
+        catch (InvalidOperationException)
+        {
+            return $"'{column.TypeName}' cannot be written from a column of {column.GetType()}, which has no single CLR type.";
+        }
+
+        return derivation.Derive(column.TypeName, in context, elementType, ConversionDirection.Write).Refusal;
     }
 
     /// <summary>
