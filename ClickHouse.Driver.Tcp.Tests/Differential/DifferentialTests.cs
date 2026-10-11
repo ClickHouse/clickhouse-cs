@@ -54,8 +54,8 @@ public class DifferentialTests
         var problems = new List<string>();
         foreach (Type target in testCase.ReadTargets)
         {
-            TierRun Tier(ReadArm arm, Texts texts) => new(arm.Name, texts, arm.ReadsEveryRow, r => Read(arm, testCase, target, r), p => ReadRows(arm, testCase, target, p));
-            TierRun readAs = Tier(ClientArms.ReadAs, Texts.Exact), poco = Tier(ClientArms.Poco, Texts.Exact), fill = Tier(ClientArms.PocoFill, Texts.Exact);
+            TierRun Tier(ReadArm arm) => new(arm.Name, namesBlockRows: false, arm.ReadsEveryRow, r => Read(arm, testCase, target, r), p => ReadRows(arm, testCase, target, p));
+            TierRun readAs = Tier(ClientArms.ReadAs), poco = Tier(ClientArms.Poco), fill = Tier(ClientArms.PocoFill);
             CheckTiers(problems, TypeNames.Of(target), testCase, new[] { readAs, poco, fill }, new[] { new Pair(readAs, poco, Texts.TypeOnly), new Pair(poco, fill, Texts.Exact) });
 
             bool canRead = ClickHouseTcpTypes.CanRead(testCase.ColumnType, target);
@@ -243,7 +243,6 @@ public class DifferentialTests
         {
             Assert.That(Outcome.RangeDifference(Outcome.Failure(new OverflowException("row 3")), rows, Texts.Exact), Is.Null, "one of the failing rows");
             Assert.That(Outcome.RangeDifference(Outcome.Failure(new OverflowException("row 2")), rows, Texts.Exact), Does.Contain("none of its rows"), "another message");
-            Assert.That(Outcome.RangeDifference(Outcome.Failure(new OverflowException("row 2")), rows, Texts.NumbersMasked), Is.Null, "another number, masked");
             Assert.That(Outcome.RangeDifference(Outcome.Failure(new ArgumentException("row 1")), rows, Texts.TypeOnly), Does.Contain("none of its rows"), "another type");
             Assert.That(Outcome.RangeDifference(bytes, rows, Texts.Exact), Does.Contain("fail alone"), "a result although rows fail");
             Assert.That(Outcome.RangeDifference(Outcome.Failure(new OverflowException("row 1")), new[] { bytes, bytes }, Texts.Exact), Does.Contain("no row fails"), "a failure although no row fails");
@@ -251,16 +250,44 @@ public class DifferentialTests
         });
     }
 
+    /// <summary>
+    /// A failure of a row insert names the rows of its block, which <see cref="Outcome.InSourceRows"/> makes rows of the
+    /// source, and every other number of the message stays: a message that names a row that does not fail, or another
+    /// width or length, is not the failure of a failing row.
+    /// </summary>
+    [Test]
+    public void InSourceRows_FailureOfARowInsert_MustNameAFailingRowWithItsOwnNumbers()
+    {
+        // A row insert of rows [2, 5) writes one block from row 0; row 3 fails alone, as a block from row 3.
+        Outcome Fixed(int row, int bytes, int width = 2) => Outcome.Failure(new ArgumentException($"A FixedString({width}) value at row {row} is {bytes} bytes; every value must be exactly {width} bytes."));
+        Outcome[] rowsAlone = { Outcome.InSourceRows(Fixed(0, 3), blockStart: 3) };
+        string Difference(Outcome range) => Outcome.RangeDifference(Outcome.InSourceRows(range, blockStart: 2), rowsAlone, Texts.Exact);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Difference(Fixed(1, 3)), Is.Null, "row 1 of the block is row 3 of the source");
+            Assert.That(Difference(Fixed(0, 3)), Does.Contain("none of its rows"), "row 0 of the block is row 2, which does not fail");
+            Assert.That(Difference(Fixed(1, 4)), Does.Contain("none of its rows"), "another length");
+            Assert.That(Difference(Fixed(1, 3, width: 3)), Does.Contain("none of its rows"), "another width");
+            Assert.That(Outcome.InSourceRows(Outcome.Failure(new InvalidOperationException("Property 'R.V' is null at row 3 of the insert.")), 2).Message, Does.Contain("at row 3 of the insert"), "the gather names the row of the insert");
+            Assert.That(Outcome.InSourceRows(Outcome.Failure(new OverflowException("Value at index 1 exceeds the declared precision 3.")), 2).Message, Does.Contain("index 3 exceeds the declared precision 3"), "a position in the block");
+            Assert.That(Outcome.InSourceRows(Outcome.Failure(new ArgumentException("A FixedString(2) value at element 4 is 1 bytes.")), 2).Message, Does.Contain("at element # is 1 bytes"), "an element has no row");
+        });
+    }
+
     /// <summary>One tier of a family: its outcome for each range and the outcome of each row alone, each computed once.</summary>
-    private sealed class TierRun(string name, Texts texts, bool readsEveryRow, Func<RowRange, Outcome> range, Func<bool, Outcome[]> rows)
+    private sealed class TierRun(string name, bool namesBlockRows, bool readsEveryRow, Func<RowRange, Outcome> range, Func<bool, Outcome[]> rows)
     {
         private readonly Dictionary<RowRange, Outcome> ranges = new();
         private readonly Dictionary<bool, Outcome[]> rowsAlone = new();
 
         public string Name { get; } = name;
 
-        /// <summary>How a failure of a range is compared with the failures of its rows alone.</summary>
-        public Texts Texts { get; } = texts;
+        /// <summary>Whether a failure names the rows of the block of a write (a row insert, <see cref="Outcome.InSourceRows"/>).</summary>
+        public bool NamesBlockRows { get; } = namesBlockRows;
+
+        /// <summary>The outcome, with the rows of the source in its message when the tier names the rows of its block.</summary>
+        public Outcome InSource(Outcome outcome, int blockStart) => NamesBlockRows ? Outcome.InSourceRows(outcome, blockStart) : outcome;
 
         /// <summary>Whether a range reads every row of the column (<see cref="ReadArm.ReadsEveryRow"/>).</summary>
         public bool ReadsEveryRow { get; } = readsEveryRow;
@@ -318,10 +345,11 @@ public class DifferentialTests
         {
             foreach (RowRange range in ranges)
             {
-                Outcome[] rows = tier.Rows(range.Preceded);
+                // Each failure with the rows of the source in its message: a row alone is a block that starts at that row.
+                Outcome[] rows = tier.Rows(range.Preceded).Select((row, at) => tier.InSource(row, at)).ToArray();
                 Outcome[] own = rows[range.Start..(range.Start + range.Count)];
-                Outcome outcome = tier.Range(range);
-                Add(problems, $"{label}: {tier.Name} {range}", Outcome.RangeDifference(outcome, tier.ReadsEveryRow ? rows : own, tier.Texts));
+                Outcome outcome = tier.InSource(tier.Range(range), range.Start);
+                Add(problems, $"{label}: {tier.Name} {range}", Outcome.RangeDifference(outcome, tier.ReadsEveryRow ? rows : own, Texts.Exact));
                 Check(problems, $"{label}: {tier.Name} {range} broke a rule of its own: {outcome}", outcome.ExceptionType != typeof(ArmInvariantException));
                 if (outcome.Kind == OutcomeKind.Values && Array.TrueForAll(own, row => row.Kind == OutcomeKind.Values))
                 {
@@ -338,7 +366,8 @@ public class DifferentialTests
                 for (int row = 0; row < first.Length; row++)
                 {
                     Texts texts = pair.OwnWording?.Invoke(preceded, row) == true ? Texts.TypeOnly : pair.Texts;
-                    Add(problems, $"{label}: {pair.Second.Name} against {pair.First.Name}, row {row} alone{(preceded ? " after a preceding row" : string.Empty)}", pair.Difference(first[row], second[row], texts));
+                    Outcome firstRow = pair.First.InSource(first[row], row), secondRow = pair.Second.InSource(second[row], row);
+                    Add(problems, $"{label}: {pair.Second.Name} against {pair.First.Name}, row {row} alone{(preceded ? " after a preceding row" : string.Empty)}", pair.Difference(firstRow, secondRow, texts));
                 }
             }
 
@@ -365,9 +394,9 @@ public class DifferentialTests
     // The tiers of a write input: the insert, the write through the indexer when there is one, and the row inserts.
     private static TierRun[] WriteTiers(DifferentialCase testCase, WriteInput input, WriteArm indexer)
     {
-        TierRun Tier(WriteArm arm, Texts texts) => new(arm.Name, texts, readsEveryRow: false, r => Write(arm, testCase, input, r), p => WriteRows(arm, testCase, input, p));
-        return new[] { ClientArms.Write, indexer }.Where(arm => arm is not null).Select(arm => Tier(arm, Texts.Exact))
-            .Concat(RowInserts.Select(arm => Tier(arm, Texts.NumbersMasked)))
+        TierRun Tier(WriteArm arm, bool namesBlockRows) => new(arm.Name, namesBlockRows, readsEveryRow: false, r => Write(arm, testCase, input, r), p => WriteRows(arm, testCase, input, p));
+        return new[] { ClientArms.Write, indexer }.Where(arm => arm is not null).Select(arm => Tier(arm, namesBlockRows: false))
+            .Concat(RowInserts.Select(arm => Tier(arm, namesBlockRows: true)))
             .ToArray();
     }
 
@@ -375,8 +404,9 @@ public class DifferentialTests
     // other. A row insert refuses what CanWrite refuses (a Nested column, which only a column of its own layout writes).
     // It refuses a null value itself when it gathers the row, in its own words, so only the type of that failure is
     // compared with the failure of the insert; any other failure comes from the converter layer, with the text of the
-    // insert up to its numbers (a row insert names the row of its block). sameBytes is false for a decoded column, which
-    // the insert writes from its storage and a row insert from its values; the family compares the values of those bytes.
+    // insert once the rows of its block are rows of the source (Outcome.InSourceRows). sameBytes is false for a decoded
+    // column, which the insert writes from its storage and a row insert from its values; the family compares the values
+    // of those bytes.
     private static Pair[] WritePairs(DifferentialCase testCase, WriteInput input, TierRun[] tiers, bool canWrite, bool sameBytes = true)
     {
         TierRun insert = tiers[0];
@@ -387,7 +417,7 @@ public class DifferentialTests
         bool IsNull(bool preceded, int row) => (nulls.TryGetValue(preceded, out bool[] of) ? of : nulls[preceded] = Nulls(testCase, input, preceded))[row];
         pairs.AddRange(new[] { rows[0], rows[2] }
             .Where(row => !RowInsertOutcomes.ContainsKey((testCase.Id, row.Name)))
-            .Select(row => new Pair(insert, row, Texts.NumbersMasked, RowInsert, sameBytes) { OwnWording = IsNull }));
+            .Select(row => new Pair(insert, row, Texts.Exact, RowInsert, sameBytes) { OwnWording = IsNull }));
         if (tiers.Length == 5)
         {
             pairs.Add(new Pair(insert, tiers[1], Texts.Exact));
