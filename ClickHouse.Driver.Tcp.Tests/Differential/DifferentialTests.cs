@@ -87,7 +87,7 @@ public class DifferentialTests
             }
 
             bool canWrite = ClickHouseTcpTypes.CanWrite(testCase.ColumnType, input.ElementType);
-            CheckTiers(problems, input.Label, testCase, tiers, WritePairs(testCase, tiers, canWrite));
+            CheckTiers(problems, input.Label, testCase, tiers, WritePairs(testCase, input, tiers, canWrite));
             CheckPinned(problems, input.Label, testCase, tiers);
             foreach (RowRange range in new[] { All(testCase), Tail(testCase) })
             {
@@ -132,7 +132,7 @@ public class DifferentialTests
         if (input is not null)
         {
             TierRun[] tiers = WriteTiers(testCase, input, indexer: null);
-            CheckTiers(problems, input.Label, testCase, tiers, WritePairs(testCase, tiers, ClickHouseTcpTypes.CanWrite(testCase.ColumnType, input.ElementType), sameBytes: false));
+            CheckTiers(problems, input.Label, testCase, tiers, WritePairs(testCase, input, tiers, ClickHouseTcpTypes.CanWrite(testCase.ColumnType, input.ElementType), sameBytes: false));
             CheckPinned(problems, input.Label, testCase, tiers);
             Add(problems, "the insert of the decoded column against the source bytes", Outcome.Difference(Outcome.OfBytes(SourceBytes(testCase)), tiers[0].Range(All(testCase))));
             foreach (RowRange range in new[] { All(testCase), Tail(testCase) })
@@ -278,6 +278,9 @@ public class DifferentialTests
     /// </summary>
     private sealed record Pair(TierRun First, TierRun Second, Texts Texts, Func<Outcome, OutcomeKind> Expected = null, bool SameResults = true)
     {
+        /// <summary>The rows (of the column without, and with, a preceding row) whose failure the second words in its own terms, so only the type is compared.</summary>
+        public Func<bool, int, bool> OwnWording { get; init; }
+
         // The second outcome against the first: the expected kind; then, for the same kind, the same values or bytes, and the
         // same failure by texts (not compared when texts is null: two ranges can fail on different rows).
         public string Difference(Outcome first, Outcome second, Texts? texts)
@@ -334,7 +337,8 @@ public class DifferentialTests
                 Outcome[] first = pair.First.Rows(preceded), second = pair.Second.Rows(preceded);
                 for (int row = 0; row < first.Length; row++)
                 {
-                    Add(problems, $"{label}: {pair.Second.Name} against {pair.First.Name}, row {row} alone{(preceded ? " after a preceding row" : string.Empty)}", pair.Difference(first[row], second[row], pair.Texts));
+                    Texts texts = pair.OwnWording?.Invoke(preceded, row) == true ? Texts.TypeOnly : pair.Texts;
+                    Add(problems, $"{label}: {pair.Second.Name} against {pair.First.Name}, row {row} alone{(preceded ? " after a preceding row" : string.Empty)}", pair.Difference(first[row], second[row], texts));
                 }
             }
 
@@ -368,17 +372,22 @@ public class DifferentialTests
     }
 
     // The insert against the write through the indexer and against each row insert, and the two POCO tiers against each
-    // other. A row insert refuses what CanWrite refuses (a Nested column, which only a column of its own layout writes),
-    // and has the outcome of RowInsertOutcomes; it words a failure in its own terms, so only the type is compared with the
-    // failure of the insert. sameBytes is false for a decoded column, which the insert writes from its storage and a row
-    // insert from its values; the family compares the values of those bytes instead.
-    private static Pair[] WritePairs(DifferentialCase testCase, TierRun[] tiers, bool canWrite, bool sameBytes = true)
+    // other. A row insert refuses what CanWrite refuses (a Nested column, which only a column of its own layout writes).
+    // It refuses a null value itself when it gathers the row, in its own words, so only the type of that failure is
+    // compared with the failure of the insert; any other failure comes from the converter layer, with the text of the
+    // insert up to its numbers (a row insert names the row of its block). sameBytes is false for a decoded column, which
+    // the insert writes from its storage and a row insert from its values; the family compares the values of those bytes.
+    private static Pair[] WritePairs(DifferentialCase testCase, WriteInput input, TierRun[] tiers, bool canWrite, bool sameBytes = true)
     {
         TierRun insert = tiers[0];
         TierRun[] rows = tiers[^3..];
         OutcomeKind RowInsert(Outcome insertOutcome) => insertOutcome.Kind == OutcomeKind.Bytes && !canWrite ? OutcomeKind.Refused : insertOutcome.Kind;
         var pairs = new List<Pair> { new(rows[0], rows[1], Texts.Exact) };
-        pairs.AddRange(new[] { rows[0], rows[2] }.Where(row => !RowInsertOutcomes.ContainsKey((testCase.Id, row.Name))).Select(row => new Pair(insert, row, Texts.TypeOnly, RowInsert, sameBytes)));
+        var nulls = new Dictionary<bool, bool[]>();
+        bool IsNull(bool preceded, int row) => (nulls.TryGetValue(preceded, out bool[] of) ? of : nulls[preceded] = Nulls(testCase, input, preceded))[row];
+        pairs.AddRange(new[] { rows[0], rows[2] }
+            .Where(row => !RowInsertOutcomes.ContainsKey((testCase.Id, row.Name)))
+            .Select(row => new Pair(insert, row, Texts.NumbersMasked, RowInsert, sameBytes) { OwnWording = IsNull }));
         if (tiers.Length == 5)
         {
             pairs.Add(new Pair(insert, tiers[1], Texts.Exact));

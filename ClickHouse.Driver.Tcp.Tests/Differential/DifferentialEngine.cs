@@ -42,6 +42,7 @@ internal static class DifferentialEngine
 
     private static readonly MethodInfo ReadMethod = typeof(DifferentialEngine).GetMethod(nameof(ReadTyped), BindingFlags.NonPublic | BindingFlags.Static);
     private static readonly MethodInfo WriteMethod = typeof(DifferentialEngine).GetMethod(nameof(WriteTyped), BindingFlags.NonPublic | BindingFlags.Static);
+    private static readonly MethodInfo NullsMethod = typeof(DifferentialEngine).GetMethod(nameof(NullsTyped), BindingFlags.NonPublic | BindingFlags.Static);
     private static readonly MethodInfo ReadRowsMethod = typeof(DifferentialEngine).GetMethod(nameof(ReadRowsTyped), BindingFlags.NonPublic | BindingFlags.Static);
 
     /// <summary>The context that every case resolves its codecs with.</summary>
@@ -98,6 +99,10 @@ internal static class DifferentialEngine
     public static Outcome[] ReadRows(ReadArm arm, DifferentialCase testCase, Type target, bool preceded)
         => (Outcome[])Invoke(ReadRowsMethod, target, arm, testCase, preceded);
 
+    /// <summary>Whether each row of a write input holds null (of the column with a preceding row when preceded).</summary>
+    public static bool[] Nulls(DifferentialCase testCase, WriteInput input, bool preceded)
+        => (bool[])Invoke(NullsMethod, input.ElementType, testCase, input, preceded);
+
     /// <summary>Writes each row of a write input alone (of the column with a preceding row when preceded).</summary>
     public static Outcome[] WriteRows(WriteArm arm, DifferentialCase testCase, WriteInput input, bool preceded)
         => Enumerable.Range(0, testCase.RowCount + (preceded ? 1 : 0))
@@ -148,30 +153,45 @@ internal static class DifferentialEngine
         }
     }
 
-    private static Outcome WriteTyped<T>(WriteArm arm, DifferentialCase testCase, WriteInput input, RowRange range)
+    // The column of a write input (of the column with a preceding row when preceded), with the block that owns a decoded
+    // column; null for a read back whose read gives no values.
+    private static IColumn Column<T>(DifferentialCase testCase, WriteInput input, bool preceded, out Block block)
     {
-        Block block = null;
-        IColumn column;
+        block = null;
         switch (input.Kind)
         {
             case WriteInputKind.Built:
-                column = Preceded<T>(testCase, input.Build("value"), range.Preceded);
-                break;
+                return Preceded<T>(testCase, input.Build("value"), preceded);
 
             case WriteInputKind.Decoded:
-                block = Decode(testCase, range.Preceded);
-                column = block[0];
-                break;
+                block = Decode(testCase, preceded);
+                return block[0];
 
             default:
                 Outcome values = ReadBacks.GetOrAdd((testCase.Id, input.ElementType), key => Read(ClientArms.ReadAs, testCase, key.Target, All(testCase)));
-                if (values.Kind != OutcomeKind.Values)
-                {
-                    return Outcome.Unavailable($"Block.ReadAs gives no values: {values}");
-                }
+                return values.Kind == OutcomeKind.Values ? Preceded<T>(testCase, new ArrayColumn<T>("value", testCase.ColumnType, values.ValuesAs<T>()), preceded) : null;
+        }
+    }
 
-                column = Preceded<T>(testCase, new ArrayColumn<T>("value", testCase.ColumnType, values.ValuesAs<T>()), range.Preceded);
-                break;
+    private static bool[] NullsTyped<T>(DifferentialCase testCase, WriteInput input, bool preceded)
+    {
+        IColumn column = Column<T>(testCase, input, preceded, out Block block);
+        try
+        {
+            return Enumerable.Range(0, column?.RowCount ?? 0).Select(row => column.GetValue(row) is null).ToArray();
+        }
+        finally
+        {
+            (block as IDisposable ?? column)?.Dispose();
+        }
+    }
+
+    private static Outcome WriteTyped<T>(WriteArm arm, DifferentialCase testCase, WriteInput input, RowRange range)
+    {
+        IColumn column = Column<T>(testCase, input, range.Preceded, out Block block);
+        if (column is null)
+        {
+            return Outcome.Unavailable("Block.ReadAs gives no values");
         }
 
         try
