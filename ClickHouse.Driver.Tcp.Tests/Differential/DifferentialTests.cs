@@ -199,6 +199,51 @@ public class DifferentialTests
         });
     }
 
+    [TestCase("Array(UInt8)", 1)]
+    [TestCase("Array(Array(UInt8))", 2)]
+    [TestCase("Array(Array(Array(UInt8)))", 3)]
+    [TestCase("Array(Array(Array(Array(UInt8))))", 4)]
+    [TestCase("Array(Array(Array(DateTime64(3, 'UTC'))))", 3)]
+    public void Build_NestedArray_HasValuesAndAnEmptyArrayAtEachDepth(string columnType, int depth)
+    {
+        var leaves = new List<object>();
+        var depthsWithAnEmptyArray = new SortedSet<int>();
+
+        void Walk(object value, int level)
+        {
+            if (level > depth)
+            {
+                leaves.Add(value);
+                return;
+            }
+
+            var array = (Array)value;
+            if (array.Length == 0)
+            {
+                depthsWithAnEmptyArray.Add(level);
+            }
+
+            foreach (object element in array)
+            {
+                Walk(element, level + 1);
+            }
+        }
+
+        using (IColumn column = SampleColumns.Build("value", columnType))
+        {
+            for (int row = 0; row < column.RowCount; row++)
+            {
+                Walk(column.GetValue(row), 1);
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(leaves, Is.Not.Empty);
+            Assert.That(depthsWithAnEmptyArray, Is.EqualTo(Enumerable.Range(1, depth)));
+        });
+    }
+
     [TestCase(0f, -0f)]
     [TestCase(double.NaN, 0d)]
     public void Difference_FloatingPointValuesWithOtherBits_AreDifferent(object expected, object actual)
