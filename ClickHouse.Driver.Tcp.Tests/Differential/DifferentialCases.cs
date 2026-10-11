@@ -168,7 +168,7 @@ public static class DifferentialCases
     }
 
     // One case for each scenario: its own values, read as its canonical type and as its target. The scenario states
-    // the outcome of the ReadAs facet of its target.
+    // the outcome of Block.ReadAs of its target.
     private static IEnumerable<(string, Func<string, DifferentialCase>)> FromColumnReadScenarios()
     {
         foreach (ColumnReadScenario scenario in Scenarios())
@@ -179,9 +179,6 @@ public static class DifferentialCases
                 throw new InvalidOperationException($"Scenario '{scenario.Name}' has values of {scenario.Values.GetType().GetElementType()}, not of the canonical type {canonical}.");
             }
 
-            Expectation expected = scenario.ExceptionType is null
-                ? Expectation.Values(scenario.Expected.Cast<object>().ToArray())
-                : Expectation.Fails(scenario.ExceptionType, scenario.MessageParts.ToArray());
 
             var inputs = new List<WriteInput>
             {
@@ -201,7 +198,7 @@ public static class DifferentialCases
                 scenario.Values.Length,
                 new[] { canonical, scenario.Target }.Distinct().ToList(),
                 inputs,
-                new[] { new StatedOutcome(Tier.ReadAs, scenario.Target, expected) }));
+                scenario));
         }
     }
 

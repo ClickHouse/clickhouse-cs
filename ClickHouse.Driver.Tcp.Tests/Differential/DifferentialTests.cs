@@ -1,68 +1,211 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
-using System.Text;
-using System.Threading;
-using ClickHouse.Driver.Tcp.Protocol;
+using System.Numerics;
+using ClickHouse.Driver.Tcp.Tests.Types;
 using ClickHouse.Driver.Tcp.Types;
+using static ClickHouse.Driver.Tcp.Tests.Differential.DifferentialEngine;
 
 namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
 /// <summary>
-/// The differential tests: for every case of <see cref="DifferentialCases"/>, each candidate arm of
-/// <see cref="DifferentialRegistry.Current"/> must give the outcome of the client's entry point of its tier (the
-/// baseline). The POCO reads run their trees through <c>Emit</c> (the baseline) and through <c>Fill</c>, so the two
-/// paths must give the same outcomes. No server is necessary. See <see cref="DifferentialEngine"/>.
+/// The differential tests, offline: every case of <see cref="DifferentialCases"/> runs through every read and write tier
+/// of the client, for all rows and for a tail that starts above row 0 (<see cref="DifferentialEngine"/>), and the tiers
+/// must agree. Values are compared strictly (<see cref="ValueComparer"/>). When several rows fail, a tier can name any
+/// one of them, so a failure must be the failure of one of its rows (<see cref="Outcome.FailureDifference"/>).
 /// </summary>
 [TestFixture]
 public class DifferentialTests
 {
+    /// <summary>The answers of <c>CanRead</c> for the read targets and of <c>CanWrite</c> for the write inputs that are not decoded, over the case list.</summary>
+    private static readonly (int CanReadTrue, int CanReadFalse, int CanWriteTrue, int CanWriteFalse) ExpectedAnswers = (568, 19, 528, 31);
+
+    public static IEnumerable<DifferentialCase> Cases() => DifferentialCases.All();
+
+    public static IEnumerable<DifferentialCase> ScenarioCases() => DifferentialCases.All().Where(c => c.Scenario is not null);
+
     /// <summary>
-    /// The baseline outcomes for all rows, counted by tier and kind, with an answer counted by its value. A change of
-    /// what the client accepts, or of the case list, changes these counts.
+    /// <c>Block.ReadAs</c>, POCO mapping (the compiled loop) and POCO mapping in the tier of a runtime without dynamic code
+    /// (<c>Bind</c>/<c>Fill</c>) read the same values, or all refuse, or all fail; <c>CanRead</c> is whether they read;
+    /// and each tier reads the same values for the tail alone as for those rows in the read of all rows.
     /// </summary>
-    private static readonly Dictionary<(Tier Tier, string Kind), int> ExpectedBaselineOutcomes = new()
+    [TestCaseSource(nameof(Cases))]
+    public void Read_Case_TheTiersReadTheSameValues(DifferentialCase testCase)
     {
-        [(Tier.ReadAs, "Failed")] = 23,
-        [(Tier.ReadAs, "Refused")] = 19,
-        [(Tier.ReadAs, "Values")] = 545,
-        [(Tier.Poco, "Failed")] = 23,
-        [(Tier.Poco, "Refused")] = 19,
-        [(Tier.Poco, "Values")] = 545,
-        [(Tier.CanRead, "Answer False")] = 19,
-        [(Tier.CanRead, "Answer True")] = 568,
-        [(Tier.Write, "Bytes")] = 815,
-        [(Tier.Write, "Unavailable")] = 42,
-        [(Tier.CanWrite, "Answer False")] = 43,
-        [(Tier.CanWrite, "Answer True")] = 814,
-        [(Tier.PocoWrite, "Bytes")] = 789,
-        [(Tier.PocoWrite, "Failed")] = 2,
-        [(Tier.PocoWrite, "Refused")] = 24,
-        [(Tier.PocoWrite, "Unavailable")] = 42,
-        [(Tier.PocoCanWrite, "Answer False")] = 43,
-        [(Tier.PocoCanWrite, "Answer True")] = 814,
-        [(Tier.UntypedWrite, "Bytes")] = 789,
-        [(Tier.UntypedWrite, "Failed")] = 2,
-        [(Tier.UntypedWrite, "Refused")] = 24,
-        [(Tier.UntypedWrite, "Unavailable")] = 42,
-        [(Tier.UntypedCanWrite, "Answer False")] = 43,
-        [(Tier.UntypedCanWrite, "Answer True")] = 814,
-    };
+        var problems = new List<string>();
+        foreach (Type target in testCase.ReadTargets)
+        {
+            string label = TypeNames.Of(target);
+            var ranges = new[] { All(testCase), Tail(testCase) };
+            Outcome[] readAs = Array.ConvertAll(ranges, r => Read(ClientArms.ReadAs, testCase, target, r));
+            Outcome[] poco = Array.ConvertAll(ranges, r => Read(ClientArms.Poco, testCase, target, r));
+            Outcome[] fill = Array.ConvertAll(ranges, r => Read(ClientArms.PocoFill, testCase, target, r));
 
-    [TestCaseSource(typeof(DifferentialCases), nameof(DifferentialCases.All))]
-    public void Run_Case_EveryCandidateGivesTheBaselineOutcome(DifferentialCase testCase)
-    {
-        CaseReport report = DifferentialEngine.ForCurrentRegistry(testCase);
+            bool canRead = ClickHouseTcpTypes.CanRead(testCase.ColumnType, target);
+            Check(problems, $"{label}: CanRead is {canRead}, Block.ReadAs {readAs[0]}", canRead == (readAs[0].Kind != OutcomeKind.Refused));
+            Check(problems, $"{label}: Block.ReadAs {readAs[0].Kind}, POCO mapping {poco[0]}", readAs[0].Kind == poco[0].Kind);
+            if (readAs[0].Kind == OutcomeKind.Values)
+            {
+                Add(problems, $"{label}: POCO mapping against Block.ReadAs", Outcome.Difference(readAs[0], poco[0]));
+            }
 
-        Assert.That(report.Mismatches, Is.Empty, string.Join(Environment.NewLine, report.Mismatches));
+            for (int i = 0; i < ranges.Length; i++)
+            {
+                RowRange range = ranges[i];
+                IEnumerable<Outcome> RowFailuresOfPoco() => RowFailures(range, row => Read(ClientArms.Poco, testCase, target, row));
+                Add(problems, $"{label} {range}: POCO mapping", poco[i].Kind == OutcomeKind.Failed ? Outcome.FailureDifference(poco[i], RowFailuresOfPoco()) : null);
+                Add(problems, $"{label} {range}: the Fill tier against POCO mapping", poco[i].Kind == OutcomeKind.Failed && fill[i].Kind == OutcomeKind.Failed
+                    ? Outcome.FailureDifference(fill[i], RowFailuresOfPoco())
+                    : Outcome.Difference(poco[i], fill[i]));
+            }
+
+            foreach ((string tier, Outcome[] outcomes) in new[] { ("Block.ReadAs", readAs), ("POCO mapping", poco), ("the Fill tier", fill) })
+            {
+                Check(problems, $"{label}: {tier} broke a rule of its own: {outcomes[0]}; {outcomes[1]}", Array.TrueForAll(outcomes, o => o.ExceptionType != typeof(ArmInvariantException)));
+                Add(problems, $"{label}: {tier} reads the tail alone as {outcomes[1]}, all rows as {outcomes[0]}", TailDifference(outcomes[0], outcomes[1], ranges[1].CaseRow));
+            }
+        }
+
+        Assert.That(problems, Is.Empty, string.Join(Environment.NewLine, problems));
     }
 
-    [Test]
-    public void All_EachSource_HasTheExpectedNumberOfCases()
+    /// <summary>
+    /// For each write input that the case builds or reads back: the insert write and an independent write that gathers the
+    /// values of the slice through the indexer give the same bytes, for all rows and for the tail (so the insert slices
+    /// right); the POCO insert in both gather tiers and the untyped insert write the bytes of the insert; and
+    /// <c>CanWrite</c> is whether each insert takes the column. A column read back as another CLR type writes the bytes
+    /// of the source column, except where the CLR type holds less (a count finer than 100 ns).
+    /// </summary>
+    [TestCaseSource(nameof(Cases))]
+    public void Write_Case_TheInsertsWriteTheSameBytes(DifferentialCase testCase)
     {
-        ILookup<CaseSource, DifferentialCase> bySource = DifferentialCases.All().ToLookup(c => c.Source);
+        var problems = new List<string>();
+        var ranges = new[] { All(testCase), Tail(testCase) };
+        foreach (WriteInput input in testCase.WriteInputs.Where(i => i.Kind != WriteInputKind.Decoded))
+        {
+            Outcome[] insert = Array.ConvertAll(ranges, r => Write(ClientArms.Write, testCase, input, r));
+            if (insert[0].Kind == OutcomeKind.Unavailable)
+            {
+                continue;
+            }
+
+            Outcome[] indexer = Array.ConvertAll(ranges, r => Write(ClientArms.IndexerWrite, testCase, input, r));
+            Outcome[] poco = Array.ConvertAll(ranges, r => Write(ClientArms.PocoWrite, testCase, input, r));
+            Outcome[] viaDelegates = Array.ConvertAll(ranges, r => Write(ClientArms.PocoWriteDelegate, testCase, input, r));
+            Outcome[] untyped = Array.ConvertAll(ranges, r => Write(ClientArms.UntypedWrite, testCase, input, r));
+            for (int i = 0; i < ranges.Length; i++)
+            {
+                RowRange range = ranges[i];
+                string label = $"{input} {range}";
+                IEnumerable<Outcome> RowFailuresOfInsert() => RowFailures(range, row => Write(ClientArms.Write, testCase, input, row));
+                Add(problems, $"{label}: the insert", insert[i].Kind == OutcomeKind.Failed ? Outcome.FailureDifference(insert[i], RowFailuresOfInsert()) : null);
+                Add(problems, $"{label}: the write through the indexer against the insert", indexer[i].Kind switch
+                {
+                    OutcomeKind.Refused => insert[i].Kind == OutcomeKind.Refused ? null : $"refused: {indexer[i]}; the insert {insert[i]}",
+                    OutcomeKind.Failed when insert[i].Kind == OutcomeKind.Failed => Outcome.FailureDifference(indexer[i], RowFailuresOfInsert()),
+                    _ => Outcome.Difference(insert[i], indexer[i]),
+                });
+
+                // A failure of a row insert can name the row of its block, so only its type is compared.
+                Add(problems, $"{label}: the POCO insert of the Delegate tier against the compiled one", poco[i].Kind == OutcomeKind.Failed && viaDelegates[i].Kind == OutcomeKind.Failed
+                    ? (poco[i].ExceptionType == viaDelegates[i].ExceptionType ? null : $"{viaDelegates[i]}; compiled {poco[i]}")
+                    : Outcome.Difference(poco[i], viaDelegates[i]));
+                foreach ((string tier, Outcome row) in new[] { ("the POCO insert", poco[i]), ("the untyped insert", untyped[i]) })
+                {
+                    Add(problems, $"{label}: {tier} against the insert", row.Kind == OutcomeKind.Bytes && insert[i].Kind == OutcomeKind.Bytes ? Outcome.Difference(insert[i], row) : null);
+                }
+
+                if (input.Kind == WriteInputKind.ReadBack && !HoldsCountsFinerThanTicks(TypeParser.Parse(testCase.ColumnType)) && insert[i].Kind == OutcomeKind.Bytes)
+                {
+                    Add(problems, $"{label}: the insert against the source column", Outcome.Difference(Write(ClientArms.Write, testCase, testCase.WriteInputs[0], range), insert[i]));
+                }
+            }
+
+            // A Nested column is written only from a column of its own layout, never from a CLR element type, so CanWrite
+            // is false for a type with a Nested in it, although the insert writes such a column.
+            bool canWrite = ClickHouseTcpTypes.CanWrite(testCase.ColumnType, input.ElementType);
+            bool nested = testCase.ColumnType.Contains("Nested(", StringComparison.Ordinal);
+            Check(problems, $"{input}: CanWrite is {canWrite}, the insert {insert[0]}", nested || canWrite == (insert[0].Kind != OutcomeKind.Refused));
+            Check(problems, $"{input}: CanWrite is {canWrite}, the POCO insert {poco[0]}", canWrite == (poco[0].Kind != OutcomeKind.Refused));
+            Check(problems, $"{input}: CanWrite is {canWrite}, the untyped insert {untyped[0]}", canWrite == (untyped[0].Kind != OutcomeKind.Refused));
+        }
+
+        Assert.That(problems, Is.Empty, string.Join(Environment.NewLine, problems));
+    }
+
+    /// <summary>
+    /// The decoded column of a case is a column that its codec writes from its storage. Its insert gives back the bytes
+    /// that it was read from, and each insert of it (the columnar insert, which writes it from its storage, and the row
+    /// inserts, which gather its values) writes, for all rows and for the tail, bytes that decode to the values of the
+    /// same rows of the source column. Equal bytes need no decode: the write of a slice of a LowCardinality column keeps
+    /// the dictionary of the whole column, and a row insert builds the dictionary of its own values.
+    /// </summary>
+    [TestCaseSource(nameof(Cases))]
+    public void Write_Case_TheDecodedColumnWritesItsRows(DifferentialCase testCase)
+    {
+        var problems = new List<string>();
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(testCase.ColumnType, Context);
+        using (IColumn decoded = DecodeColumn(testCase.ColumnType, SourceBytes(testCase), testCase.RowCount))
+        {
+            Check(problems, $"the codec does not write the decoded {decoded.GetType().Name} from its storage", codec.CanWrite(decoded));
+            Check(problems, $"the decoded column has the element type {decoded.ElementType}, and the codec {codec.ElementType}", decoded.ElementType == codec.ElementType);
+        }
+
+        WriteInput input = testCase.WriteInputs.FirstOrDefault(i => i.Kind == WriteInputKind.Decoded);
+        if (input is not null)
+        {
+            Outcome all = Write(ClientArms.Write, testCase, input, All(testCase));
+            Add(problems, "the insert of the decoded column against the source bytes", Outcome.Difference(Outcome.OfBytes(SourceBytes(testCase)), all));
+            foreach (RowRange range in new[] { All(testCase), Tail(testCase) })
+            {
+                Outcome source = Write(ClientArms.Write, testCase, testCase.WriteInputs[0], range);
+                var written = new[] { ClientArms.Write, ClientArms.PocoWrite, ClientArms.PocoWriteDelegate, ClientArms.UntypedWrite }.ToDictionary(arm => arm, arm => Write(arm, testCase, input, range));
+                Check(problems, $"{range}: the POCO insert of the Delegate tier {written[ClientArms.PocoWriteDelegate]}, the compiled one {written[ClientArms.PocoWrite]}", written[ClientArms.PocoWrite].Kind == written[ClientArms.PocoWriteDelegate].Kind);
+                foreach ((WriteArm arm, Outcome bytes) in written)
+                {
+                    if (source.Kind == OutcomeKind.Bytes && bytes.Kind == OutcomeKind.Bytes && Outcome.Difference(source, bytes) is not null)
+                    {
+                        Add(problems, $"{arm.Name} {range}", RowsDifference(testCase.ColumnType, source.Bytes, bytes.Bytes, range.Count));
+                    }
+                }
+            }
+        }
+
+        Assert.That(problems, Is.Empty, string.Join(Environment.NewLine, problems));
+    }
+
+    /// <summary>A scenario case gives the outcome that it states for <c>Block.ReadAs</c>, for all rows and for the tail.</summary>
+    [TestCaseSource(nameof(ScenarioCases))]
+    public void Read_Case_GivesTheStatedOutcome(DifferentialCase testCase)
+    {
+        ColumnReadScenario scenario = testCase.Scenario;
+        Assert.Multiple(() =>
+        {
+            foreach (RowRange range in new[] { All(testCase), Tail(testCase) })
+            {
+                Outcome actual = Read(ClientArms.ReadAs, testCase, scenario.Target, range);
+                if (scenario.ExceptionType is null)
+                {
+                    Assert.That(Outcome.Difference(Outcome.OfValues(scenario.Target, scenario.Expected.Cast<object>().Skip(range.CaseRow).ToArray()), actual), Is.Null, $"{range}: {actual}");
+                }
+                else
+                {
+                    Assert.That((actual.Kind, actual.ExceptionType), Is.EqualTo((OutcomeKind.Failed, scenario.ExceptionType)), $"{range}: {actual}");
+                    Assert.That(scenario.MessageParts.Where(part => actual.Message?.Contains(part, StringComparison.Ordinal) != true), Is.Empty, $"{range}: {actual}");
+                }
+            }
+        });
+    }
+
+    /// <summary>No case drops out of the case list, and no answer of <c>CanRead</c> or <c>CanWrite</c> changes, silently.</summary>
+    [Test]
+    public void All_Cases_AreThePinnedCasesWithThePinnedAnswers()
+    {
+        DifferentialCase[] cases = DifferentialCases.All().ToArray();
+        ILookup<CaseSource, DifferentialCase> bySource = cases.ToLookup(c => c.Source);
+        bool[] canRead = cases.SelectMany(c => c.ReadTargets.Select(t => ClickHouseTcpTypes.CanRead(c.ColumnType, t))).ToArray();
+        bool[] canWrite = cases.SelectMany(c => c.WriteInputs.Where(i => i.Kind != WriteInputKind.Decoded).Select(i => ClickHouseTcpTypes.CanWrite(c.ColumnType, i.ElementType))).ToArray();
 
         Assert.Multiple(() =>
         {
@@ -70,316 +213,108 @@ public class DifferentialTests
             Assert.That(bySource[CaseSource.CompositeLiftMatrix].Count(), Is.EqualTo(DifferentialCases.CompositeLiftMatrixCount), "CompositeLiftMatrixTests.Cases()");
             Assert.That(bySource[CaseSource.ColumnReadProjection].Count(), Is.EqualTo(DifferentialCases.ColumnReadProjectionCount), "the read targets table of DifferentialCases");
             Assert.That(bySource[CaseSource.ColumnReadScenario].Count(), Is.EqualTo(DifferentialCases.ColumnReadScenarioCount), "the scenarios of DifferentialCases");
-            Assert.That(bySource.Sum(g => g.Count()), Is.EqualTo(DifferentialCases.All().Count()), "every case has one of these sources");
+            Assert.That(cases.GroupBy(c => c.Id).Where(g => g.Count() > 1).Select(g => g.Key), Is.Empty, "case ids that are not unique");
+            Assert.That(
+                (canRead.Count(a => a), canRead.Count(a => !a), canWrite.Count(a => a), canWrite.Count(a => !a)),
+                Is.EqualTo(ExpectedAnswers),
+                "(CanRead true, CanRead false, CanWrite true, CanWrite false)");
+        });
+    }
+
+    [TestCase(0f, -0f)]
+    [TestCase(double.NaN, 0d)]
+    public void Difference_FloatingPointValuesWithOtherBits_AreDifferent(object expected, object actual)
+        => Assert.That(ValueComparer.Difference(expected, actual), Is.Not.Null);
+
+    [Test]
+    public void Difference_ValuesOfTheSameContent_AreTheSame()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ValueComparer.Difference(float.NaN, float.NaN), Is.Null);
+            Assert.That(ValueComparer.Difference((new byte[] { 1 }, "a"), (new byte[] { 1 }, "a")), Is.Null);
+            Assert.That(ValueComparer.Difference(new KeyValuePair<string, byte[]>("k", new byte[] { 3 }), new KeyValuePair<string, byte[]>("k", new byte[] { 3 })), Is.Null);
+            Assert.That(ValueComparer.Difference(new[] { new uint?[] { 1, null } }, new[] { new uint?[] { 1, null } }), Is.Null);
+            Assert.That(ValueComparer.Difference(new[] { new uint?[] { 1, null } }, new[] { new uint?[] { 1, 2 } }), Is.EqualTo("element 0: element 1: 2, not null"));
         });
     }
 
     [Test]
-    public void Run_EveryCase_RunsEachReadAndWriteFacetOnATailThatStartsAboveZero()
+    public void Difference_ValuesThatEqualsCallsEqual_CanBeDifferent()
     {
-        string[] withoutTail = DifferentialCases.All()
-            .Select(DifferentialEngine.ForCurrentRegistry)
-            .SelectMany(report => report.Facets
-                .Where(f => !f.Facet.IsAnswer && (report.TailStart <= 0 || f.Baseline?.Tail is null))
-                .Select(f => f.Facet.ToString()))
-            .ToArray();
+        var unspecified = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Unspecified);
 
-        Assert.That(withoutTail, Is.Empty);
-    }
-
-    [Test]
-    public void All_CaseIds_AreUnique()
-    {
-        string[] duplicates = DifferentialCases.All().GroupBy(c => c.Id).Where(g => g.Count() > 1).Select(g => g.Key).ToArray();
-
-        Assert.That(duplicates, Is.Empty);
-    }
-
-    [Test]
-    public void Current_RegistryAgainstTheCaseList_HasNoProblem()
-    {
-        List<string> problems = DifferentialRegistry.Current.Validate(DifferentialCases.All());
-
-        Assert.That(problems, Is.Empty, string.Join(Environment.NewLine, problems));
-    }
-
-    [Test]
-    public void Run_EveryCase_GivesTheExpectedBaselineOutcomeCounts()
-    {
-        Dictionary<(Tier Tier, string Kind), int> actual = DifferentialCases.All()
-            .SelectMany(c => DifferentialEngine.ForCurrentRegistry(c).Facets)
-            .Where(f => f.Baseline is not null)
-            .GroupBy(f => (f.Facet.Tier, KindOf(f.Baseline.All)))
-            .ToDictionary(g => g.Key, g => g.Count());
-
-        Assert.That(actual, Is.EquivalentTo(ExpectedBaselineOutcomes), "The counts are:" + Environment.NewLine + Describe(actual));
-    }
-
-    [Test]
-    public void Current_FirstCandidateOfEachFacet_IsTheClientsEntryPoint()
-    {
-        var client = new Dictionary<Tier, Arm>
+        Assert.Multiple(() =>
         {
-            [Tier.ReadAs] = ClientArms.ReadAs,
-            [Tier.Poco] = ClientArms.Poco,
-            [Tier.CanRead] = ClientArms.CanRead,
-            [Tier.Write] = ClientArms.Write,
-            [Tier.CanWrite] = ClientArms.CanWrite,
-            [Tier.PocoWrite] = ClientArms.PocoWrite,
-            [Tier.PocoCanWrite] = ClientArms.PocoCanWrite,
-            [Tier.UntypedWrite] = ClientArms.UntypedWrite,
-            [Tier.UntypedCanWrite] = ClientArms.UntypedCanWrite,
-        };
-        string[] others = DifferentialCases.All()
-            .SelectMany(c => c.Facets())
-            .Select(f => (Facet: f, Arm: DifferentialRegistry.Current.CandidatesFor(f).FirstOrDefault()))
-            .Where(x => !ReferenceEquals(x.Arm, client[x.Facet.Tier]))
-            .Select(x => $"{x.Facet}: {x.Arm?.Name ?? "no candidate"}")
-            .ToArray();
-
-        Assert.That(others, Is.Empty);
+            Assert.That(ValueComparer.Difference(unspecified, DateTime.SpecifyKind(unspecified, DateTimeKind.Utc)), Is.Not.Null, "the Kind differs");
+            Assert.That(ValueComparer.Difference(new DateTimeOffset(unspecified, TimeSpan.Zero), new DateTimeOffset(unspecified.AddHours(1), TimeSpan.FromHours(1))), Is.Not.Null, "the offset differs");
+            Assert.That(ValueComparer.Difference(1.0m, 1.00m), Is.Not.Null, "the scale differs");
+            Assert.That(ValueComparer.Difference(new ClickHouseTcpDecimal(new BigInteger(10), 1), new ClickHouseTcpDecimal(new BigInteger(100), 2)), Is.Not.Null, "the scale differs");
+            Assert.That(ValueComparer.Difference(1, 1L), Is.Not.Null, "the type differs");
+        });
     }
 
+    /// <summary>A failure of several rows is accepted when it is the failure of one of its rows alone, and only then.</summary>
     [Test]
-    public void Run_EveryCase_CanReadIsWhetherReadAsAndPocoMappingAcceptTheTarget()
+    public void FailureDifference_FailureOfOneOfTheRows_IsTheOnlyFailureThatMatches()
     {
-        string[] disagreements = Facets(Tier.CanRead)
-            .SelectMany(x => new[] { Tier.ReadAs, Tier.Poco }
-                .Select(tier => (Tier: tier, Read: Baseline(x.Report, tier, x.Result.Facet.Target)))
-                .Where(read => x.Result.Baseline.All.Answer != (read.Read.All.Kind != OutcomeKind.Refused))
-                .Select(read => $"{x.Result.Facet}: {x.Result.Baseline.All}; {read.Tier}: {read.Read.All}"))
-            .ToArray();
+        Outcome[] rows = { Outcome.Failure(new OverflowException("row 1")), Outcome.Failure(new OverflowException("row 3")) };
 
-        Assert.That(disagreements, Is.Empty);
-    }
-
-    // A Nested column is written only from a column of its own layout (a column that a query read, or a dense
-    // NestedColumn), never from a CLR element type, so CanWrite says false for a type with a Nested in it, although
-    // the write of such a column gives bytes.
-    [Test]
-    public void Run_EveryCase_CanWriteIsWhetherTheInsertAcceptsTheColumn()
-    {
-        string[] disagreements = Facets(Tier.CanWrite)
-            .Where(x => !x.Report.Case.ColumnType.Contains("Nested(", StringComparison.Ordinal))
-            .Select(x => (x.Result, Write: Baseline(x.Report, Tier.Write, x.Result.Facet.Input.Label)))
-            .Where(x => x.Write.All.Kind != OutcomeKind.Unavailable && x.Result.Baseline.All.Answer != (x.Write.All.Kind != OutcomeKind.Refused))
-            .Select(x => $"{x.Result.Facet}: {x.Result.Baseline.All}; Write: {x.Write.All}")
-            .ToArray();
-
-        Assert.That(disagreements, Is.Empty);
-    }
-
-    // A decoded column is written from its own storage, so it gives back the bytes that it was read from.
-    // The tail is checked by DecodedWriteDifferences.
-    [Test]
-    public void Run_EveryCase_TheDecodedColumnWritesTheBytesItWasReadFrom()
-    {
-        string[] differences = Facets(Tier.Write)
-            .Where(x => x.Result.Facet.Input.Kind == WriteInputKind.Decoded)
-            .Select(x => (x.Result, Source: Baseline(x.Report, Tier.Write, x.Report.Case.WriteInputs[0].Label)))
-            .Select(x => (x.Result, Difference: Outcome.Difference(x.Source.All, x.Result.Baseline.All)))
-            .Where(x => x.Difference is not null)
-            .Select(x => $"{x.Result.Facet}: {x.Difference}")
-            .ToArray();
-
-        Assert.That(differences, Is.Empty);
-    }
-
-    // A decoded column is a column that its codec writes from its storage: the insert gives it to the codec,
-    // with no converter tree. Its element type is the canonical CLR type of the codec.
-    [Test]
-    public void Run_EveryCase_TheCodecWritesTheDecodedColumnFromItsStorage()
-    {
-        string[] failures = DifferentialCases.All()
-            .Select(DifferentialEngine.ForCurrentRegistry)
-            .Select(report => (report.Case, Source: Baseline(report, Tier.Write, report.Case.WriteInputs[0].Label).All))
-            .Where(x => x.Source?.Kind == OutcomeKind.Bytes)
-            .Select(x => StorageFailure(x.Case, x.Source.Bytes))
-            .Where(failure => failure is not null)
-            .ToArray();
-
-        Assert.That(failures, Is.Empty);
-    }
-
-    [Test]
-    public void Run_EveryCase_EveryWriteOfTheDecodedColumnGivesTheValuesOfTheSourceRows()
-    {
-        string[] differences = DifferentialCases.All()
-            .Select(DifferentialEngine.ForCurrentRegistry)
-            .SelectMany(DecodedWriteDifferences)
-            .ToArray();
-
-        Assert.That(differences, Is.Empty);
-    }
-
-    /// <summary>
-    /// For each write of the decoded column of a case (the columnar insert, which writes it from its storage, and the row
-    /// inserts, which gather its values), for all rows and for the tail: the bytes decode to the values of the same rows
-    /// of the source column. Equal bytes need no decode. The bytes can differ and still be right: the write of a slice of
-    /// a decoded LowCardinality column keeps the dictionary of the whole column, and a row insert builds the dictionary
-    /// of its own values.
-    /// </summary>
-    /// <param name="report">The report of a case.</param>
-    /// <returns>One message for each write that gives other values.</returns>
-    internal static IEnumerable<string> DecodedWriteDifferences(CaseReport report)
-    {
-        DifferentialCase testCase = report.Case;
-        RangeOutcomes source = Baseline(report, Tier.Write, testCase.WriteInputs[0].Label);
-        int tailRows = testCase.RowCount == 1 ? 1 : testCase.RowCount - report.TailStart;
-        foreach (FacetResult result in report.Facets.Where(f => f.Facet.Input?.Kind == WriteInputKind.Decoded && Facet.WritesBytes(f.Facet.Tier) && f.Baseline is not null))
+        Assert.Multiple(() =>
         {
-            foreach (Rows rows in new[] { Rows.All, Rows.Tail })
+            Assert.That(Outcome.FailureDifference(Outcome.Failure(new OverflowException("row 3")), rows), Is.Null);
+            Assert.That(Outcome.FailureDifference(Outcome.Failure(new OverflowException("row 2")), rows), Does.Contain("none of its rows"), "another row");
+            Assert.That(Outcome.FailureDifference(Outcome.Failure(new ArgumentException("row 1")), rows), Does.Contain("none of its rows"), "another type");
+            Assert.That(Outcome.FailureDifference(Outcome.OfBytes(new byte[] { 1 }), rows), Does.Contain("not Failed"), "no failure");
+            Assert.That(Outcome.FailureDifference(Outcome.Failure(new OverflowException("row 1")), Array.Empty<Outcome>()), Does.Contain("none of its rows"), "no row fails alone");
+        });
+    }
+
+    // Why a tier reads the tail alone otherwise than the same rows of the read of all rows, or null. A read of all rows
+    // that fails can have a tail that fails or that gives values, because the tail may not hold the failing row.
+    private static string TailDifference(Outcome all, Outcome tail, int caseRow) => all.Kind switch
+    {
+        OutcomeKind.Values => Outcome.Difference(all.Tail(caseRow), tail),
+        OutcomeKind.Refused => Outcome.Difference(all, tail),
+        OutcomeKind.Failed when tail.Kind is not (OutcomeKind.Failed or OutcomeKind.Values) => $"the tail is {tail.Kind}",
+        _ => null,
+    };
+
+    // The first row whose values differ in two column writes of a type, or null.
+    private static string RowsDifference(string columnType, byte[] expected, byte[] actual, int rows)
+    {
+        using IColumn expectedColumn = DecodeColumn(columnType, expected, rows);
+        using IColumn actualColumn = DecodeColumn(columnType, actual, rows);
+        for (int row = 0; row < rows; row++)
+        {
+            if (ValueComparer.Difference(expectedColumn.GetValue(row), actualColumn.GetValue(row)) is string difference)
             {
-                Outcome expected = source.For(rows);
-                Outcome actual = result.Baseline.For(rows);
-                if (expected?.Kind != OutcomeKind.Bytes || actual?.Kind != OutcomeKind.Bytes || Outcome.Difference(expected, actual) is null)
-                {
-                    continue;
-                }
-
-                int count = rows == Rows.All ? testCase.RowCount : tailRows;
-                object[] expectedValues = DecodeValues(testCase.ColumnType, expected.Bytes, count);
-                object[] actualValues = DecodeValues(testCase.ColumnType, actual.Bytes, count);
-                for (int row = 0; row < count; row++)
-                {
-                    if (ValueComparer.Difference(expectedValues[row], actualValues[row]) is string difference)
-                    {
-                        yield return $"{result.Facet} {rows}, row {row} of the write: {difference}";
-                        break;
-                    }
-                }
+                return $"row {row} of the write: {difference}";
             }
         }
+
+        return null;
     }
 
-    // The values of the rows that the bytes of a column write hold (the state prefix and the body).
-    private static object[] DecodeValues(string columnType, byte[] bytes, int rows)
-    {
-        using IColumn column = Decode(columnType, bytes, rows);
-        return Enumerable.Range(0, rows).Select(column.GetValue).ToArray();
-    }
-
-    // Why the codec of the case does not write the column that it decodes from the bytes from its storage, or null.
-    private static string StorageFailure(DifferentialCase testCase, byte[] bytes)
-    {
-        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(testCase.ColumnType, DifferentialEngine.Context);
-        using IColumn column = Decode(testCase.ColumnType, bytes, testCase.RowCount);
-        if (!codec.CanWrite(column))
-        {
-            return $"{testCase.Id}: the codec does not write the decoded {column.GetType().Name} from its storage.";
-        }
-
-        return column.ElementType == codec.ElementType
-            ? null
-            : $"{testCase.Id}: the decoded column has the element type {column.ElementType}, and the codec {codec.ElementType}.";
-    }
-
-    // The column that a query reads from the bytes of a column write (the state prefix and the body).
-    private static IColumn Decode(string columnType, byte[] bytes, int rows)
-    {
-        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(columnType, DifferentialEngine.Context);
-        using var stream = new MemoryStream(bytes);
-        using var reader = new ClickHouseBinaryReader(stream);
-        codec.ReadStatePrefixAsync(reader, CancellationToken.None).AsTask().GetAwaiter().GetResult();
-        return codec.ReadColumnAsync(reader, "value", columnType, rows, CancellationToken.None).AsTask().GetAwaiter().GetResult();
-    }
-
-    [Test]
-    public void Run_EveryCase_TheRowAnswersAreWhetherTheRowInsertsAcceptTheColumn()
-    {
-        string[] disagreements = new[] { (Answer: Tier.PocoCanWrite, Write: Tier.PocoWrite), (Answer: Tier.UntypedCanWrite, Write: Tier.UntypedWrite) }
-            .SelectMany(pair => Facets(pair.Answer)
-                .Select(x => (x.Result, Write: Baseline(x.Report, pair.Write, x.Result.Facet.Input.Label)))
-                .Where(x => x.Write.All.Kind != OutcomeKind.Unavailable && x.Result.Baseline.All.Answer != (x.Write.All.Kind != OutcomeKind.Refused))
-                .Select(x => $"{x.Result.Facet}: {x.Result.Baseline.All}; {pair.Write}: {x.Write.All}"))
-            .ToArray();
-
-        Assert.That(disagreements, Is.Empty);
-    }
-
-    // A column read back as another CLR type holds the same values, so it writes the bytes of the source column, except
-    // where the CLR type holds less: the 100-nanosecond ticks of DateTime, DateTimeOffset, TimeSpan and TimeOnly cannot
-    // hold the counts of a DateTime64 or a Time64 of a scale above 7.
-    [Test]
-    public void Run_EveryCase_AReadBackColumnWritesTheBytesOfTheSourceColumn()
-    {
-        string[] differences = Facets(Tier.Write)
-            .Where(x => x.Result.Facet.Input.Kind == WriteInputKind.ReadBack && !HoldsCountsFinerThanTicks(TypeParser.Parse(x.Report.Case.ColumnType)))
-            .Select(x => (x.Result, Source: Baseline(x.Report, Tier.Write, x.Report.Case.WriteInputs[0].Label)))
-            .SelectMany(x => new[] { Rows.All, Rows.Tail }
-                .Select(rows => (Rows: rows, ReadBack: x.Result.Baseline.For(rows), Source: x.Source.For(rows)))
-                .Where(r => r.ReadBack?.Kind == OutcomeKind.Bytes)
-                .Select(r => (r.Rows, Difference: Outcome.Difference(r.Source, r.ReadBack)))
-                .Where(r => r.Difference is not null)
-                .Select(r => $"{x.Result.Facet} {r.Rows}: {r.Difference}"))
-            .ToArray();
-
-        Assert.That(differences, Is.Empty);
-    }
-
-    [Test]
-    public void Run_EveryCase_PocoMappingReadsWhatReadAsReads()
-    {
-        string[] differences = Facets(Tier.Poco)
-            .Select(x => (x.Result, ReadAs: Baseline(x.Report, Tier.ReadAs, x.Result.Facet.Target)))
-            .SelectMany(x => new[] { Rows.All, Rows.Tail }
-                .Select(rows => (Rows: rows, Poco: x.Result.Baseline.For(rows), ReadAs: x.ReadAs.For(rows)))
-                .Where(r => r.Poco is not null && r.ReadAs is not null)
-                .Select(r => (r.Rows, Difference: r.Poco.Kind != r.ReadAs.Kind ? $"{r.Poco.Kind}, ReadAs {r.ReadAs.Kind}"
-                    : r.Poco.Kind == OutcomeKind.Values ? Outcome.Difference(r.ReadAs, r.Poco) : null))
-                .Where(r => r.Difference is not null)
-                .Select(r => $"{x.Result.Facet} {r.Rows}: {r.Difference}"))
-            .ToArray();
-
-        Assert.That(differences, Is.Empty);
-    }
-
-    // A decoded input is not compared: a row insert gathers its values, so it builds a LowCardinality dictionary and the
-    // Dynamic types again from the values, where the columnar insert writes the column from its storage.
-    [Test]
-    public void Run_EveryCase_TheRowInsertsWriteTheBytesOfTheColumnarInsert()
-    {
-        string[] differences = Facets(Tier.PocoWrite).Concat(Facets(Tier.UntypedWrite))
-            .Where(x => x.Result.Facet.Input.Kind != WriteInputKind.Decoded)
-            .Select(x => (x.Result, Columnar: Baseline(x.Report, Tier.Write, x.Result.Facet.Input.Label)))
-            .SelectMany(x => new[] { Rows.All, Rows.Tail }
-                .Select(rows => (Rows: rows, Row: x.Result.Baseline.For(rows), Columnar: x.Columnar.For(rows)))
-                .Where(r => r.Row?.Kind == OutcomeKind.Bytes && r.Columnar?.Kind == OutcomeKind.Bytes)
-                .Select(r => (r.Rows, Difference: Outcome.Difference(r.Columnar, r.Row)))
-                .Where(r => r.Difference is not null)
-                .Select(r => $"{x.Result.Facet} {r.Rows}: {r.Difference}"))
-            .ToArray();
-
-        Assert.That(differences, Is.Empty);
-    }
-
+    // The 100-nanosecond ticks of DateTime, DateTimeOffset, TimeSpan and TimeOnly cannot hold the counts of a DateTime64 or
+    // a Time64 of a scale above 7.
     private static bool HoldsCountsFinerThanTicks(TypeNode node)
         => (node.Name is "DateTime64" or "Time64") && node.Arguments.Count > 0 && int.Parse(node.Arguments[0].Name, CultureInfo.InvariantCulture) > 7
             || node.Arguments.Any(HoldsCountsFinerThanTicks);
 
-    // The facets of a tier in every case, with the report of their case.
-    private static IEnumerable<(CaseReport Report, FacetResult Result)> Facets(Tier tier)
-        => DifferentialCases.All()
-            .Select(DifferentialEngine.ForCurrentRegistry)
-            .SelectMany(report => report.Facets.Where(f => f.Facet.Tier == tier).Select(f => (report, f)));
-
-    private static RangeOutcomes Baseline(CaseReport report, Tier tier, Type target)
-        => report.Facets.Single(f => f.Facet.Tier == tier && f.Facet.Target == target).Baseline;
-
-    private static RangeOutcomes Baseline(CaseReport report, Tier tier, string inputLabel)
-        => report.Facets.Single(f => f.Facet.Tier == tier && f.Facet.Input?.Label == inputLabel).Baseline;
-
-    private static string KindOf(Outcome outcome) => outcome.Kind == OutcomeKind.Answer ? $"Answer {outcome.Answer}" : outcome.Kind.ToString();
-
-    // The counts as C# source, in the form of ExpectedBaselineOutcomes.
-    private static string Describe(Dictionary<(Tier Tier, string Kind), int> counts)
+    private static void Add(List<string> problems, string what, string difference)
     {
-        var text = new StringBuilder();
-        foreach (KeyValuePair<(Tier Tier, string Kind), int> count in counts.OrderBy(c => c.Key.Tier).ThenBy(c => c.Key.Kind, StringComparer.Ordinal))
+        if (difference is not null)
         {
-            text.AppendLine($"[(Tier.{count.Key.Tier}, \"{count.Key.Kind}\")] = {count.Value},");
+            problems.Add($"{what}: {difference}");
         }
+    }
 
-        return text.ToString();
+    private static void Check(List<string> problems, string what, bool holds)
+    {
+        if (!holds)
+        {
+            problems.Add(what);
+        }
     }
 }

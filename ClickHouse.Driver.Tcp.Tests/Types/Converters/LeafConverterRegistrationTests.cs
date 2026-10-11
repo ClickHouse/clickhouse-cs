@@ -32,21 +32,12 @@ public class LeafConverterRegistrationTests
         foreach (DifferentialCase testCase in DifferentialCases.All().Where(c => IsLeafType(c.ColumnType)))
         {
             string leaf = LeafName(testCase.ColumnType);
-            foreach (FacetResult result in DifferentialEngine.ForCurrentRegistry(testCase).Facets)
-            {
-                Facet facet = result.Facet;
-                if (facet.Tier == Tier.ReadAs && result.Baseline.All.Kind == OutcomeKind.Values)
-                {
-                    compared.Add(new LeafPairKey(leaf, facet.Target, ConversionDirection.Read));
-                }
-
-                if (facet.Tier == Tier.Write
-                    && facet.Input.Kind != WriteInputKind.Decoded
-                    && result.Baseline.All.Kind == OutcomeKind.Bytes)
-                {
-                    compared.Add(new LeafPairKey(leaf, facet.Input.ElementType, ConversionDirection.Write));
-                }
-            }
+            compared.UnionWith(testCase.ReadTargets
+                .Where(target => DifferentialEngine.Read(ClientArms.ReadAs, testCase, target, DifferentialEngine.All(testCase)).Kind == OutcomeKind.Values)
+                .Select(target => new LeafPairKey(leaf, target, ConversionDirection.Read)));
+            compared.UnionWith(testCase.WriteInputs
+                .Where(input => input.Kind != WriteInputKind.Decoded && DifferentialEngine.Write(ClientArms.Write, testCase, input, DifferentialEngine.All(testCase)).Kind == OutcomeKind.Bytes)
+                .Select(input => new LeafPairKey(leaf, input.ElementType, ConversionDirection.Write)));
         }
 
         LeafPairKey[] table = LeafTable.All
