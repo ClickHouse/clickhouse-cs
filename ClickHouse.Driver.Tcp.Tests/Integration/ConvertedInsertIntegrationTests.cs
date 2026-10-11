@@ -112,10 +112,11 @@ public class ConvertedInsertIntegrationTests
         object[] values = { instant, new byte[] { 0x41, 0xFF }, 7UL, null, "x" };
         IColumn column = ClickHouseTcpColumn.Create("value", values);
 
+        // For a NULL Variant, toString gives 'ᴺᵁᴸᴸ' on 26.3 and an empty string on later servers.
         string[] readBack = await InsertAndReadAsync(
             "Variant(DateTime('UTC'), String, UInt64)",
             column,
-            "concat(toString(variantType(value)), ':', hex(ifNull(toString(value), '')))");
+            "concat(toString(variantType(value)), ':', hex(if(isNull(value), '', toString(value))))");
 
         Assert.That(readBack, Is.EqualTo(new[]
         {
