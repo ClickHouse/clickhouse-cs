@@ -29,6 +29,12 @@ public class ArrayElementCastIntegrationTests
         B = 2,
     }
 
+    internal enum IntLevel
+    {
+        A = 1,
+        B = 2,
+    }
+
     /// <summary>
     /// <c>Array(Enum8(...))</c> reads as an array of an enum whose underlying type is <see cref="sbyte"/>, through POCO
     /// mapping and through <c>ReadAs</c>: the column reads as <see cref="T:sbyte[]"/>, and the cast keeps each ordinal.
@@ -162,6 +168,71 @@ public class ArrayElementCastIntegrationTests
         {
             await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
         }
+    }
+
+    /// <summary>
+    /// An untyped insert takes the CLR type of a column from its first value. A later <see cref="T:uint[]"/> in a column
+    /// of <see cref="T:int[]"/> values is refused with its row, in the block of the first value and in a later block, and
+    /// the table holds no value that the cast gives. An array of an enum over <see cref="int"/> after an
+    /// <see cref="T:int[]"/> is written as its ordinals.
+    /// </summary>
+    /// <param name="maxRowsPerBlock">The most rows of one block. With 1, the two values are in two blocks.</param>
+    [TestCase(1000)]
+    [TestCase(1)]
+    public async Task InsertRowsAsync_UInt32ArrayAfterAnInt32Array_IsRefusedWithItsRow(int maxRowsPerBlock)
+    {
+        await using var client = TcpServerFixture.CreateClient();
+        string table = $"tcp_array_cast_test_{Guid.NewGuid():N}";
+        try
+        {
+            await client.ExecuteAsync($"CREATE TABLE {table} (id UInt32, value Array(Int32)) ENGINE = Memory", cancellationToken: None);
+            string insert = $"INSERT INTO {table} (id, value) VALUES";
+            var options = new ClickHouseTcpInsertOptions { MaxRowsPerBlock = maxRowsPerBlock };
+
+            Exception untyped = null;
+            try
+            {
+                await client.InsertRowsAsync(insert, new[] { new object[] { 0u, new[] { 7 } }, new object[] { 1u, new[] { 3_000_000_000u } } }, options, None);
+            }
+            catch (Exception ex)
+            {
+                untyped = ex;
+            }
+
+            string afterRefusal = await ValuesAsync(client, table);
+            await client.ExecuteAsync($"TRUNCATE TABLE {table}", cancellationToken: None);
+            await client.InsertRowsAsync(insert, new[] { new object[] { 0u, new[] { 7 } }, new object[] { 1u, new[] { IntLevel.B } } }, options, None);
+            string kept = await ValuesAsync(client, table);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(untyped, Is.TypeOf<InvalidOperationException>());
+                Assert.That(
+                    untyped?.Message,
+                    Is.EqualTo("Column 1 ('value', Array(Int32)) is written as System.Int32[], but row 1 holds a System.UInt32[]. Every value of one column must have the same CLR type."));
+                Assert.That(afterRefusal, Does.Not.Contain("-1294967296"));
+                Assert.That(kept, Is.EqualTo("[7];[2]"));
+            });
+        }
+        finally
+        {
+            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
+        }
+    }
+
+    // The value of each row of the table as text, in the order of id, separated by ';'.
+    private static async Task<string> ValuesAsync(ClickHouseTcpClient client, string table)
+    {
+        var values = new List<string>();
+        await foreach (Block block in client.StreamAsync($"SELECT toString(value) FROM {table} ORDER BY id", cancellationToken: None))
+        {
+            for (int row = 0; row < block.RowCount; row++)
+            {
+                values.Add((string)block[0].GetValue(row));
+            }
+        }
+
+        return string.Join(";", values);
     }
 
     // The ordinals of an enum array, which compare as numbers.
