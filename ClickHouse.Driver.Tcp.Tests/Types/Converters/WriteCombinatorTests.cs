@@ -13,7 +13,7 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// The write combinators, for what the differential tests (<see cref="WriteConverterRegistration"/>) do not reach: the
+/// The write combinators, for what the differential tests (<see cref="DifferentialTests"/>) do not reach: the
 /// column types that no differential case has, each written for a whole column and for a slice that starts after
 /// earlier values and read back through the codec of the type; refused values (type, message and parameter name); the
 /// state prefixes of zero rows; the bytes of LowCardinality dictionaries.
