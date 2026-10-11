@@ -65,7 +65,8 @@ internal sealed class Derivation
 internal sealed class ConverterDerivation
 {
     // The cache holds trees for each session timezone that a caller uses, so it has a limit. The count check does not
-    // lock, so the cache can pass the limit by a few entries when callers race. A tree that is not cached is correct.
+    // lock. Each call adds one entry at most after its check, so the cache can pass the limit by fewer entries than the
+    // number of calls that run at the same time. A tree that is not cached is correct.
     private const int MaxCachedDerivations = 1024;
 
     private readonly ColumnCodecRegistry registry;
