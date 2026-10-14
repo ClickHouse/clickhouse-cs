@@ -227,7 +227,7 @@ public class InsertCompressionBreakdownBenchmark
     ///
     /// The <b>URI</b> is the driver's base URI plus this INSERT as <c>query</c> and the <c>database</c> only
     /// when one is set. It deliberately carries nothing else — none of the base parameters
-    /// <c>ClickHouseUriBuilder</c> always appends (<c>default_format</c>, <c>query_id</c>,
+    /// <c>ClickHouseUriBuilder</c> appends (<c>default_format</c>, <c>query_id</c>,
     /// <c>enable_http_compression</c>, …), no custom settings, roles, session or custom headers. This arm
     /// measures transport for a payload size, not the driver's request construction, so those are out of its
     /// scope — the end-to-end arms in <see cref="BinaryInsertCompressionBenchmark"/> are where the driver's

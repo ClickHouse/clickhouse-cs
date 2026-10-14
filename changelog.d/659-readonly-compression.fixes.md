@@ -1,0 +1,1 @@
+* Fixed `Compression=false` sending `enable_http_compression=false`, which failed every query with `READONLY` (code 164) for a `readonly = 1` user whose `enable_http_compression` is `1`, the server default. The driver now sends this setting only when it asks for compression ([#659](https://github.com/ClickHouse/clickhouse-cs/issues/659)).
