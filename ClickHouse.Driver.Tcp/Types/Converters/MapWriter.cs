@@ -130,7 +130,7 @@ internal sealed class MapWriter<TKey, TValue> : ColumnWriter<KeyValuePair<TKey, 
         values.Write(writer, own.ValuesOf(rows), own.ValueState);
     }
 
-    // The parameter name is the one that the Map codec reports for the same row.
+    // The parameter name is "column": the refused value is a row of the column.
 #pragma warning disable CA2208 // Instantiate argument exceptions correctly
     private static ArgumentException NullRow(ValueSource<KeyValuePair<TKey, TValue>[]> rows, int position)
         => new(

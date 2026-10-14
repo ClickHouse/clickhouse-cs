@@ -20,27 +20,18 @@ public class DateColumnCodecTests
         Assert.That(column[0], Is.EqualTo(new DateOnly(1970, 1, 2)));
     }
 
+    // An ArrayColumn<DateOnly> is the storage of Date and Date32, so the codec writes it and checks the range.
     [Test]
     public void Date_OutOfRange_Throws()
     {
         var column = new ArrayColumn<DateOnly>("c", "Date", new[] { new DateOnly(1969, 12, 31) });
-        Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () => await WriteAsync(w => DateColumnCodec.Instance.WriteColumn(w, column)));
+        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => WriteStoredAsync(DateColumnCodec.Instance, column, 0, column.RowCount));
     }
 
     [Test]
     public void Date32_OutOfRange_Throws()
     {
         var column = new ArrayColumn<DateOnly>("c", "Date32", new[] { new DateOnly(1899, 12, 31) });
-        Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () => await WriteAsync(w => Date32ColumnCodec.Instance.WriteColumn(w, column)));
-    }
-
-    [Test]
-    public void CanWrite_AcceptsDateOnly()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(DateColumnCodec.Instance.CanWrite(new ArrayColumn<DateOnly>("c", "Date", Array.Empty<DateOnly>())), Is.True);
-            Assert.That(DateColumnCodec.Instance.CanWrite(new ArrayColumn<DateTime>("c", "Date", Array.Empty<DateTime>())), Is.False);
-        });
+        Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => WriteStoredAsync(Date32ColumnCodec.Instance, column, 0, column.RowCount));
     }
 }

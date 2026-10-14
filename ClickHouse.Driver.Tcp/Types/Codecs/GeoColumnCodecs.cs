@@ -1,7 +1,7 @@
 namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
 /// <summary>
-/// The geo type aliases. Each names a structure the client already encodes, so none needs a codec of its own —
+/// The geo type aliases. Each names a structure the client already encodes, so none needs a codec of its own,
 /// only a registration that resolves its structure and keeps its own name:
 ///
 /// <list type="table">
@@ -22,8 +22,8 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// <para>
 /// <c>Ring</c>/<c>LineString</c> and <c>Polygon</c>/<c>MultiLineString</c> are distinct types to the server and
 /// identical to this client beyond their names. Inside <c>Geometry</c> that makes a value of either shared shape
-/// ambiguous, so it can only be written from the dense column, whose discriminators name the alternative; a
-/// <c>Point</c> or <c>MultiPolygon</c> is unique and still writes from an ergonomic one.
+/// ambiguous, so only the decoded column, whose discriminators name the alternative, writes it; a <c>Point</c> or
+/// <c>MultiPolygon</c> value is unique, and the converter layer writes it.
 /// </para>
 /// </summary>
 internal static class GeoColumnCodecs
@@ -41,6 +41,27 @@ internal static class GeoColumnCodecs
     // variantType's Enum8 ('LineString' = 0 … 'Ring' = 5) and pinned by GeometryIntegrationTests.
     private static readonly TypeNode GeometryStructure =
         TypeParser.Parse("Variant(LineString, MultiLineString, MultiPolygon, Point, Polygon, Ring)");
+
+    /// <summary>The structure of a geo type: the type that the alias names.</summary>
+    /// <param name="name">The canonical name of a type.</param>
+    /// <param name="structure">The structure, or null when <paramref name="name"/> is not a geo type.</param>
+    /// <returns>Whether <paramref name="name"/> is a geo type.</returns>
+    public static bool TryGetStructure(string name, out TypeNode structure)
+    {
+        structure = name switch
+        {
+            "Point" => PointStructure,
+            "Ring" => RingStructure,
+            "LineString" => LineStringStructure,
+            "Polygon" => PolygonStructure,
+            "MultiLineString" => MultiLineStringStructure,
+            "MultiPolygon" => MultiPolygonStructure,
+            "Geometry" => GeometryStructure,
+            _ => null,
+        };
+
+        return structure is not null;
+    }
 
     public static IColumnCodec CreatePoint(in ResolveContext context, ColumnCodecRegistry registry)
         => TupleColumnCodec.Create(PointStructure, in context, registry, "Point");

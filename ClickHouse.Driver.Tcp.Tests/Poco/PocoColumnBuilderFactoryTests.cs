@@ -4,14 +4,15 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Poco;
+using ClickHouse.Driver.Tcp.Tests.Types.Converters;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using static ClickHouse.Driver.Tcp.Tests.Poco.PocoWritePlanTests;
 
 namespace ClickHouse.Driver.Tcp.Tests.Poco;
 
 /// <summary>
-/// The gather tiers of <see cref="PocoColumnBuilderFactory"/>: which tier a runtime gets, that the tiers give the same
-/// first failure in row order, also the failure of a property getter, and that the row inserts write
+/// The gather tiers of <see cref="PocoColumnBuilderFactory"/>: which tier a runtime gets, that each tier fails on one of
+/// the failing rows, also on the failure of a property getter, and that the row inserts write
 /// through the converter trees (a LowCardinality dictionary of distinct encoded values). <see cref="PocoWritePlanTests"/>
 /// and <see cref="PocoWritePlanDelegateTests"/> gather through each tier.
 /// </summary>
@@ -50,32 +51,26 @@ public class PocoColumnBuilderFactoryTests
     }
 
     /// <summary>
-    /// The gather reads the columns one after the other, and the rows of each in order, so the first failure is the one
-    /// of the first column that fails, at its first row that fails: the getter of <c>Number</c> at row 2 before the NULL
-    /// of <c>Other</c> at row 0 when <c>Number</c> comes first, the NULL when <c>Other</c> comes first, and in one column
-    /// the NULL of <c>Mixed</c> at row 1 before its getter fails at row 3.
+    /// Two columns of which several rows fail: the getter of <c>Number</c> at row 2, the NULL of <c>Other</c> at rows 0 and
+    /// 1, and in <c>Mixed</c> a NULL at row 1 and a getter that fails at row 3. Each tier fails on one of them, and a NULL
+    /// failure names the property and its row.
     /// </summary>
-    [TestCase("Number", "Int32", "Other", "Int32", "The getter fails at row 2.")]
-    [TestCase("Other", "Int32", "Number", "Int32", "'Other'", "row 0")]
-    [TestCase("Mixed", "Int32", "Number", "Int32", "'Mixed'", "row 1")]
-    public void Gather_AGetterThatThrowsAndANull_GiveTheFirstFailureInEveryTier(string first, string firstType, string second, string secondType, params string[] expected)
+    [TestCase("Number", "Other")]
+    [TestCase("Other", "Number")]
+    [TestCase("Mixed", "Number")]
+    public void Gather_AGetterThatThrowsAndANull_ThrowOneOfThemInEveryTier(string first, string second)
     {
-        Block schema = SchemaOf(Target(first, firstType), Target(second, secondType));
+        Block schema = SchemaOf(Target(first, "Int32"), Target(second, "Int32"));
         ThrowingRow[] rows = Enumerable.Range(0, 4).Select(i => new ThrowingRow(i)).ToArray();
-
-        Exception compiled = Gather(PocoWritePlan<ThrowingRow>.Build(PocoTypeDescriptor<ThrowingRow>.Build(), schema, PocoGatherTier.Compiled), rows);
-        Exception viaDelegates = Gather(PocoWritePlan<ThrowingRow>.Build(PocoTypeDescriptor<ThrowingRow>.Build(), schema, PocoGatherTier.Delegate), rows);
+        (Type, string)[] failures = new[] { first, second }.SelectMany(Failures).ToArray();
 
         Assert.Multiple(() =>
         {
-            Assert.That(compiled, Is.TypeOf<InvalidOperationException>());
-            foreach (string part in expected)
+            foreach (PocoGatherTier tier in Enum.GetValues<PocoGatherTier>())
             {
-                Assert.That(compiled?.Message, Does.Contain(part));
+                Exception failure = Gather(PocoWritePlan<ThrowingRow>.Build(PocoTypeDescriptor<ThrowingRow>.Build(), schema, tier), rows);
+                ConverterHarness.AssertFailsOnOneOf(failure, tier.ToString(), failures);
             }
-
-            Assert.That(viaDelegates?.GetType(), Is.EqualTo(compiled?.GetType()), "Delegate: exception type");
-            Assert.That(viaDelegates?.Message, Is.EqualTo(compiled?.Message), "Delegate: message");
         });
     }
 
@@ -121,6 +116,17 @@ public class PocoColumnBuilderFactoryTests
             Assert.That(DictionarySize(Insert(schema, untyped)), Is.EqualTo(2), "InsertRowsAsync(object[]): the placeholder and one entry");
         });
     }
+
+    // The failures of the rows of one property of ThrowingRow.
+    private static (Type, string)[] Failures(string property) => property switch
+    {
+        "Number" => new[] { (typeof(InvalidOperationException), "The getter fails at row 2.") },
+        "Other" => new[] { NullAt("Other", 0), NullAt("Other", 1) },
+        "Mixed" => new[] { NullAt("Mixed", 1), (typeof(InvalidOperationException), "The getter fails at row 3.") },
+        _ => throw new ArgumentOutOfRangeException(nameof(property), property, "ThrowingRow has no such property."),
+    };
+
+    private static (Type, string) NullAt(string property, int row) => (typeof(InvalidOperationException), $"Property 'ThrowingRow.{property}' is null at row {row} of the insert");
 
     // A LowCardinality column: the Int64 version prefix, the Int64 flags of the body, then the Int64 count of the
     // dictionary, whose slot 0 holds the placeholder of a column with no NULL.

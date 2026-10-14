@@ -191,7 +191,7 @@ internal sealed class BytesStringWriter : BytesLeafWriter<byte[]>
         }
     }
 
-    // The parameter name is the one that the String codec reports for the same value.
+    // The parameter name is "column": the refused value is a row of the column.
 #pragma warning disable CA2208 // Instantiate argument exceptions correctly
     private static ArgumentException NullValue(int row)
         => new($"A String column cannot hold a null value (at row {row}); wrap the type in Nullable to write nulls.", "column");

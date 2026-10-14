@@ -101,7 +101,7 @@ internal sealed class PocoColumnBuilder<T, TWrite> : PocoColumnBuilder<T>
 /// <para>
 /// The gather finds a null that the column cannot hold before the block is written, so the error names the property and
 /// the row, and the connection stays at a block boundary. A reference type is null where the column type has no NULL
-/// (<see cref="PocoWriteConversion.TakesNull"/>). A <c>T?</c> property is null where the tree writes its values as
+/// (<see cref="ConverterDerivation.HoldsNull"/>). A <c>T?</c> property is null where the tree writes its values as
 /// <c>T</c> (<see cref="NonNullWriter{T}"/>).
 /// </para>
 /// <para>
@@ -124,7 +124,6 @@ internal static class PocoColumnBuilderFactory
     /// <summary>Makes the builder for one property and target column.</summary>
     /// <typeparam name="T">The row type.</typeparam>
     /// <param name="column">The target column from the server's sample block, for its name and type.</param>
-    /// <param name="codec">The target type's codec, resolved as the write path resolves it.</param>
     /// <param name="member">The property the column is filled from; must be gettable.</param>
     /// <param name="derivation">The converter derivation of the codec registry of the sample block.</param>
     /// <param name="context">The resolution context of the sample block.</param>
@@ -134,7 +133,6 @@ internal static class PocoColumnBuilderFactory
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     public static PocoColumnBuilder<T> Create<T>(
         IColumn column,
-        IColumnCodec codec,
         PocoMember member,
         ConverterDerivation derivation,
         in ResolveContext context,
@@ -155,7 +153,7 @@ internal static class PocoColumnBuilderFactory
                 .Invoke(null, BindingFlags.DoNotWrapExceptions, binder: null, new object[] { column.Name, column.TypeName, member, tier }, culture: null);
         }
 
-        bool refusesNull = !member.MemberType.IsValueType && !PocoWriteConversion.TakesNull(codec);
+        bool refusesNull = !member.MemberType.IsValueType && !derivation.HoldsNull(column.TypeName);
         return (PocoColumnBuilder<T>)CreateTypedMethod
             .MakeGenericMethod(typeof(T), member.MemberType)
             .Invoke(null, BindingFlags.DoNotWrapExceptions, binder: null, new object[] { column.Name, column.TypeName, member, refusesNull, tier }, culture: null);
