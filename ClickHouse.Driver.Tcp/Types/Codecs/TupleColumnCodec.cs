@@ -398,6 +398,9 @@ internal sealed class TupleColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
+    public bool WritesFromStorage(IColumn column) => column is ITupleColumn && CanWrite(column);
+
+    /// <inheritdoc/>
     public bool CanWrite(IColumn column)
     {
         // Dense tuples must be writable through their actual child columns.

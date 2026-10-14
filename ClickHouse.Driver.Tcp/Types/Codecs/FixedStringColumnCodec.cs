@@ -162,6 +162,9 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
     public bool CanWrite(IColumn column) => column is IColumn<byte[]>;
 
     /// <inheritdoc/>
+    public bool WritesFromStorage(IColumn column) => column is FixedStringColumn dense && dense.Size == size;
+
+    /// <inheritdoc/>
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         // A dense FixedStringColumn of this width already holds its rows back-to-back at the stride the wire uses,

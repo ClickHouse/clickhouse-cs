@@ -223,6 +223,9 @@ internal sealed class DynamicColumnCodec : IColumnCodec
     public bool CanWrite(IColumn column) => column is DynamicColumn or IColumn<object>;
 
     /// <inheritdoc/>
+    public bool WritesFromStorage(IColumn column) => column is DynamicColumn;
+
+    /// <inheritdoc/>
     public IColumnWriteState BeginWrite(IColumn column, int start, int length) => BuildState(column, start, length);
 
     /// <inheritdoc/>

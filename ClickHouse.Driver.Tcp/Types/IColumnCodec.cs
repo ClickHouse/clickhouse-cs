@@ -91,6 +91,16 @@ internal interface IColumnCodec
     /// <returns><see langword="true"/> if <see cref="WriteColumn"/> accepts <paramref name="column"/>.</returns>
     bool CanWrite(IColumn column);
 
+    /// <summary>
+    /// Whether <see cref="WriteColumn"/> writes this column from its own storage, with no conversion of its values: a
+    /// column that this client decoded, or a dense column in the wire layout of the type (the raw bytes of a
+    /// <c>String</c>, a LowCardinality dictionary and its keys, the child columns of a composite). Such a write keeps the
+    /// bytes that the server sent. The default is false.
+    /// </summary>
+    /// <param name="column">The column to test.</param>
+    /// <returns>Whether the codec writes the column from its storage.</returns>
+    bool WritesFromStorage(IColumn column) => false;
+
     /// <summary>Whether a row-oriented column with <paramref name="elementType"/> can be written.</summary>
     /// <param name="elementType">The candidate CLR element type.</param>
     /// <returns>Whether a column of that element type can be written.</returns>
@@ -114,9 +124,9 @@ internal interface IColumnCodec
     }
 
     /// <summary>
-    /// Whether <paramref name="value"/> belongs to this type rather than to a sibling that surfaces the same CLR
-    /// element type. Asked only to break a tie between <c>Variant</c> alternatives that collide on
-    /// <see cref="ElementType"/>, and only for a value whose type already reached this codec, so it is never on
+    /// Whether <paramref name="value"/> belongs to this type rather than to a sibling that takes the same CLR type.
+    /// Asked only to break a tie between <c>Variant</c> alternatives that collide on <see cref="ElementType"/>, or that
+    /// are all written from the CLR type of a value whose type is the element type of no alternative, so it is never on
     /// the path of an unambiguous write.
     ///
     /// <para>
@@ -133,7 +143,8 @@ internal interface IColumnCodec
     /// alternative that is the better home for it.
     /// </para>
     /// </summary>
-    /// <param name="value">The non-null value being placed, of this codec's element type.</param>
+    /// <param name="value">The non-null value being placed: of this codec's element type, or of a CLR type that the
+    /// alternative is written from.</param>
     /// <returns>Whether this codec claims the value.</returns>
     bool ClaimsValue(object value) => true;
 
