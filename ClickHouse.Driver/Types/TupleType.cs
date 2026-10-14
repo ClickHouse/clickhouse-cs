@@ -112,12 +112,47 @@ internal class TupleType : ParameterizedType
 
     public override string Name => "Tuple";
 
+    /// <summary>
+    /// Element names of a named tuple, in order; <c>null</c> for an unnamed one. ClickHouse names
+    /// either every element or none. The names do not take part in reading or writing values —
+    /// they are kept for callers which render a tuple as a document, where the server writes a
+    /// named tuple as an object and an unnamed one as an array.
+    /// </summary>
+    internal string[] ElementNames { get; init; }
+
     public override ParameterizedType Parse(SyntaxTreeNode node, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings)
     {
         return new TupleType
         {
             UnderlyingTypes = node.ChildNodes.Select(parseClickHouseTypeFunc).ToArray(),
+            ElementNames = ExtractElementNames(node),
         };
+    }
+
+    // Reads the element names off "name Type" children. Returns null unless every child carries one.
+    private protected static string[] ExtractElementNames(SyntaxTreeNode node)
+    {
+        if (node.ChildNodes.Count == 0)
+            return null;
+
+        var names = new string[node.ChildNodes.Count];
+        for (var i = 0; i < names.Length; i++)
+        {
+            var value = node.ChildNodes[i].Value.Trim();
+
+            // A multi-word type alias ("BIGINT UNSIGNED") also holds a space, and its first word is
+            // not an element name.
+            if (TypeConverter.IsTypeAlias(value))
+                return null;
+
+            var separator = value.IndexOfNameTypeSeparator();
+            if (separator <= 0)
+                return null;
+
+            names[i] = value.Substring(0, separator).DiscloseColumnName();
+        }
+
+        return names;
     }
 
     public override string ToString() => $"{Name}({string.Join(",", UnderlyingTypes.Select(t => t.ToString()))})";
