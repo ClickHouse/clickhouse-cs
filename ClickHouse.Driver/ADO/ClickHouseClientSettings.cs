@@ -460,6 +460,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             Database = builder.Database,
             Username = builder.Username,
             Password = builder.Password,
+            BearerToken = builder.BearerToken,
             Path = builder.Path,
             UseCompression = builder.Compression,
             UseSession = builder.UseSession,
@@ -625,6 +626,11 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                $"MapReadMode={MapReadMode};" +
                $"AllowDuplicateJsonKeys={AllowDuplicateJsonKeys};" +
                $"UseFormDataParameters={UseFormDataParameters}";
+
+        if (!string.IsNullOrEmpty(BearerToken))
+        {
+            result += ";BearerToken=****";
+        }
 
         if (!string.IsNullOrEmpty(AcceptEncoding))
         {
