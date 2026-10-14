@@ -1,7 +1,6 @@
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
-using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -77,9 +76,6 @@ internal static class ArrayColumnCodec
 /// <typeparam name="TElement">The inner codec's CLR element type; each row surfaces as <typeparamref name="TElement"/>[].</typeparam>
 internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
 {
-    private static readonly MethodInfo ProjectArrayMethod =
-        typeof(ArrayColumnCodec<TElement>).GetMethod(nameof(ProjectArray), BindingFlags.NonPublic | BindingFlags.Static);
-
     private readonly IColumnCodec inner;
 
     internal ArrayColumnCodec(string typeName, IColumnCodec inner)
@@ -206,93 +202,6 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
             offsets[i + 1] = (int)end;
             previous = end;
         }
-    }
-
-    /// <inheritdoc/>
-    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
-    {
-        ColumnValueProjections.RequireSourceType(value, typeof(TElement[]), TypeName);
-
-        if (targetType == typeof(TElement[]))
-        {
-            projected = value;
-            return true;
-        }
-
-        projected = null;
-
-        // Only T[] has the required row shape.
-        if (!CompositeElementProjections.TryGetArrayElement(targetType, out Type targetElement))
-        {
-            return false;
-        }
-
-        ParameterExpression element = Expression.Variable(typeof(TElement), "element");
-        if (!inner.TryProjectRead(element, targetElement, out Expression elementProjection))
-        {
-            return false;
-        }
-
-        projected = CompositeElementProjections.ProjectArray(value, element, elementProjection);
-        return true;
-    }
-
-    /// <summary>
-    /// Projects the flat element column once, then slices it by row. Used only when the element conversion needs
-    /// column state.
-    /// </summary>
-    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
-    {
-        projection = null;
-
-        if (targetType == ElementType || !CompositeElementProjections.TryGetArrayElement(targetType, out Type targetElement))
-        {
-            return false;
-        }
-
-        if (!inner.TryProjectColumnRead(targetElement, out ColumnReadProjection elementProjection))
-        {
-            return false;
-        }
-
-        projection = LegacyColumnProjection.Close(ProjectArrayMethod, elementProjection, targetElement);
-        return true;
-    }
-
-    /// <summary>
-    /// Builds a row view over the projected flat element column.
-    /// </summary>
-    /// <typeparam name="T">The projected element type; the view's element type is <c>T[]</c>.</typeparam>
-    /// <param name="source">The decoded <c>Array(T)</c> column.</param>
-    /// <param name="elementProjection">The element codec's projection of the flat element column.</param>
-    /// <returns>The view.</returns>
-    private static IColumn ProjectArray<T>(IColumn source, ColumnReadProjection elementProjection)
-    {
-        IArrayColumn array = LegacyColumnProjection.Surface<IArrayColumn>(source);
-        var elements = (IColumn<T>)elementProjection(array.Inner);
-        return new ProjectedReadColumn<T[]>(source, (column, row) => Row(((IArrayColumn)column).Offsets, elements, row));
-    }
-
-    /// <summary>Reads one row's slice of the projected element column into a new array.</summary>
-    // Read through the indexer, not Values: an element belongs to exactly one row, so there is nothing for the rows
-    // to share, and materializing the whole element column to copy one slice out of it would convert every other
-    // row's elements as well.
-    private static T[] Row<T>(ReadOnlySpan<int> offsets, IColumn<T> elements, int row)
-    {
-        int start = offsets[row];
-        int length = offsets[row + 1] - start;
-        if (length == 0)
-        {
-            return Array.Empty<T>();
-        }
-
-        var projected = new T[length];
-        for (int i = 0; i < length; i++)
-        {
-            projected[i] = elements[start + i];
-        }
-
-        return projected;
     }
 
     /// <inheritdoc/>

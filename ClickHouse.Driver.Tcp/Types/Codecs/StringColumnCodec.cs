@@ -18,11 +18,6 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     /// <summary>The shared, stateless instance.</summary>
     public static readonly StringColumnCodec Instance = new();
 
-    private static readonly Func<IColumn, int, byte[]> ReadRowBytes = RowBytes;
-
-    private static readonly ColumnReadProjection ProjectBytes =
-        static source => new ProjectedReadColumn<byte[]>(source, ReadRowBytes);
-
     // A modest starting guess for the blob (16 bytes/row), clamped, that grows on demand as rows are read.
     private const int MinInitialBlobBytes = 256;
     private const int MaxInitialBlobBytes = 1 << 20;
@@ -45,11 +40,6 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
     /// </summary>
     public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(string), typeof(byte[]) };
 
-    /// <summary>
-    /// Offers text and lossless raw bytes. <see cref="TryProjectColumnRead"/> is authoritative.
-    /// </summary>
-    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(string), typeof(byte[]) };
-
     /// <inheritdoc/>
     public object NullPlaceholderAs(Type writeType)
     {
@@ -62,26 +52,6 @@ internal sealed class StringColumnCodec : IColumnCodec, ISpanWritableCodec<strin
             ? Array.Empty<byte>()
             : throw new NotSupportedException($"The '{TypeName}' codec has no null placeholder for {writeType}.");
     }
-
-    /// <summary>
-    /// Reads raw bytes from the column because re-encoding decoded text would lose invalid UTF-8 sequences.
-    /// </summary>
-    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
-    {
-        projection = targetType == typeof(byte[]) ? ProjectBytes : null;
-        return projection is not null;
-    }
-
-    /// <summary>One row's bytes, copied out of the column's blob into an array the caller owns.</summary>
-    /// <param name="column">The decoded column, which must expose its bytes.</param>
-    /// <param name="row">The zero-based row index.</param>
-    /// <returns>That row's bytes.</returns>
-    /// <exception cref="InvalidOperationException"><paramref name="column"/> does not expose its bytes.</exception>
-    /// <exception cref="IndexOutOfRangeException"><paramref name="row"/> is negative or not less than the row count.</exception>
-    // Caller-built columns may carry the String type name without exposing decoded byte storage.
-    public static byte[] RowBytes(IColumn column, int row) => column is IStringColumn text
-        ? text.GetBytes(row).ToArray()
-        : throw NoWireBytes(column);
 
     /// <summary>The failure of a <see cref="T:byte[]"/> reading of a column that does not expose its wire bytes.</summary>
     /// <param name="column">The column, which is not an <see cref="IStringColumn"/>.</param>

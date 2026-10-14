@@ -5,7 +5,6 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
-using ClickHouse.Driver.Tcp.Tests.Differential;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Converters;
@@ -13,8 +12,8 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// Runs a derived converter and the old codec path on the same input, so a test can compare them: reads through
-/// the old columnar dispatch (<see cref="LegacyColumnarRead"/>), <see cref="BoundReader{T}.Fill"/> and a compiled
+/// Runs a derived converter and another path on the same input, so a test can compare them: reads through
+/// <see cref="Block.ReadAs{T}(string)"/>, <see cref="BoundReader{T}.Fill"/> and a compiled
 /// <see cref="ColumnReader.Emit"/>; writes through <see cref="IColumnCodec.WriteColumn(ClickHouseBinaryWriter, IColumn, int, int, IColumnWriteState)"/>
 /// and <see cref="ColumnWriter{T}.Write"/>.
 /// </summary>
@@ -48,18 +47,9 @@ internal static class ConverterHarness
         return await Codec("Nothing").ReadColumnAsync(reader, "c", "Nothing", rows, CodecTestHarness.None);
     }
 
-    /// <summary>The old read: the old dispatch of <see cref="Block.ReadAs{T}(string)"/> over the column, row by row through the indexer.</summary>
-    public static T[] ReadOld<T>(IColumn column, int start, int count)
-    {
-        IColumn<T> view = LegacyColumnarRead.ReadAs<T>(column, Context);
-        var values = new T[count];
-        for (int i = 0; i < count; i++)
-        {
-            values[i] = view[start + i];
-        }
-
-        return values;
-    }
+    /// <summary>The read of <see cref="Block.ReadAs{T}(string)"/>: the column itself, or the view of its derived reader.</summary>
+    public static T[] ReadAs<T>(IColumn column, int start, int count)
+        => ColumnCodecRegistry.Default.Projections.ReadAs<T>(column, Context).Values.Slice(start, count).ToArray();
 
     public static T[] ReadFill<T>(ColumnReader<T> reader, IColumn column, int start, int count)
     {
@@ -210,8 +200,8 @@ internal static class ConverterHarness
     /// <summary>Asserts that two failures are the same to a caller: type, message and parameter name.</summary>
     public static void AssertSameFailure(Exception expected, Exception actual, string path)
     {
-        Assert.That(expected, Is.Not.Null, $"{path}: the current path must fail for this case.");
-        Assert.That(actual, Is.Not.Null, $"{path}: the converter did not fail, the current path threw {expected?.GetType()}: {expected?.Message}");
+        Assert.That(expected, Is.Not.Null, $"{path}: the path compared with must fail for this case.");
+        Assert.That(actual, Is.Not.Null, $"{path}: the converter did not fail, the path compared with threw {expected?.GetType()}: {expected?.Message}");
         Assert.Multiple(() =>
         {
             Assert.That(actual.GetType(), Is.EqualTo(expected.GetType()), $"{path}: exception type");
