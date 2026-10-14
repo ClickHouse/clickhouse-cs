@@ -64,7 +64,7 @@ public class PocoReadNoDynamicCodeTests
         Read(here);
         string[] expected = Lines(here.ToString());
 
-        string[] child = await ReadInAProcessWithoutDynamicCodeAsync();
+        string[] child = await RunInAProcessWithoutDynamicCodeAsync(Argument);
 
         Assert.Multiple(() =>
         {
@@ -140,11 +140,16 @@ public class PocoReadNoDynamicCodeTests
         _ => $"{value} ({value.GetType().Name})",
     };
 
-    private static string[] Lines(string text) => text.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+    internal static string[] Lines(string text) => text.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
 
-    // Runs the entry point of this assembly with the runtime configuration of the tests and dynamic code off. The output
-    // streams are read while the process runs, and a process that does not end in 2 minutes is killed with its children.
-    private static async Task<string[]> ReadInAProcessWithoutDynamicCodeAsync()
+    /// <summary>
+    /// Runs the entry point of this assembly with <paramref name="argument"/>, the runtime configuration of the tests and
+    /// dynamic code off. The output streams are read while the process runs, and a process that does not end in 2 minutes
+    /// is killed with its children.
+    /// </summary>
+    /// <param name="argument">The argument that selects what the entry point runs.</param>
+    /// <returns>The lines of the standard output.</returns>
+    internal static async Task<string[]> RunInAProcessWithoutDynamicCodeAsync(string argument)
     {
         string assembly = typeof(PocoReadNoDynamicCodeTests).Assembly.Location;
         string directory = Path.GetDirectoryName(assembly);
@@ -168,9 +173,9 @@ public class PocoReadNoDynamicCodeTests
                 RedirectStandardError = true,
                 UseShellExecute = false,
             };
-            foreach (string argument in new[] { "exec", "--runtimeconfig", runtimeConfig, "--depsfile", Path.Combine(directory, name + ".deps.json"), assembly, Argument })
+            foreach (string part in new[] { "exec", "--runtimeconfig", runtimeConfig, "--depsfile", Path.Combine(directory, name + ".deps.json"), assembly, argument })
             {
-                start.ArgumentList.Add(argument);
+                start.ArgumentList.Add(part);
             }
 
             using Process process = Process.Start(start);

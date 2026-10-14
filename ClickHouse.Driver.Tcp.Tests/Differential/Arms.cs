@@ -59,11 +59,11 @@ internal abstract class ReadArm : Arm
     public abstract RowReader<T> Bind<T>(Block block);
 }
 
-/// <summary>A write implementation, for <see cref="Tier.Write"/>.</summary>
+/// <summary>A write implementation, for <see cref="Tier.Write"/>, <see cref="Tier.PocoWrite"/> or <see cref="Tier.UntypedWrite"/>.</summary>
 internal abstract class WriteArm : Arm
 {
-    protected WriteArm(string name)
-        : base(name, Tier.Write)
+    protected WriteArm(string name, Tier tier = Tier.Write)
+        : base(name, Facet.WritesBytes(tier) ? tier : throw new ArgumentOutOfRangeException(nameof(tier), tier, "A write arm runs Write, PocoWrite or UntypedWrite facets."))
     {
     }
 
@@ -79,11 +79,14 @@ internal abstract class WriteArm : Arm
     public abstract SliceWriter Bind<T>(IColumn<T> column, string columnType, ResolveContext context);
 }
 
-/// <summary>A yes-or-no implementation, for <see cref="Tier.CanRead"/> or <see cref="Tier.CanWrite"/>.</summary>
+/// <summary>
+/// A yes-or-no implementation, for <see cref="Tier.CanRead"/>, <see cref="Tier.CanWrite"/>, <see cref="Tier.PocoCanWrite"/> or
+/// <see cref="Tier.UntypedCanWrite"/>.
+/// </summary>
 internal abstract class AnswerArm : Arm
 {
     protected AnswerArm(string name, Tier tier)
-        : base(name, tier is Tier.CanRead or Tier.CanWrite ? tier : throw new ArgumentOutOfRangeException(nameof(tier), tier, "An answer arm runs CanRead or CanWrite facets."))
+        : base(name, tier is Tier.CanRead or Tier.CanWrite or Tier.PocoCanWrite or Tier.UntypedCanWrite ? tier : throw new ArgumentOutOfRangeException(nameof(tier), tier, "An answer arm runs CanRead or a write answer tier."))
     {
     }
 
@@ -122,7 +125,7 @@ internal static class RenamedArm
         private readonly WriteArm arm;
 
         public Write(string name, WriteArm arm)
-            : base(name) => this.arm = arm;
+            : base(name, arm.Tier) => this.arm = arm;
 
         public override bool Covers(Facet facet) => arm.Covers(facet);
 

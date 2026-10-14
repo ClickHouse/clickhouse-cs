@@ -49,6 +49,8 @@ internal static class ReadRules
     /// Whether the CLR casts a <paramref name="from"/> to a <paramref name="to"/>: <see cref="Type.IsAssignableFrom"/>.
     /// The cast keeps the value: a reference keeps its object, and a value type is boxed. This rule also accepts the
     /// array casts of <see cref="ReinterpretsElements"/>, which keep the array and read its elements as another type.
+    /// The cast rule of the writes uses it too (<see cref="WriteRules.CastTargets"/>), so it decides those array casts in
+    /// both directions.
     /// </summary>
     /// <param name="from">The source type.</param>
     /// <param name="to">The target type.</param>
