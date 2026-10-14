@@ -3,9 +3,11 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
+using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
@@ -122,14 +124,17 @@ public class StringColumnCodecTests
     }
 
     /// <summary>
-    /// Verifies that raw bytes are writable as String but unsupported as a LowCardinality dictionary key.
+    /// Raw bytes are no LowCardinality dictionary key of the String codec, so the codec's own LowCardinality write still
+    /// refuses them; the converter derivation, which interns their bytes, writes them (ClickHouse/integrations#792), and
+    /// that is what an insert and <see cref="ClickHouseTcpTypes.CanWrite"/> use.
     /// </summary>
     [Test]
-    public void LowCardinalityKeyWriter_Bytes_IsUnavailableAndLowCardinalityRefusesThem()
+    public void LowCardinalityKeyWriter_Bytes_IsUnavailableButTheDerivationWritesThem()
     {
         IColumnCodec codec = StringColumnCodec.Instance;
         IColumnCodec lowCardinality = ColumnCodecRegistry.Default.Resolve("LowCardinality(String)", ResolveContext.ForWrite);
         IColumnCodec nullableLowCardinality = ColumnCodecRegistry.Default.Resolve("LowCardinality(Nullable(String))", ResolveContext.ForWrite);
+        var bytes = new ArrayColumn<byte[]>("c", null, new[] { new byte[] { 0xFF } });
 
         Assert.Multiple(() =>
         {
@@ -137,9 +142,14 @@ public class StringColumnCodecTests
             Assert.That(codec.LowCardinalityKeyWriter(typeof(string)), Is.Not.Null);
 
             Assert.That(lowCardinality.CanWriteElementType(typeof(byte[])), Is.False);
-            Assert.That(lowCardinality.CanWrite(new ArrayColumn<byte[]>("c", null, new[] { new byte[] { 0xFF } })), Is.False);
+            Assert.That(lowCardinality.CanWrite(bytes), Is.False);
             Assert.That(nullableLowCardinality.CanWriteElementType(typeof(byte[])), Is.False);
             Assert.Throws<NotSupportedException>(() => lowCardinality.NullPlaceholderAs(typeof(byte[])));
+
+            Assert.That(InsertColumnWrite.For(lowCardinality, bytes, "LowCardinality(String)", ResolveContext.ForWrite, ConverterDerivation.Default), Is.Not.Null);
+            Assert.That(ClickHouseTcpTypes.CanWrite("LowCardinality(String)", typeof(byte[])), Is.True);
+            Assert.That(ClickHouseTcpTypes.CanWrite("LowCardinality(Nullable(String))", typeof(byte[])), Is.True);
+            Assert.That(ClickHouseTcpTypes.CanWrite("Array(LowCardinality(String))", typeof(byte[][])), Is.True);
         });
     }
 
