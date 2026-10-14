@@ -251,14 +251,14 @@ internal sealed class MapColumnCodec : IColumnCodec
         }
 
         // The other side may still read as its own type or convert elementwise; resolve it the general way.
-        keyProjection ??= ColumnProjection.For(keyCodec, targetArguments[0]);
-        valueProjection ??= ColumnProjection.For(valueCodec, targetArguments[1]);
+        keyProjection ??= LegacyColumnProjection.For(keyCodec, targetArguments[0]);
+        valueProjection ??= LegacyColumnProjection.For(valueCodec, targetArguments[1]);
         if (keyProjection is null || valueProjection is null)
         {
             return false;
         }
 
-        projection = ColumnProjection.Close(ProjectMapMethod, (keyProjection, valueProjection), targetArguments);
+        projection = LegacyColumnProjection.Close(ProjectMapMethod, (keyProjection, valueProjection), targetArguments);
         return true;
     }
 
@@ -272,7 +272,7 @@ internal sealed class MapColumnCodec : IColumnCodec
     /// <returns>The view.</returns>
     private static IColumn ProjectMap<TKey, TValue>(IColumn source, (ColumnReadProjection Key, ColumnReadProjection Value) projections)
     {
-        IMapColumn map = ColumnProjection.Surface<IMapColumn>(source);
+        IMapColumn map = LegacyColumnProjection.Surface<IMapColumn>(source);
         var keys = (IColumn<TKey>)projections.Key(map.KeyColumn);
         var values = (IColumn<TValue>)projections.Value(map.ValueColumn);
         return new ProjectedReadColumn<KeyValuePair<TKey, TValue>[]>(
