@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using ClickHouse.Driver.Tcp.Format;
 
 namespace ClickHouse.Driver.Tcp.Poco;
@@ -16,6 +17,13 @@ internal sealed class PocoTypeRegistry
 
     private readonly ConcurrentDictionary<(Type PocoType, string Signature), object> writePlans = new();
 
+    /// <summary>
+    /// The scatter tier of every read plan that does not ask for one, or null to let the runtime choose. The tests set
+    /// it to run the client's queries through <see cref="PocoScatterTier.Fill"/>, the tier of a runtime without dynamic
+    /// code.
+    /// </summary>
+    internal PocoScatterTier? ForcedTier { get; init; }
+
     /// <summary>Gets or builds the descriptor for <typeparamref name="T"/>.</summary>
     /// <typeparam name="T">The POCO type.</typeparam>
     /// <returns>The cached descriptor.</returns>
@@ -31,16 +39,18 @@ internal sealed class PocoTypeRegistry
     /// </summary>
     /// <typeparam name="T">The POCO type.</typeparam>
     /// <param name="block">A block of the shape to plan for.</param>
-    /// <param name="forcedTier">A scatter tier to compile regardless of the runtime, or null to choose one.</param>
+    /// <param name="forcedTier">A scatter tier to use regardless of the runtime, or null for <see cref="ForcedTier"/>.</param>
     /// <returns>The cached plan.</returns>
     /// <exception cref="InvalidOperationException">The shape cannot be read into <typeparamref name="T"/>.</exception>
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     public PocoReadPlan<T> ReadPlanFor<T>(Block block, PocoScatterTier? forcedTier)
         where T : class
     {
         PocoTypeDescriptor<T> descriptor = DescriptorFor<T>();
+        PocoScatterTier? tier = forcedTier ?? ForcedTier;
         return (PocoReadPlan<T>)readPlans.GetOrAdd(
-            (typeof(T), PocoReadPlan.SignatureOf(block), forcedTier),
-            _ => PocoReadPlan<T>.Build(descriptor, block, forcedTier));
+            (typeof(T), PocoReadPlan.SignatureOf(block), tier),
+            _ => PocoReadPlan<T>.Build(descriptor, block, tier));
     }
 
     /// <summary>
