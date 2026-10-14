@@ -28,6 +28,9 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public Type ElementType => typeof(uint);
 
+    /// <summary>The timezone of the column: from the type string, else from the session, else UTC.</summary>
+    internal ResolvedTimeZone TimeZone => timeZone;
+
     /// <inheritdoc/>
     public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime) };
 

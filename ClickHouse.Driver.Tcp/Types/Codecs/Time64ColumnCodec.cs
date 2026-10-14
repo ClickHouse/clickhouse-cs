@@ -41,6 +41,9 @@ internal sealed class Time64ColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public Type ElementType => typeof(long);
 
+    /// <summary>The number of decimal digits after the second (0 to 9).</summary>
+    internal int Scale => scale;
+
     /// <inheritdoc/>
     public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(long), typeof(TimeSpan), typeof(TimeOnly) };
 
