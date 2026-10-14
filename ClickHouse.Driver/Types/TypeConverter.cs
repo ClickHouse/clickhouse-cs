@@ -21,6 +21,10 @@ internal static class TypeConverter
     private static readonly Dictionary<string, ParameterizedType> ParameterizedTypes = [];
     private static readonly Dictionary<Type, ClickHouseType> ReverseMapping = [];
 
+    // 10^0 to 10^77, and every power of ten a decimal holds, to count the digits of a mantissa (see DigitCount).
+    private static readonly BigInteger[] PowersOfTen = Enumerable.Range(0, 78).Select(n => BigInteger.Pow(10, n)).ToArray();
+    private static readonly decimal[] DecimalPowersOfTen = PowersOfTen.Take(29).Select(p => (decimal)p).ToArray();
+
     private static readonly Dictionary<string, string> Aliases = new()
     {
         { "BIGINT", "Int64" },
@@ -519,36 +523,156 @@ internal static class TypeConverter
     /// <param name="value">The decimal value to infer a type for.</param>
     /// <returns>The inferred <see cref="DecimalType"/>.</returns>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// The value needs more than 76 digits, which exceeds the capacity of ClickHouse's widest Decimal256.
+    /// The value needs more than 76 digits without its trailing fractional zeros, which exceeds the capacity of
+    /// ClickHouse's widest Decimal256.
     /// </exception>
     internal static ClickHouseType InferDecimalType(ClickHouseDecimal value)
     {
         var scale = value.Scale;
-        var digits = BigInteger.Abs(value.Mantissa).ToString(CultureInfo.InvariantCulture).Length;
-        var integerDigits = Math.Max(digits - scale, 0);
+        var integerDigits = IntegerDigits(value);
         var precision = integerDigits + scale;
         if (precision > 76)
         {
-            if (!value.Mantissa.IsZero)
+            // Trailing fractional zeros (all the digits of a zero) are exact at a smaller scale, so only the
+            // other digits must fit Decimal256.
+            var significantPrecision = integerDigits + SignificantScale(value);
+            if (significantPrecision > 76)
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(value),
                     value,
-                    $"Decimal value requires a precision of {precision} digits, which exceeds the maximum of 76 supported by ClickHouse (Decimal256).");
+                    $"Decimal value requires a precision of {significantPrecision} digits, which exceeds the maximum of 76 supported by ClickHouse (Decimal256).");
             }
 
-            // Zero is exact at any scale, so a zero that carries a scale above 76 still fits Decimal256.
             precision = 76;
         }
 
-        return precision switch
-        {
-            <= 9 => new Decimal32Type { Scale = 9 - integerDigits },
-            <= 18 => new Decimal64Type { Scale = 18 - integerDigits },
-            <= 38 => new Decimal128Type { Scale = 38 - integerDigits },
-            _ => new Decimal256Type { Scale = 76 - integerDigits },
-        };
+        return NarrowestDecimalType(precision, integerDigits);
     }
+
+    /// <summary>
+    /// Infers one ClickHouse <c>Decimal</c> type that holds all of <paramref name="values"/> exactly, e.g. for
+    /// the elements of a collection written into a <c>Dynamic</c> column.
+    /// <para>
+    /// The policy is that of <see cref="InferDecimalType(ClickHouseDecimal)"/>, applied to the largest
+    /// integer-digit count and the largest scale among the values: the width is the narrowest whose
+    /// precision P holds both, and the scale is <c>P - integerDigits</c>. A single value gets the same type
+    /// as from <see cref="InferDecimalType(ClickHouseDecimal)"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="values">The decimal values to infer a common type for.</param>
+    /// <returns>The inferred <see cref="DecimalType"/>, or <c>null</c> if <paramref name="values"/> is empty.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The values together need more than 76 digits without their trailing fractional zeros, which exceeds the
+    /// capacity of ClickHouse's widest Decimal256.
+    /// </exception>
+    internal static ClickHouseType InferCommonDecimalType(IEnumerable<ClickHouseDecimal> values)
+    {
+        var hasValues = false;
+        var integerDigits = 0;
+        var scale = 0;
+        foreach (var value in values)
+        {
+            hasValues = true;
+            integerDigits = Math.Max(integerDigits, IntegerDigits(value));
+            scale = Math.Max(scale, value.Scale);
+        }
+
+        if (!hasValues)
+            return null;
+
+        var precision = integerDigits + scale;
+        if (precision > 76)
+        {
+            // As for a single value, trailing fractional zeros are exact at a smaller scale, so only the
+            // other digits must fit Decimal256. This rare path enumerates the values a second time.
+            var significantScale = values.Max(SignificantScale);
+            if (integerDigits + significantScale > 76)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(values),
+                    $"Decimal values require a common precision of {integerDigits + significantScale} digits ({integerDigits} integer and {significantScale} fractional), which exceeds the maximum of 76 supported by ClickHouse (Decimal256).");
+            }
+
+            precision = 76;
+        }
+
+        return NarrowestDecimalType(precision, integerDigits);
+    }
+
+    /// <summary>
+    /// <see cref="InferCommonDecimalType(IEnumerable{ClickHouseDecimal})"/> for <see cref="decimal"/> values, which
+    /// are read from their bits: the conversion to <see cref="ClickHouseDecimal"/> allocates for each value whose
+    /// mantissa exceeds 31 bits.
+    /// </summary>
+    /// <param name="values">The decimal values to infer a common type for.</param>
+    /// <returns>The inferred <see cref="DecimalType"/>, or <c>null</c> if <paramref name="values"/> is empty.</returns>
+    internal static ClickHouseType InferCommonDecimalType(IEnumerable<decimal> values)
+    {
+        var hasValues = false;
+        var integerDigits = 0;
+        var scale = 0;
+        Span<int> bits = stackalloc int[4];
+        foreach (var value in values)
+        {
+            hasValues = true;
+            decimal.GetBits(value, bits);
+            var valueScale = (bits[3] >> 16) & 0x7F;
+            var digits = DigitCount(DecimalPowersOfTen, new decimal(bits[0], bits[1], bits[2], false, 0));
+            integerDigits = Math.Max(integerDigits, Math.Max(digits - valueScale, 0));
+            scale = Math.Max(scale, valueScale);
+        }
+
+        // A decimal has at most 29 digits and a scale of at most 28, so no set of them needs more than 76 digits.
+        return hasValues ? NarrowestDecimalType(integerDigits + scale, integerDigits) : null;
+    }
+
+    private static int IntegerDigits(ClickHouseDecimal value)
+    {
+        var magnitude = BigInteger.Abs(value.Mantissa);
+        var digits = magnitude > PowersOfTen[PowersOfTen.Length - 1]
+            ? magnitude.ToString(CultureInfo.InvariantCulture).Length
+            : DigitCount(PowersOfTen, magnitude);
+        return Math.Max(digits - value.Scale, 0);
+    }
+
+    // The number of decimal digits (1 for zero) of a non-negative integer below ten times the largest power of ten
+    // in the table. This runs for each element of a collection, so it searches the powers of ten instead of
+    // formatting the number to a string.
+    private static int DigitCount<T>(T[] powersOfTen, T magnitude)
+    {
+        var index = Array.BinarySearch(powersOfTen, magnitude);
+        return index >= 0 ? index + 1 : Math.Max(~index, 1);
+    }
+
+    // The scale without the trailing zeros of the fraction, which a smaller scale also holds exactly.
+    private static int SignificantScale(ClickHouseDecimal value)
+    {
+        if (value.Mantissa.IsZero)
+            return 0;
+
+        var mantissa = value.Mantissa;
+        var scale = value.Scale;
+        while (scale > 0)
+        {
+            var quotient = BigInteger.DivRem(mantissa, 10, out var remainder);
+            if (!remainder.IsZero)
+                break;
+            mantissa = quotient;
+            scale--;
+        }
+
+        return scale;
+    }
+
+    // The narrowest Decimal width with at least `precision` digits, at the largest scale that keeps `integerDigits`.
+    private static ClickHouseType NarrowestDecimalType(int precision, int integerDigits) => precision switch
+    {
+        <= 9 => new Decimal32Type { Scale = 9 - integerDigits },
+        <= 18 => new Decimal64Type { Scale = 18 - integerDigits },
+        <= 38 => new Decimal128Type { Scale = 38 - integerDigits },
+        _ => new Decimal256Type { Scale = 76 - integerDigits },
+    };
 
     private static bool IsKeyValuePairType(Type type) =>
         type.IsGenericType && type.GetGenericTypeDefinition() == typeof(KeyValuePair<,>);
