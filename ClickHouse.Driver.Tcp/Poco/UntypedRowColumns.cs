@@ -152,11 +152,14 @@ internal static class UntypedRowColumns
                     continue;
                 }
 
-                // Report mixed types with the offending row instead of a bare unbox failure.
-                if (!expected.IsInstanceOfType(value))
+                // Report mixed types with the offending row instead of a bare unbox failure. A value of another type must
+                // cast to the write type and keep its meaning: the CLR also casts an array of integers to an array of the
+                // other sign (ReadRules.ReinterpretsElements).
+                Type actual = value.GetType();
+                if (actual != expected && (!expected.IsInstanceOfType(value) || ReadRules.ReinterpretsElements(actual, expected)))
                 {
                     throw new InvalidOperationException(
-                        $"Column {index} ('{name}', {typeName}) is written as {typeof(TWrite)}, but row {rowNumber + slot} holds a {value.GetType()}. " +
+                        $"Column {index} ('{name}', {typeName}) is written as {typeof(TWrite)}, but row {rowNumber + slot} holds a {actual}. " +
                         $"Every value of one column must have the same CLR type.");
                 }
 
