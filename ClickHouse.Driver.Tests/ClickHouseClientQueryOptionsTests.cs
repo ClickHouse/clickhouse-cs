@@ -896,6 +896,33 @@ public class ClickHouseClientQueryOptionsTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task InsertBinaryAsync_WithQueryId_OnlyInsertsAreLoggedUnderCallerQueryId()
+    {
+        var tableName = await CreateSimpleTestTableAsync();
+
+        // Hyphens, not underscores: the lookups below match this id with LIKE, where '_' is a wildcard.
+        var customQueryId = $"insert-probe-qid-{Guid.NewGuid():N}";
+        var options = new InsertOptions { QueryId = customQueryId, BatchSize = 5 };
+        var rows = GenerateTestRows(10).ToList(); // 2 batches of 5
+
+        await client.InsertBinaryAsync(tableName, new[] { "id", "value" }, rows, options);
+
+        var inserts = await QueryLog.CountAsync(
+            client,
+            $"SELECT count() FROM system.query_log WHERE query_id LIKE '{customQueryId}%' " +
+            $"AND query_kind = 'Insert' AND type = 'QueryFinish'",
+            minimumCount: 2);
+        Assert.That(inserts, Is.EqualTo(2UL), "Both insert batches should be logged under the caller's query id");
+
+        var notInserts = await QueryLog.CountAsync(
+            client,
+            $"SELECT count() FROM system.query_log WHERE query_id LIKE '{customQueryId}%' " +
+            $"AND query_kind != 'Insert' AND type = 'QueryFinish'");
+        Assert.That(notInserts, Is.EqualTo(0UL),
+            "The schema probe must not be logged under the caller's query id, which identifies their insert");
+    }
+
+    [Test]
     public void WithQueryId_CopiesAllPropertiesExceptQueryId()
     {
         var source = FullyPopulatedQueryOptions();

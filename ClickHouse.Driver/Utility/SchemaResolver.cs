@@ -89,8 +89,12 @@ internal class SchemaResolver
         var columnsExpr = columns == null || !columns.Any()
             ? "*"
             : string.Join(",", columns.Select(c => c.EncloseColumnName()));
+        // The probe is the driver's own metadata query, not the caller's insert, so it gets an id of
+        // its own: the caller's QueryId identifies their INSERT batches ({QueryId}-1, -2, …), and an
+        // insert retried under the same QueryId cannot collide with its own earlier probe.
+        var probeOptions = options.WithQueryId(Guid.NewGuid().ToString());
         using var reader = (ClickHouseDataReader)await client.ExecuteReaderAsync(
-            $"SELECT {columnsExpr} FROM {table} WHERE 1=0", null, options).ConfigureAwait(false);
+            $"SELECT {columnsExpr} FROM {table} WHERE 1=0", null, probeOptions).ConfigureAwait(false);
         var types = reader.GetClickHouseColumnTypes();
         var names = reader.GetColumnNames().Select(c => c.EncloseColumnName()).ToArray();
         return (names, types);
