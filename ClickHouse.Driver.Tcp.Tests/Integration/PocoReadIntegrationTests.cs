@@ -346,7 +346,7 @@ public class PocoReadIntegrationTests
     [Test]
     public async Task QueryAsync_TimezoneLessDateTimeColumn_PresentsTheSessionTimezoneWallClock()
     {
-        // D7: a bare DateTime column is presented in the session timezone, so a DateTime property carries that wall
+        // A bare DateTime column is presented in the session timezone, so a DateTime property carries that wall
         // clock (as Unspecified, there being no offset to attach) while a DateTimeOffset property carries the offset.
         // This is a deliberate difference from the HTTP client, which has no session timezone to resolve.
         await using var client = TcpServerFixture.CreateClient();

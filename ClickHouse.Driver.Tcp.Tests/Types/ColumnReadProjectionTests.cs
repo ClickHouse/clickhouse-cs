@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
+using ClickHouse.Driver.Tcp.Tests.Differential;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
 
@@ -47,15 +49,15 @@ public class ColumnReadProjectionTests
         });
     }
 
-    [Test]
-    public void TryProjectRead_CanonicalElementType_IsTheIdentity()
+    [TestCase("UInt64", typeof(ulong))]
+    public void TryProjectRead_CanonicalElementType_IsTheIdentity(string type, Type canonical)
     {
-        IColumnCodec codec = Codec("UInt64");
-        ParameterExpression source = Expression.Parameter(typeof(ulong), "v");
+        IColumnCodec codec = Codec(type);
+        ParameterExpression source = Expression.Parameter(canonical, "v");
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.TryProjectRead(source, typeof(ulong), out Expression projected), Is.True);
+            Assert.That(codec.TryProjectRead(source, canonical, out Expression projected), Is.True);
             Assert.That(projected, Is.SameAs(source));
         });
     }
@@ -65,15 +67,15 @@ public class ColumnReadProjectionTests
     /// and only it knows the column and property names worth naming. A refusal must also leave no projection behind,
     /// so a caller that ignores the bool cannot use a stale one.
     /// </summary>
-    [Test]
-    public void TryProjectRead_TypeNotOffered_ReturnsFalseAndNoProjection()
+    [TestCase("UInt64", typeof(DateTime))]
+    public void TryProjectRead_TypeNotOffered_ReturnsFalseAndNoProjection(string type, Type unoffered)
     {
-        IColumnCodec codec = Codec("UInt64");
-        ParameterExpression source = Expression.Parameter(typeof(ulong), "v");
+        IColumnCodec codec = Codec(type);
+        ParameterExpression source = Expression.Parameter(codec.ElementType, "v");
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.TryProjectRead(source, typeof(DateTime), out Expression projected), Is.False);
+            Assert.That(codec.TryProjectRead(source, unoffered, out Expression projected), Is.False);
             Assert.That(projected, Is.Null);
         });
     }
@@ -124,6 +126,32 @@ public class ColumnReadProjectionTests
     }
 
     /// <summary>
+    /// One type of each registered kind. The differential tests read these types as each of their readable
+    /// element types.
+    /// </summary>
+    internal static readonly string[] RegisteredTypes =
+    {
+        "UInt8", "Int32", "UInt64", "Int128", "Float32", "Float64", "Bool", "String", "FixedString(4)",
+        "Date", "Date32", "DateTime", "DateTime('Europe/Berlin')", "DateTime64(3)", "DateTime64(9, 'UTC')",
+        "Time", "Time64(3)", "UUID", "IPv4", "IPv6", "Decimal(9, 2)", "Decimal(38, 10)", "Enum8('a' = 1)",
+        "Nullable(Int32)", "Nullable(String)", "Nullable(DateTime)", "Nullable(Time64(3))",
+        "LowCardinality(String)", "LowCardinality(UInt32)", "LowCardinality(Nullable(DateTime))",
+        "Array(Int32)", "Map(String, Int32)", "Tuple(Int32, String)", "Variant(Int32, String)", "Dynamic",
+    };
+
+    /// <summary>
+    /// <c>Nullable</c> and <c>LowCardinality</c> types over projecting and non-projecting inners. The differential
+    /// tests read these types as each of their readable element types.
+    /// </summary>
+    internal static readonly string[] WrappedTypes =
+    {
+        "Nullable(DateTime('UTC'))", "Nullable(DateTime64(3, 'UTC'))", "Nullable(Time)", "Nullable(Time64(3))",
+        "Nullable(String)", "Nullable(Int32)", "Nullable(UUID)",
+        "LowCardinality(String)", "LowCardinality(UInt32)", "LowCardinality(DateTime('UTC'))",
+        "LowCardinality(Nullable(String))", "LowCardinality(Nullable(DateTime('UTC')))",
+    };
+
+    /// <summary>
     /// Keeps the diagnostic list honest in the one direction that stays true: every type a codec advertises must
     /// actually be projectable, so the failure message a caller is shown never names a reading that does not exist.
     /// The converse is deliberately not asserted — <see cref="IColumnCodec.TryProjectRead"/> is the authority, and a
@@ -132,19 +160,9 @@ public class ColumnReadProjectionTests
     [Test]
     public void ReadableElementTypes_EveryRegisteredType_LeadsWithElementTypeAndIsProjectable()
     {
-        string[] types =
-        {
-            "UInt8", "Int32", "UInt64", "Int128", "Float32", "Float64", "Bool", "String", "FixedString(4)",
-            "Date", "Date32", "DateTime", "DateTime('Europe/Berlin')", "DateTime64(3)", "DateTime64(9, 'UTC')",
-            "Time", "Time64(3)", "UUID", "IPv4", "IPv6", "Decimal(9, 2)", "Decimal(38, 10)", "Enum8('a' = 1)",
-            "Nullable(Int32)", "Nullable(String)", "Nullable(DateTime)", "Nullable(Time64(3))",
-            "LowCardinality(String)", "LowCardinality(UInt32)", "LowCardinality(Nullable(DateTime))",
-            "Array(Int32)", "Map(String, Int32)", "Tuple(Int32, String)", "Variant(Int32, String)", "Dynamic",
-        };
-
         Assert.Multiple(() =>
         {
-            foreach (string type in types)
+            foreach (string type in RegisteredTypes)
             {
                 IColumnCodec codec = Codec(type);
                 IReadOnlyList<Type> readable = codec.ReadableElementTypes;
@@ -204,124 +222,50 @@ public class ColumnReadProjectionTests
         });
     }
 
-    [Test]
-    public void TryProjectRead_DateTimeToOffset_PresentsTheInstantInTheColumnTimezone()
-    {
-        // 1700000000 = 2023-11-14T22:13:20Z, which is 23:13:20 +01:00 in Berlin (winter, no DST).
-        Func<uint, DateTimeOffset> project = Project<uint, DateTimeOffset>(Codec("DateTime('Europe/Berlin')"));
-
-        DateTimeOffset result = project(1_700_000_000);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.UtcDateTime, Is.EqualTo(new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Utc)));
-            Assert.That(result.Offset, Is.EqualTo(TimeSpan.FromHours(1)));
-        });
-    }
+    [TestCaseSource(nameof(DateTimeToOffsetScenarios))]
+    public void TryProjectRead_DateTimeToOffset_PresentsTheInstantInTheColumnTimezone(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
     /// <summary>
     /// Verifies that an unrepresentable timezone fails when a row is projected, not when projection is built.
     /// </summary>
-    [TestCase("DateTime('Fixed/UTC+19:00:00')", "+19:00:00")]
-    [TestCase("DateTime('Fixed/UTC+05:30:15')", "+05:30:15")]
-    public void TryProjectRead_ACalendarTargetOfAZoneTimeZoneInfoCannotHold_BuildsAndThrowsOnTheRow(
-        string columnType,
-        string offset)
-    {
-        Func<uint, DateTimeOffset> project = Project<uint, DateTimeOffset>(Codec(columnType));
+    [TestCaseSource(nameof(ZoneTimeZoneInfoCannotHoldScenarios))]
+    public void TryProjectRead_ACalendarTargetOfAZoneTimeZoneInfoCannotHold_BuildsAndThrowsOnTheRow(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
-        var thrown = Assert.Throws<FormatException>(() => project(1_700_000_000));
+    [TestCaseSource(nameof(DateTime64ZoneTimeZoneInfoCannotHoldScenarios))]
+    public void TryProjectRead_ADateTime64CalendarTargetOfAZoneTimeZoneInfoCannotHold_BuildsAndThrowsOnTheRow(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
-        Assert.That(thrown.Message, Does.Contain(offset));
-    }
-
-    [TestCase("DateTime64(3, 'Fixed/UTC+19:00:00')", "+19:00:00")]
-    [TestCase("DateTime64(9, 'Fixed/UTC+05:30:15')", "+05:30:15")]
-    public void TryProjectRead_ADateTime64CalendarTargetOfAZoneTimeZoneInfoCannotHold_BuildsAndThrowsOnTheRow(
-        string columnType,
-        string offset)
-    {
-        Func<long, DateTimeOffset> project = Project<long, DateTimeOffset>(Codec(columnType));
-
-        var thrown = Assert.Throws<FormatException>(() => project(1_700_000_000_000));
-
-        Assert.That(thrown.Message, Does.Contain(offset));
-    }
-
-    [Test]
-    public void TryProjectRead_DateTimeToDateTime_UtcColumnYieldsUtcKind()
-    {
-        Func<uint, DateTime> project = Project<uint, DateTime>(Codec("DateTime('UTC')"));
-
-        DateTime result = project(1_700_000_000);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result, Is.EqualTo(new DateTime(2023, 11, 14, 22, 13, 20)));
-            Assert.That(result.Kind, Is.EqualTo(DateTimeKind.Utc));
-        });
-    }
+    [TestCaseSource(nameof(DateTimeToUtcDateTimeScenarios))]
+    public void TryProjectRead_DateTimeToDateTime_UtcColumnYieldsUtcKind(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
     /// <summary>
     /// The <see cref="DateTimeKind"/> rule is chosen to match the HTTP driver's <c>ToDateTime</c>: a non-zero
     /// offset yields the wall clock in the column's timezone as <see cref="DateTimeKind.Unspecified"/>, so a POCO
     /// reading the same column through either client sees the same value.
     /// </summary>
-    [Test]
-    public void TryProjectRead_DateTimeToDateTime_OffsetColumnYieldsUnspecifiedWallClock()
-    {
-        Func<uint, DateTime> project = Project<uint, DateTime>(Codec("DateTime('Europe/Berlin')"));
+    [TestCaseSource(nameof(DateTimeToWallClockScenarios))]
+    public void TryProjectRead_DateTimeToDateTime_OffsetColumnYieldsUnspecifiedWallClock(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
-        DateTime result = project(1_700_000_000);
+    [TestCaseSource(nameof(DateTime64ToOffsetScenarios))]
+    public void TryProjectRead_DateTime64ToOffset_HonorsTheColumnScale(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(result, Is.EqualTo(new DateTime(2023, 11, 14, 23, 13, 20)));
-            Assert.That(result.Kind, Is.EqualTo(DateTimeKind.Unspecified));
-        });
-    }
-
-    [Test]
-    [TestCase(3, 1_700_000_000_123L, "2023-11-14T22:13:20.1230000Z")]
-    [TestCase(9, 1_700_000_000_123_456_789L, "2023-11-14T22:13:20.1234567Z")]
-    [TestCase(0, 1_700_000_000L, "2023-11-14T22:13:20.0000000Z")]
-    public void TryProjectRead_DateTime64ToOffset_HonorsTheColumnScale(int scale, long count, string expected)
-    {
-        Func<long, DateTimeOffset> project = Project<long, DateTimeOffset>(Codec($"DateTime64({scale}, 'UTC')"));
-
-        // Scale 9 is finer than a .NET tick, so the sub-100 ns digits truncate toward zero.
-        Assert.That(project(count).UtcDateTime, Is.EqualTo(DateTimeOffset.Parse(expected).UtcDateTime));
-    }
-
-    [Test]
-    public void TryProjectRead_DateTime64ToDateTime_AppliesTheSameKindRuleAsDateTime()
-    {
-        Func<long, DateTime> utc = Project<long, DateTime>(Codec("DateTime64(3, 'UTC')"));
-        Func<long, DateTime> berlin = Project<long, DateTime>(Codec("DateTime64(3, 'Europe/Berlin')"));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(utc(1_700_000_000_123L), Is.EqualTo(new DateTime(2023, 11, 14, 22, 13, 20, 123)));
-            Assert.That(utc(1_700_000_000_123L).Kind, Is.EqualTo(DateTimeKind.Utc));
-
-            Assert.That(berlin(1_700_000_000_123L), Is.EqualTo(new DateTime(2023, 11, 14, 23, 13, 20, 123)));
-            Assert.That(berlin(1_700_000_000_123L).Kind, Is.EqualTo(DateTimeKind.Unspecified));
-        });
-    }
+    [TestCaseSource(nameof(DateTime64ToDateTimeScenarios))]
+    public void TryProjectRead_DateTime64ToDateTime_AppliesTheSameKindRuleAsDateTime(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
     /// <summary>
     /// A raw count can be decodable yet name an instant outside the .NET calendar. The projection reports that as an
     /// <see cref="OverflowException"/> pointing at the raw values, rather than letting a bare arithmetic exception
     /// escape — the canonical read still returns the exact count.
     /// </summary>
-    [Test]
-    public void TryProjectRead_DateTime64BeyondTheCalendarRange_ThrowsOverflowPointingAtTheRawValues()
-    {
-        Func<long, DateTimeOffset> project = Project<long, DateTimeOffset>(Codec("DateTime64(0, 'UTC')"));
-
-        var ex = Assert.Throws<OverflowException>(() => project(long.MaxValue));
-        Assert.That(ex.Message, Does.Contain("Values"));
-    }
+    [TestCaseSource(nameof(BeyondTheCalendarRangeScenarios))]
+    public void TryProjectRead_DateTime64BeyondTheCalendarRange_ThrowsOverflowPointingAtTheRawValues(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
     [Test]
     [TestCase("DateTime('UTC')", typeof(TimeSpan))]
@@ -361,103 +305,36 @@ public class ColumnReadProjectionTests
         Assert.That(codec.TryProjectRead(source, bare, out Expression _), Is.False);
     }
 
-    [Test]
-    public void TryProjectRead_TimeToTimeSpan_IsExactWholeSeconds()
-    {
-        Func<int, TimeSpan> project = Project<int, TimeSpan>(Codec("Time"));
+    [TestCaseSource(nameof(TimeToTimeSpanScenarios))]
+    public void TryProjectRead_TimeToTimeSpan_IsExactWholeSeconds(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(project(3661), Is.EqualTo(new TimeSpan(1, 1, 1)));
-            Assert.That(project(-3661), Is.EqualTo(new TimeSpan(1, 1, 1).Negate()));
-            Assert.That(project(0), Is.EqualTo(TimeSpan.Zero));
-        });
-    }
+    [TestCaseSource(nameof(Time64ToTimeSpanScenarios))]
+    public void TryProjectRead_Time64ToTimeSpan_HonorsTheColumnScale(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
-    [Test]
-    [TestCase(3, 3_661_500L, "01:01:01.5000000")]
-    [TestCase(9, -1_000_000_001L, "-00:00:01.0000000")]
-    public void TryProjectRead_Time64ToTimeSpan_HonorsTheColumnScale(int scale, long count, string expected)
-    {
-        Func<long, TimeSpan> project = Project<long, TimeSpan>(Codec($"Time64({scale})"));
+    [TestCaseSource(nameof(TimeToTimeOnlyScenarios))]
+    public void TryProjectRead_TimeToTimeOnly_IsTheTimeOfDay(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
-        Assert.That(project(count), Is.EqualTo(TimeSpan.Parse(expected)));
-    }
-
-    [Test]
-    public void TryProjectRead_TimeToTimeOnly_IsTheTimeOfDay()
-    {
-        Func<int, TimeOnly> project = Project<int, TimeOnly>(Codec("Time"));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(project(3661), Is.EqualTo(new TimeOnly(1, 1, 1)));
-            Assert.That(project(0), Is.EqualTo(TimeOnly.MinValue));
-            Assert.That(project((23 * 3600) + (59 * 60) + 59), Is.EqualTo(new TimeOnly(23, 59, 59)));
-        });
-    }
-
-    [Test]
-    [TestCase(3, 3_661_500L, "01:01:01.5000000")]
-    [TestCase(9, 3_661_000_000_000L, "01:01:01")]
-    public void TryProjectRead_Time64ToTimeOnly_HonorsTheColumnScale(int scale, long count, string expected)
-    {
-        Func<long, TimeOnly> project = Project<long, TimeOnly>(Codec($"Time64({scale})"));
-
-        Assert.That(project(count), Is.EqualTo(TimeOnly.Parse(expected)));
-    }
+    [TestCaseSource(nameof(Time64ToTimeOnlyScenarios))]
+    public void TryProjectRead_Time64ToTimeOnly_HonorsTheColumnScale(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
     // TimeOnly cannot represent negative values or durations of at least one day; do not wrap them.
-    [TestCase(-1, TestName = "A negative duration")]
-    [TestCase(24 * 3600, TestName = "Exactly 24 hours")]
-    [TestCase(100 * 3600, TestName = "A duration of 100 hours")]
-    public void TryProjectRead_TimeToTimeOnlyOfAValueThatIsNoTimeOfDay_Throws(int seconds)
-    {
-        Func<int, TimeOnly> project = Project<int, TimeOnly>(Codec("Time"));
-
-        var thrown = Assert.Throws<InvalidOperationException>(() => project(seconds));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(thrown.Message, Does.Contain("is not a time of day"));
-            Assert.That(thrown.Message, Does.Contain("TimeSpan"), "the message has to name the reading that does work");
-        });
-    }
+    [TestCaseSource(nameof(TimeOfNoTimeOfDayScenarios))]
+    public void TryProjectRead_TimeToTimeOnlyOfAValueThatIsNoTimeOfDay_Throws(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
     // Check raw counts because sub-tick negative values truncate to TimeSpan.Zero.
-    [TestCase(9, -1L, TestName = "A nanosecond before midnight, scale 9")]
-    [TestCase(9, -99L, TestName = "The last count scale 9 truncates to zero")]
-    [TestCase(9, -100L, TestName = "One tick before midnight, scale 9")]
-    [TestCase(8, -1L, TestName = "Ten nanoseconds before midnight, scale 8")]
-    [TestCase(8, -9L, TestName = "The last count scale 8 truncates to zero")]
-    [TestCase(3, -1L, TestName = "A millisecond before midnight, scale 3")]
-    [TestCase(3, 86_400_000L, TestName = "Exactly 24 hours, scale 3")]
-    [TestCase(0, 86_400L, TestName = "Exactly 24 hours, scale 0")]
-    [TestCase(0, 100 * 3600L, TestName = "A duration of 100 hours, scale 0")]
-    public void TryProjectRead_Time64ToTimeOnlyOfAValueThatIsNoTimeOfDay_Throws(int scale, long count)
-    {
-        Func<long, TimeOnly> project = Project<long, TimeOnly>(Codec($"Time64({scale})"));
-
-        var thrown = Assert.Throws<InvalidOperationException>(() => project(count));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(thrown.Message, Does.Contain("is not a time of day"));
-            Assert.That(thrown.Message, Does.Contain("TimeSpan"));
-        });
-    }
+    [TestCaseSource(nameof(Time64OfNoTimeOfDayScenarios))]
+    public void TryProjectRead_Time64ToTimeOnlyOfAValueThatIsNoTimeOfDay_Throws(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
     // Pin both accepted bounds of a day.
-    [TestCase(9, 0L, "00:00:00")]
-    [TestCase(9, 86_399_999_999_999L, "23:59:59.9999999")]
-    [TestCase(3, 86_399_999L, "23:59:59.999")]
-    [TestCase(0, 86_399L, "23:59:59")]
-    public void TryProjectRead_Time64ToTimeOnlyAtTheEndsOfTheDay_IsAccepted(int scale, long count, string expected)
-    {
-        Func<long, TimeOnly> project = Project<long, TimeOnly>(Codec($"Time64({scale})"));
-
-        Assert.That(project(count), Is.EqualTo(TimeOnly.Parse(expected)));
-    }
+    [TestCaseSource(nameof(Time64AtTheEndsOfTheDayScenarios))]
+    public void TryProjectRead_Time64ToTimeOnlyAtTheEndsOfTheDay_IsAccepted(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
     [Test]
     public void ReadableElementTypes_NullableOfProjectingInner_LiftsEveryInnerType()
@@ -469,17 +346,9 @@ public class ColumnReadProjectionTests
             Is.EqualTo(new[] { typeof(uint?), typeof(DateTimeOffset?), typeof(DateTime?) }));
     }
 
-    [Test]
-    public void TryProjectRead_NullableOfDateTime_ProjectsValueAndPreservesNull()
-    {
-        Func<uint?, DateTime?> project = Project<uint?, DateTime?>(Codec("Nullable(DateTime('UTC'))"));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(project(1_700_000_000), Is.EqualTo(new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Utc)));
-            Assert.That(project(null), Is.Null);
-        });
-    }
+    [TestCaseSource(nameof(NullableOfDateTimeScenarios))]
+    public void TryProjectRead_NullableOfDateTime_ProjectsValueAndPreservesNull(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
     [Test]
     [TestCase("String")]
@@ -502,18 +371,9 @@ public class ColumnReadProjectionTests
             Is.EqualTo(new[] { typeof(uint?), typeof(DateTimeOffset?), typeof(DateTime?) }));
     }
 
-    [Test]
-    public void TryProjectRead_LowCardinalityOfNullableDateTime_ProjectsValueAndPreservesNull()
-    {
-        Func<uint?, DateTimeOffset?> project =
-            Project<uint?, DateTimeOffset?>(Codec("LowCardinality(Nullable(DateTime('UTC')))"));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(project(1_700_000_000)?.UtcDateTime, Is.EqualTo(new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Utc)));
-            Assert.That(project(null), Is.Null);
-        });
-    }
+    [TestCaseSource(nameof(LowCardinalityOfNullableDateTimeScenarios))]
+    public void TryProjectRead_LowCardinalityOfNullableDateTime_ProjectsValueAndPreservesNull(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
     [Test]
     public void ReadableElementTypes_LowCardinalityOfNonProjectingInner_IsJustTheInnerType()
@@ -527,23 +387,14 @@ public class ColumnReadProjectionTests
     /// A non-nullable <c>LowCardinality</c> surfaces the inner type unchanged, so its projection is the inner's own,
     /// applied with no lifting. Exercises the delegation arm that the nullable cases skip.
     /// </summary>
-    [Test]
-    public void TryProjectRead_LowCardinalityOfProjectingInner_DelegatesToTheInnerUnlifted()
+    [TestCaseSource(nameof(LowCardinalityOfProjectingInnerScenarios))]
+    public void TryProjectRead_LowCardinalityOfProjectingInner_DelegatesToTheInnerUnlifted(ColumnReadScenario scenario)
     {
-        IColumnCodec codec = Codec("LowCardinality(DateTime('Europe/Berlin'))");
+        Assert.That(
+            Codec(scenario.ColumnType).ReadableElementTypes,
+            Is.EqualTo(new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime) }));
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(
-                codec.ReadableElementTypes,
-                Is.EqualTo(new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime) }));
-
-            Func<uint, DateTimeOffset> project = Project<uint, DateTimeOffset>(codec);
-            Assert.That(project(1_700_000_000).Offset, Is.EqualTo(TimeSpan.FromHours(1)));
-            Assert.That(
-                project(1_700_000_000).UtcDateTime,
-                Is.EqualTo(new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Utc)));
-        });
+        AssertProjects(scenario);
     }
 
     /// <summary>
@@ -554,17 +405,9 @@ public class ColumnReadProjectionTests
     [Test]
     public void TryProjectRead_WrappedCodecs_ProjectEveryAdvertisedTypeToExactlyThatType()
     {
-        string[] wrapped =
-        {
-            "Nullable(DateTime('UTC'))", "Nullable(DateTime64(3, 'UTC'))", "Nullable(Time)", "Nullable(Time64(3))",
-            "Nullable(String)", "Nullable(Int32)", "Nullable(UUID)",
-            "LowCardinality(String)", "LowCardinality(UInt32)", "LowCardinality(DateTime('UTC'))",
-            "LowCardinality(Nullable(String))", "LowCardinality(Nullable(DateTime('UTC')))",
-        };
-
         Assert.Multiple(() =>
         {
-            foreach (string type in wrapped)
+            foreach (string type in WrappedTypes)
             {
                 IColumnCodec codec = Codec(type);
                 foreach (Type target in codec.ReadableElementTypes)
@@ -601,16 +444,16 @@ public class ColumnReadProjectionTests
         });
     }
 
-    [Test]
-    public void TryProjectRead_NullableOfNonProjectingInner_OffersOnlyTheCanonicalType()
+    [TestCase("Nullable(Int32)", typeof(long?), typeof(int?))]
+    public void TryProjectRead_NullableOfNonProjectingInner_OffersOnlyTheCanonicalType(string type, Type unoffered, Type canonical)
     {
-        IColumnCodec codec = Codec("Nullable(Int32)");
-        ParameterExpression source = Expression.Parameter(typeof(int?), "v");
+        IColumnCodec codec = Codec(type);
+        ParameterExpression source = Expression.Parameter(canonical, "v");
 
         Assert.Multiple(() =>
         {
-            Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { typeof(int?) }));
-            Assert.That(codec.TryProjectRead(source, typeof(long?), out Expression _), Is.False);
+            Assert.That(codec.ReadableElementTypes, Is.EqualTo(new[] { canonical }));
+            Assert.That(codec.TryProjectRead(source, unoffered, out Expression _), Is.False);
         });
     }
 
@@ -618,10 +461,10 @@ public class ColumnReadProjectionTests
     /// An enum reads as its raw ordinal or as its label, and writes from either, so the two lists match. The
     /// members come from the type string the column carries, so neither direction needs anything of the server.
     /// </summary>
-    [Test]
-    public void ReadableElementTypes_Enum_OffersTheOrdinalAndTheLabel()
+    [TestCase("Enum8('a' = 1, 'b' = 2)")]
+    public void ReadableElementTypes_Enum_OffersTheOrdinalAndTheLabel(string type)
     {
-        IColumnCodec codec = Codec("Enum8('a' = 1, 'b' = 2)");
+        IColumnCodec codec = Codec(type);
 
         Assert.Multiple(() =>
         {
@@ -634,14 +477,9 @@ public class ColumnReadProjectionTests
     /// Every row of a column read from the server is a declared ordinal, so the projection cannot meet this on a
     /// real read. Pinned anyway: it is the difference between a clear failure and a wrong label.
     /// </summary>
-    [Test]
-    public void TryProjectRead_EnumOrdinalWithNoDeclaredMember_ThrowsNamingTheType()
-    {
-        Func<sbyte, string> project = Project<sbyte, string>(Codec("Enum8('a' = -1, 'b' = 127)"));
-
-        var thrown = Assert.Throws<KeyNotFoundException>(() => project(0));
-        Assert.That(thrown.Message, Does.Contain("Enum8('a' = -1, 'b' = 127)").And.Contain("ordinal 0"));
-    }
+    [TestCaseSource(nameof(EnumOrdinalWithNoDeclaredMemberScenarios))]
+    public void TryProjectRead_EnumOrdinalWithNoDeclaredMember_ThrowsNamingTheType(ColumnReadScenario scenario)
+        => AssertProjects(scenario);
 
     /// <summary>
     /// The lifting rule reads source and target shapes independently. No registered pair distinguishes that from
@@ -952,7 +790,172 @@ public class ColumnReadProjectionTests
         });
     }
 
-    private static IEnumerable<TestCaseData> ColumnReadCandidates()
+    // 1700000000 = 2023-11-14T22:13:20Z, which is 23:13:20 +01:00 in Berlin (winter, no DST).
+    internal static IEnumerable<ColumnReadScenario> DateTimeToOffsetScenarios() => new[]
+    {
+        ColumnReadScenario.Reads("DateTime('Europe/Berlin') as DateTimeOffset", "DateTime('Europe/Berlin')", new uint[] { 1_700_000_000 }, new DateTimeOffset(2023, 11, 14, 23, 13, 20, TimeSpan.FromHours(1))),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> ZoneTimeZoneInfoCannotHoldScenarios() => new[]
+    {
+        ColumnReadScenario.Throws<uint, DateTimeOffset, FormatException>("DateTime('Fixed/UTC+19:00:00') as DateTimeOffset", "DateTime('Fixed/UTC+19:00:00')", 1_700_000_000, "+19:00:00"),
+        ColumnReadScenario.Throws<uint, DateTimeOffset, FormatException>("DateTime('Fixed/UTC+05:30:15') as DateTimeOffset", "DateTime('Fixed/UTC+05:30:15')", 1_700_000_000, "+05:30:15"),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> DateTime64ZoneTimeZoneInfoCannotHoldScenarios() => new[]
+    {
+        ColumnReadScenario.Throws<long, DateTimeOffset, FormatException>("DateTime64(3, 'Fixed/UTC+19:00:00') as DateTimeOffset", "DateTime64(3, 'Fixed/UTC+19:00:00')", 1_700_000_000_000, "+19:00:00"),
+        ColumnReadScenario.Throws<long, DateTimeOffset, FormatException>("DateTime64(9, 'Fixed/UTC+05:30:15') as DateTimeOffset", "DateTime64(9, 'Fixed/UTC+05:30:15')", 1_700_000_000_000, "+05:30:15"),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> DateTimeToUtcDateTimeScenarios() => new[]
+    {
+        ColumnReadScenario.Reads("DateTime('UTC') as DateTime", "DateTime('UTC')", new uint[] { 1_700_000_000 }, new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Utc)),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> DateTimeToWallClockScenarios() => new[]
+    {
+        ColumnReadScenario.Reads("DateTime('Europe/Berlin') as DateTime", "DateTime('Europe/Berlin')", new uint[] { 1_700_000_000 }, new DateTime(2023, 11, 14, 23, 13, 20, DateTimeKind.Unspecified)),
+    };
+
+    // Scale 9 is finer than a .NET tick, so the sub-100 ns digits truncate toward zero.
+    internal static IEnumerable<ColumnReadScenario> DateTime64ToOffsetScenarios() => new[]
+    {
+        ColumnReadScenario.Reads("DateTime64(3, 'UTC') as DateTimeOffset", "DateTime64(3, 'UTC')", new[] { 1_700_000_000_123L }, Instant("2023-11-14T22:13:20.1230000Z")),
+        ColumnReadScenario.Reads("DateTime64(9, 'UTC') as DateTimeOffset", "DateTime64(9, 'UTC')", new[] { 1_700_000_000_123_456_789L }, Instant("2023-11-14T22:13:20.1234567Z")),
+        ColumnReadScenario.Reads("DateTime64(0, 'UTC') as DateTimeOffset", "DateTime64(0, 'UTC')", new[] { 1_700_000_000L }, Instant("2023-11-14T22:13:20.0000000Z")),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> DateTime64ToDateTimeScenarios() => new[]
+    {
+        ColumnReadScenario.Reads("DateTime64(3, 'UTC') as DateTime", "DateTime64(3, 'UTC')", new[] { 1_700_000_000_123L }, new DateTime(2023, 11, 14, 22, 13, 20, 123, DateTimeKind.Utc)),
+        ColumnReadScenario.Reads("DateTime64(3, 'Europe/Berlin') as DateTime", "DateTime64(3, 'Europe/Berlin')", new[] { 1_700_000_000_123L }, new DateTime(2023, 11, 14, 23, 13, 20, 123, DateTimeKind.Unspecified)),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> BeyondTheCalendarRangeScenarios() => new[]
+    {
+        ColumnReadScenario.Throws<long, DateTimeOffset, OverflowException>("DateTime64(0, 'UTC') as DateTimeOffset: beyond the calendar range", "DateTime64(0, 'UTC')", long.MaxValue, "Values"),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> TimeToTimeSpanScenarios() => new[]
+    {
+        ColumnReadScenario.Reads("Time as TimeSpan", "Time", new[] { 3661, -3661, 0 }, new TimeSpan(1, 1, 1), new TimeSpan(1, 1, 1).Negate(), TimeSpan.Zero),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> Time64ToTimeSpanScenarios() => new[]
+    {
+        ColumnReadScenario.Reads("Time64(3) as TimeSpan", "Time64(3)", new[] { 3_661_500L }, TimeSpan.Parse("01:01:01.5000000", CultureInfo.InvariantCulture)),
+        ColumnReadScenario.Reads("Time64(9) as TimeSpan", "Time64(9)", new[] { -1_000_000_001L }, TimeSpan.Parse("-00:00:01.0000000", CultureInfo.InvariantCulture)),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> TimeToTimeOnlyScenarios() => new[]
+    {
+        ColumnReadScenario.Reads("Time as TimeOnly", "Time", new[] { 3661, 0, (23 * 3600) + (59 * 60) + 59 }, new TimeOnly(1, 1, 1), TimeOnly.MinValue, new TimeOnly(23, 59, 59)),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> Time64ToTimeOnlyScenarios() => new[]
+    {
+        ColumnReadScenario.Reads("Time64(3) as TimeOnly", "Time64(3)", new[] { 3_661_500L }, TimeOnly.Parse("01:01:01.5000000", CultureInfo.InvariantCulture)),
+        ColumnReadScenario.Reads("Time64(9) as TimeOnly", "Time64(9)", new[] { 3_661_000_000_000L }, TimeOnly.Parse("01:01:01", CultureInfo.InvariantCulture)),
+    };
+
+    // The message has to name the reading that does work, TimeSpan.
+    internal static IEnumerable<ColumnReadScenario> TimeOfNoTimeOfDayScenarios() => new[]
+    {
+        NoTimeOfDay("Time as TimeOnly: a negative duration", "Time", -1),
+        NoTimeOfDay("Time as TimeOnly: exactly 24 hours", "Time", 24 * 3600),
+        NoTimeOfDay("Time as TimeOnly: a duration of 100 hours", "Time", 100 * 3600),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> Time64OfNoTimeOfDayScenarios() => new[]
+    {
+        NoTimeOfDay("Time64(9) as TimeOnly: a nanosecond before midnight", "Time64(9)", -1L),
+        NoTimeOfDay("Time64(9) as TimeOnly: the last count that truncates to zero", "Time64(9)", -99L),
+        NoTimeOfDay("Time64(9) as TimeOnly: one tick before midnight", "Time64(9)", -100L),
+        NoTimeOfDay("Time64(8) as TimeOnly: ten nanoseconds before midnight", "Time64(8)", -1L),
+        NoTimeOfDay("Time64(8) as TimeOnly: the last count that truncates to zero", "Time64(8)", -9L),
+        NoTimeOfDay("Time64(3) as TimeOnly: a millisecond before midnight", "Time64(3)", -1L),
+        NoTimeOfDay("Time64(3) as TimeOnly: exactly 24 hours", "Time64(3)", 86_400_000L),
+        NoTimeOfDay("Time64(0) as TimeOnly: exactly 24 hours", "Time64(0)", 86_400L),
+        NoTimeOfDay("Time64(0) as TimeOnly: a duration of 100 hours", "Time64(0)", 100 * 3600L),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> Time64AtTheEndsOfTheDayScenarios() => new[]
+    {
+        ColumnReadScenario.Reads("Time64(9) as TimeOnly: midnight", "Time64(9)", new[] { 0L }, TimeOnly.Parse("00:00:00", CultureInfo.InvariantCulture)),
+        ColumnReadScenario.Reads("Time64(9) as TimeOnly: the last count of the day", "Time64(9)", new[] { 86_399_999_999_999L }, TimeOnly.Parse("23:59:59.9999999", CultureInfo.InvariantCulture)),
+        ColumnReadScenario.Reads("Time64(3) as TimeOnly: the last count of the day", "Time64(3)", new[] { 86_399_999L }, TimeOnly.Parse("23:59:59.999", CultureInfo.InvariantCulture)),
+        ColumnReadScenario.Reads("Time64(0) as TimeOnly: the last count of the day", "Time64(0)", new[] { 86_399L }, TimeOnly.Parse("23:59:59", CultureInfo.InvariantCulture)),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> NullableOfDateTimeScenarios() => new[]
+    {
+        ColumnReadScenario.Reads<uint?, DateTime?>("Nullable(DateTime('UTC')) as DateTime?", "Nullable(DateTime('UTC'))", new uint?[] { 1_700_000_000, null }, new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Utc), null),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> LowCardinalityOfNullableDateTimeScenarios() => new[]
+    {
+        ColumnReadScenario.Reads<uint?, DateTimeOffset?>("LowCardinality(Nullable(DateTime('UTC'))) as DateTimeOffset?", "LowCardinality(Nullable(DateTime('UTC')))", new uint?[] { 1_700_000_000, null }, new DateTimeOffset(2023, 11, 14, 22, 13, 20, TimeSpan.Zero), null),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> LowCardinalityOfProjectingInnerScenarios() => new[]
+    {
+        ColumnReadScenario.Reads("LowCardinality(DateTime('Europe/Berlin')) as DateTimeOffset", "LowCardinality(DateTime('Europe/Berlin'))", new uint[] { 1_700_000_000 }, new DateTimeOffset(2023, 11, 14, 23, 13, 20, TimeSpan.FromHours(1))),
+    };
+
+    internal static IEnumerable<ColumnReadScenario> EnumOrdinalWithNoDeclaredMemberScenarios() => new[]
+    {
+        ColumnReadScenario.Throws<sbyte, string, KeyNotFoundException>("Enum8('a' = -1, 'b' = 127) as string: ordinal 0", "Enum8('a' = -1, 'b' = 127)", 0, "Enum8('a' = -1, 'b' = 127)", "ordinal 0"),
+    };
+
+    private static ColumnReadScenario NoTimeOfDay<TSource>(string name, string columnType, TSource value)
+        => ColumnReadScenario.Throws<TSource, TimeOnly, InvalidOperationException>(name, columnType, value, "is not a time of day", "TimeSpan");
+
+    private static DateTimeOffset Instant(string text) => DateTimeOffset.Parse(text, CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Asserts that the codec offers the scenario's reading, and that the compiled projection gives each expected
+    /// value or throws the expected exception on each value. Values compare strictly: the same type, the same
+    /// floating-point bits, the same <see cref="DateTime.Kind"/> and the same offset.
+    /// </summary>
+    private static void AssertProjects(ColumnReadScenario scenario)
+    {
+        IColumnCodec codec = Codec(scenario.ColumnType);
+        Assert.That(scenario.Values.GetType().GetElementType(), Is.EqualTo(codec.ElementType), "the scenario's values must be of the codec's element type");
+
+        ParameterExpression source = Expression.Parameter(codec.ElementType, "v");
+        Assert.That(codec.TryProjectRead(source, scenario.Target, out Expression body), Is.True, $"{codec.TypeName} does not project to {scenario.Target}");
+        Assert.That(body.Type, Is.EqualTo(scenario.Target), "the projection must yield the requested type");
+
+        ParameterExpression boxed = Expression.Parameter(typeof(object), "boxed");
+        Func<object, object> project = Expression.Lambda<Func<object, object>>(
+            Expression.Block(
+                new[] { source },
+                Expression.Assign(source, Expression.Convert(boxed, codec.ElementType)),
+                Expression.Convert(body, typeof(object))),
+            boxed).Compile();
+
+        Assert.Multiple(() =>
+        {
+            for (int i = 0; i < scenario.Values.Length; i++)
+            {
+                object value = scenario.Values.GetValue(i);
+                if (scenario.ExceptionType is null)
+                {
+                    Assert.That(ValueComparer.Difference(scenario.Expected.GetValue(i), project(value)), Is.Null, $"value {i}");
+                    continue;
+                }
+
+                Exception thrown = Assert.Throws(scenario.ExceptionType, () => project(value));
+                foreach (string part in scenario.MessageParts)
+                {
+                    Assert.That(thrown?.Message, Does.Contain(part), $"value {i}");
+                }
+            }
+        });
+    }
+
+    internal static IEnumerable<TestCaseData> ColumnReadCandidates()
     {
         yield return ColumnReadCase("String", typeof(byte[]), true);
         yield return ColumnReadCase("Nullable(String)", typeof(byte[]), true);
