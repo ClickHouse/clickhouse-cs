@@ -129,6 +129,7 @@ public class ClickHouseBulkCopy : IDisposable
     {
         var options = new InsertOptions
         {
+            Database = connection.Database,
             BatchSize = BatchSize,
             MaxDegreeOfParallelism = MaxDegreeOfParallelism,
             Format = rowBinaryFormat,

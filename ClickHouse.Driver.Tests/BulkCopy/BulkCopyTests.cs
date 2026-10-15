@@ -158,6 +158,24 @@ public class BulkCopyTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    [TestCase(RowBinaryFormat.RowBinary)]
+    [TestCase(RowBinaryFormat.RowBinaryWithDefaults)]
+    public async Task WriteToServerAsync_AfterChangeDatabase_InsertsIntoSelectedDatabase(RowBinaryFormat format)
+    {
+        await client.ExecuteNonQueryAsync("CREATE DATABASE IF NOT EXISTS test_secondary");
+        var targetTable = CreateTableName($"bulk_{format}", database: "test_secondary");
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (value UInt32) ENGINE Memory");
+
+        using var conn = client.CreateConnection();
+        using var bulkCopy = new ClickHouseBulkCopy(conn, format) { DestinationTableName = TestUtilities.BareTableName(targetTable) };
+        conn.ChangeDatabase("test_secondary");
+
+        await bulkCopy.WriteToServerAsync(new[] { new object[] { 1u }, new object[] { 2u } });
+
+        Assert.That(await client.ExecuteScalarAsync($"SELECT count() FROM {targetTable}"), Is.EqualTo(2UL));
+    }
+
+    [Test]
     public async Task WriteToServerAsync_FixedStringWithNonSeekableStreamTooLong_ThrowsArgumentException()
     {
         var targetTable = CreateTableName();
