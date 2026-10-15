@@ -2371,7 +2371,7 @@ Each span includes standard OpenTelemetry database attributes plus ClickHouse-sp
 | Attribute | Description |
 |-----------|-------------|
 | `db.system` | Always `"clickhouse"` |
-| `db.name` | Database name |
+| `db.name` | Database sent with the request: `QueryOptions.Database` / `InsertOptions.Database` when set (for `ClickHouseCommand`, the database selected with `ClickHouseConnection.ChangeDatabase`), otherwise the client's `Database` setting. Empty when neither is set |
 | `db.user` | Username |
 | `db.statement` | SQL query (if enabled) |
 | `db.clickhouse.read_rows` | Rows read by the query |

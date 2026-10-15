@@ -26,7 +26,11 @@ internal static class ActivitySourceHelper
 
     internal static ActivitySource ActivitySource { get; } = CreateActivitySource();
 
-    internal static Activity StartActivity(this ClickHouseClient client, string name)
+    /// <summary>
+    /// Starts a client activity. <paramref name="database"/> is the database sent with the request, reported as
+    /// <c>db.name</c>; when it is <c>null</c>, the client's configured database is reported.
+    /// </summary>
+    internal static Activity StartActivity(this ClickHouseClient client, string name, string database = null)
     {
         if (client is null) throw new ArgumentNullException(nameof(client));
         if (string.IsNullOrEmpty(name)) throw new ArgumentNullException(nameof(name));
@@ -38,7 +42,7 @@ internal static class ActivitySourceHelper
             activity.SetTag(TagThreadId, Environment.CurrentManagedThreadId.ToString(CultureInfo.InvariantCulture));
             activity.SetTag(TagDbSystem, "clickhouse");
             activity.SetTag(TagDbConnectionString, client.RedactedConnectionString);
-            activity.SetTag(TagDbName, client.Settings.Database);
+            activity.SetTag(TagDbName, database ?? client.Settings.Database);
             activity.SetTag(TagUser, client.Settings.Username);
             activity.SetTag(TagService, $"{client.ServerUri.Host}:{client.ServerUri.Port}{client.ServerUri.AbsolutePath}");
         }
