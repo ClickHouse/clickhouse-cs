@@ -1430,6 +1430,29 @@ any column that is not an enum. The ordinal is the
 signed value from the wire, so it can be negative, and an `Enum16` ordinal can be larger than a
 byte.
 
+---
+
+### Changing the database {#ado-net-change-database}
+
+`ChangeDatabase` selects the database for one connection. The connection sends this database with
+each request, so an unqualified table name resolves in it:
+
+```csharp
+// connection: a ClickHouseConnection opened from a ClickHouseDataSource
+connection.ChangeDatabase("analytics");
+
+await using var command = connection.CreateCommand("SELECT count() FROM events"); // analytics.events
+var count = await command.ExecuteScalarAsync();
+```
+
+- Commands that run on the connection and both `PostStreamAsync` overloads of the connection use
+  the selected database.
+- `ClickHouseBulkCopy` reads the database when `WriteToServerAsync` runs, so a `ChangeDatabase` call
+  made after you create the bulk copy applies to the next write.
+- `connection.Database` returns the selected database. Before the first `ChangeDatabase` call, it
+  returns the `Database` setting.
+- `ChangeDatabase` does not change the settings of the `ClickHouseClient` or of other connections.
+
 ## Best practices {#best-practices}
 
 ### Connection lifetime and pooling {#best-practices-connection-lifetime}
