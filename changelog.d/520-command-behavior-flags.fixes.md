@@ -1,1 +1,1 @@
-* Fixed `CommandBehavior.SchemaOnly` and `CommandBehavior.SingleRow` handling when combined with other ADO.NET flags.
+* Fixed `CommandBehavior.SchemaOnly` and `CommandBehavior.SingleRow` when combined with other ADO.NET behavior flags.
