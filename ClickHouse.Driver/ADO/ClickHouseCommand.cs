@@ -210,12 +210,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
             throw new InvalidOperationException("Connection is not set");
 
         using var lcts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, cancellationToken);
-        var limitClause = behavior switch
-        {
-            CommandBehavior.SingleRow => "LIMIT 1",
-            CommandBehavior.SchemaOnly => "LIMIT 0",
-            _ => null,
-        };
+        var limitClause = (behavior & CommandBehavior.SchemaOnly) != 0 ? "LIMIT 0" : (behavior & CommandBehavior.SingleRow) != 0 ? "LIMIT 1" : null;
 
         // Normalize CommandText the way the pre-#471 code did (via `new StringBuilder(CommandText)`):
         // a null CommandText is treated as an empty query for every behavior, so an unset command

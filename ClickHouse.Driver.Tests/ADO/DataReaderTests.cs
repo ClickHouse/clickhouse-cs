@@ -4,7 +4,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Utility;
-using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests.ADO;
 
@@ -286,5 +285,54 @@ public class DataReaderTests : AbstractConnectionTestFixture
             ClassicAssert.IsTrue(reader.IsDBNull(2));
         });
         ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [TestCase(CommandBehavior.SchemaOnly | CommandBehavior.KeyInfo, 0)]
+    [TestCase(CommandBehavior.SchemaOnly | CommandBehavior.SequentialAccess, 0)]
+    [TestCase(CommandBehavior.SingleRow | CommandBehavior.SequentialAccess, 1)]
+    [TestCase(CommandBehavior.SingleRow | CommandBehavior.CloseConnection, 1)]
+    public async Task ExecuteReaderAsync_CombinedBehaviorFlags_AppliesExpectedLimit(CommandBehavior behavior, int expectedRows)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT number FROM numbers(5)";
+
+        using var reader = await command.ExecuteReaderAsync(behavior);
+
+        var rows = 0;
+        while (await reader.ReadAsync())
+        {
+            rows++;
+        }
+
+        Assert.That(rows, Is.EqualTo(expectedRows));
+    }
+
+    [Test]
+    public async Task ExecuteReaderAsync_SchemaOnlyAndSingleRow_SchemaOnlyTakesPrecedence()
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT number FROM numbers(5)";
+
+        using var reader = await command.ExecuteReaderAsync(
+            CommandBehavior.SchemaOnly | CommandBehavior.SingleRow);
+
+        Assert.That(await reader.ReadAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task ExecuteReaderAsync_DefaultBehavior_DoesNotLimitRows()
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT number FROM numbers(5)";
+
+        using var reader = await command.ExecuteReaderAsync(CommandBehavior.Default);
+
+        var rows = 0;
+        while (await reader.ReadAsync())
+        {
+            rows++;
+        }
+
+        Assert.That(rows, Is.EqualTo(5));
     }
 }
