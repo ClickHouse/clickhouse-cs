@@ -381,7 +381,7 @@ internal sealed class QBitSByteColumnCodec : QBitColumnCodec
 
         // Use the element's two's-complement bit pattern.
         ReadOnlySpan<byte> raw = MemoryMarshal.AsBytes(vector.AsSpan());
-        if (QBitLayout.TransposesBlocks)
+        if (Vector256.IsHardwareAccelerated)
         {
             TransposeBlocks(raw, destination, planeStride, WriteBlock);
         }
@@ -426,7 +426,7 @@ internal sealed class QBitFloatColumnCodec : QBitColumnCodec
 
         // BFloat16 planes are the high 16 bits of the widened float.
         ReadOnlySpan<uint> raw = MemoryMarshal.Cast<float, uint>(vector.AsSpan());
-        if (QBitLayout.TransposesBlocks)
+        if (Vector256.IsHardwareAccelerated)
         {
             TransposeBlocks(raw, destination, planeStride, writeBlock);
         }
@@ -479,7 +479,7 @@ internal sealed class QBitDoubleColumnCodec : QBitColumnCodec
     {
         double[] vector = Validate(((IColumn<double[]>)column)[row], row);
         ReadOnlySpan<ulong> raw = MemoryMarshal.Cast<double, ulong>(vector.AsSpan());
-        if (QBitLayout.TransposesBlocks)
+        if (Vector256.IsHardwareAccelerated)
         {
             TransposeBlocks(raw, destination, planeStride, WriteBlock);
         }

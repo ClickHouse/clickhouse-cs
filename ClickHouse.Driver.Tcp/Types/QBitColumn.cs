@@ -23,12 +23,6 @@ internal static class QBitLayout
     /// Returns <c>ceil(span / 8)</c> without overflowing when <paramref name="span"/> is positive.
     /// </summary>
     public static int BytesPerRow(int span) => ((span - 1) / 8) + 1;
-
-    /// <summary>
-    /// Gets whether rows are transposed 32 elements at a time with 256-bit vectors. The block kernels assume
-    /// little-endian byte order.
-    /// </summary>
-    public static bool TransposesBlocks => Vector256.IsHardwareAccelerated && BitConverter.IsLittleEndian;
 }
 
 /// <summary>
@@ -370,7 +364,7 @@ internal sealed class QBitFloatColumn : QBitColumnBase<float>
 
         // Build each IEEE-754 pattern directly in the destination array. BFloat16 fills the high 16 bits.
         Span<uint> bits = MemoryMarshal.Cast<float, uint>(vector.AsSpan());
-        if (QBitLayout.TransposesBlocks)
+        if (Vector256.IsHardwareAccelerated)
         {
             DetransposeBlocks(planes, bits, BitWidth == 16 ? BFloat16Reader : Float32Reader);
         }
@@ -423,7 +417,7 @@ internal sealed class QBitSByteColumn : QBitColumnBase<sbyte>
 
         // Use an unsigned view so the sign plane sets bit 7 without numeric conversion.
         Span<byte> bits = MemoryMarshal.Cast<sbyte, byte>(vector.AsSpan());
-        if (QBitLayout.TransposesBlocks)
+        if (Vector256.IsHardwareAccelerated)
         {
             DetransposeBlocks(planes, bits, ReadBlock);
         }
@@ -452,7 +446,7 @@ internal sealed class QBitDoubleColumn : QBitColumnBase<double>
         ReadOnlySpan<byte> planes = RowPlanes(row);
         var vector = new double[Dimension];
         Span<ulong> bits = MemoryMarshal.Cast<double, ulong>(vector.AsSpan());
-        if (QBitLayout.TransposesBlocks)
+        if (Vector256.IsHardwareAccelerated)
         {
             DetransposeBlocks(planes, bits, ReadBlock);
         }
