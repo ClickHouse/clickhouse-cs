@@ -1,6 +1,8 @@
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Globalization;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -19,6 +21,9 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </summary>
 internal abstract class QBitColumnCodec : IColumnCodec
 {
+    /// <summary>The target size of the buffer a transposed write fills one block of rows at a time.</summary>
+    private const int TransposeBlockBytes = 4096;
+
     protected QBitColumnCodec(string typeName, int dimension, int bitWidth)
     {
         TypeName = typeName;
@@ -126,18 +131,146 @@ internal abstract class QBitColumnCodec : IColumnCodec
 
     protected abstract IColumn CreateColumn(string name, string typeName, byte[] blob, int rowCount, bool pooled);
 
-    /// <summary>Transposes row vectors into a plane-major body.</summary>
-    protected abstract void WriteTransposed(ClickHouseBinaryWriter writer, IColumn column, int start, int length);
+    /// <summary>
+    /// Writes one row's bitmap into every plane. <paramref name="destination"/> starts at the row's bitmap in plane 0;
+    /// plane <c>p</c> starts <c>p * planeStride</c> bytes later. Implementations write every byte of the bitmap in
+    /// every plane, so the destination needs no clearing.
+    /// </summary>
+    /// <exception cref="ArgumentException">The vector is null or its length differs from <see cref="Dimension"/>.</exception>
+    protected abstract void TransposeRow(IColumn column, int row, Span<byte> destination, int planeStride);
 
     /// <summary>
-    /// Rents scratch space and clears its used region because transpose implementations only set bits.
+    /// Transposes one row without SIMD. <typeparamref name="T"/> holds each element's bit pattern, and plane
+    /// <c>p</c> is bit <c>bits(T) - 1 - p</c> of it.
     /// </summary>
-    protected byte[] RentScratch(int length, out int byteCount)
+    internal void TransposeScalar<T>(ReadOnlySpan<T> raw, Span<byte> destination, int planeStride)
+        where T : unmanaged, IBinaryInteger<T>
     {
-        byteCount = checked(BitWidth * length * BytesPerRow);
-        byte[] scratch = ArrayPool<byte>.Shared.Rent(byteCount);
-        Array.Clear(scratch, 0, byteCount);
-        return scratch;
+        int top = (Unsafe.SizeOf<T>() * 8) - 1;
+        for (int group = 0; group < BytesPerRow; group++)
+        {
+            int first = group << 3;
+            ReadOnlySpan<T> elements = raw.Slice(first, Math.Min(8, raw.Length - first));
+            int slot = QBitLayout.ByteOfGroup(group, BytesPerRow);
+            for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
+            {
+                int shift = top - wireIndex;
+                int bits = 0;
+                for (int i = 0; i < elements.Length; i++)
+                {
+                    bits |= int.CreateTruncating((elements[i] >> shift) & T.One) << i;
+                }
+
+                destination[(wireIndex * planeStride) + slot] = (byte)bits;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes the vector in 32-element blocks. A complete block's four bytes in a plane are bytes
+    /// <c>offset</c> to <c>offset + 3</c> of the row bitmap, its last group first. The remainder is padded with zero
+    /// elements, which contribute no bits, and written through a four-byte-per-plane buffer, from which only the
+    /// bytes of its groups are copied: they are the first bytes of the row bitmap.
+    /// </summary>
+    protected void TransposeBlocks<T>(ReadOnlySpan<T> raw, Span<byte> destination, int planeStride, BlockWriter<T> writeBlock)
+        where T : unmanaged
+    {
+        int blocks = Dimension >> 5;
+        for (int block = 0; block < blocks; block++)
+        {
+            writeBlock(raw.Slice(block << 5, 32), destination, BytesPerRow - 4 - (block << 2), planeStride);
+        }
+
+        int rest = Dimension & 31;
+        if (rest != 0)
+        {
+            Span<T> padded = stackalloc T[32];
+            raw.Slice(blocks << 5).CopyTo(padded);
+            padded.Slice(rest).Clear();
+            Span<byte> partial = stackalloc byte[BitWidth * 4];
+            writeBlock(padded, partial, 0, 4);
+
+            // At most four bytes per plane: a byte loop is cheaper than a copy call.
+            int groups = (rest + 7) >> 3;
+            for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
+            {
+                ReadOnlySpan<byte> source = partial.Slice((wireIndex * 4) + 4 - groups, groups);
+                Span<byte> target = destination.Slice(wireIndex * planeStride, groups);
+                for (int group = 0; group < source.Length; group++)
+                {
+                    target[group] = source[group];
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes eight planes of a complete block. Each <see cref="Vector256.ExtractMostSignificantBits{T}"/> call
+    /// yields one plane's bit of all 32 elements, element <c>j</c> in bit <c>j</c>, and adding the vector to itself
+    /// exposes the next plane. The block's last group has the lowest address, so the mask is stored big-endian.
+    /// </summary>
+    /// <returns>The offset of the block in the next plane.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    protected static int StorePlanes(Span<byte> destination, int offset, Vector256<byte> bytes, int planeStride)
+    {
+        // One range check covers the eight stores, so the loop itself needs no bounds checks. Each address is
+        // computed from the start of the span, so no reference ever points past its end.
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfNegative(planeStride);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(offset + (7L * planeStride) + sizeof(uint), destination.Length);
+        ref byte start = ref MemoryMarshal.GetReference(destination);
+        for (int i = 0; i < 8; i++)
+        {
+            uint mask = bytes.ExtractMostSignificantBits();
+            Unsafe.WriteUnaligned(
+                ref Unsafe.Add(ref start, offset + (i * planeStride)),
+                BitConverter.IsLittleEndian ? BinaryPrimitives.ReverseEndianness(mask) : mask);
+            bytes += bytes;
+        }
+
+        return offset + (8 * planeStride);
+    }
+
+    /// <summary>
+    /// Writes the 32 planes of a complete block from 32 lanes of 32 bits, most significant bit first.
+    /// </summary>
+    /// <returns>The offset of the block in the plane after the last.</returns>
+    protected static int StoreWords(
+        Span<byte> destination,
+        int offset,
+        int planeStride,
+        Vector256<uint> lanes0,
+        Vector256<uint> lanes8,
+        Vector256<uint> lanes16,
+        Vector256<uint> lanes24)
+    {
+        (Vector256<byte> byte3, Vector256<byte> byte2) = HighBytes(lanes0, lanes8, lanes16, lanes24);
+        (Vector256<byte> byte1, Vector256<byte> byte0) = LowBytes(lanes0, lanes8, lanes16, lanes24);
+        offset = StorePlanes(destination, offset, byte3, planeStride);
+        offset = StorePlanes(destination, offset, byte2, planeStride);
+        offset = StorePlanes(destination, offset, byte1, planeStride);
+        return StorePlanes(destination, offset, byte0, planeStride);
+    }
+
+    /// <summary>Returns bytes 3 and 2 of 32 lanes of 32 bits, in lane order.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    protected static (Vector256<byte> Byte3, Vector256<byte> Byte2) HighBytes(
+        Vector256<uint> lanes0, Vector256<uint> lanes8, Vector256<uint> lanes16, Vector256<uint> lanes24)
+    {
+        Vector256<ushort> first = Vector256.Narrow(lanes0 >> 16, lanes8 >> 16);
+        Vector256<ushort> second = Vector256.Narrow(lanes16 >> 16, lanes24 >> 16);
+        return (Vector256.Narrow(first >> 8, second >> 8), Vector256.Narrow(first, second));
+    }
+
+    /// <summary>Returns bytes 1 and 0 of 32 lanes of 32 bits, in lane order.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    protected static (Vector256<byte> Byte1, Vector256<byte> Byte0) LowBytes(
+        Vector256<uint> lanes0, Vector256<uint> lanes8, Vector256<uint> lanes16, Vector256<uint> lanes24)
+    {
+        // Narrow truncates, so these keep the low 16 bits of each lane.
+        Vector256<ushort> first = Vector256.Narrow(lanes0, lanes8);
+        Vector256<ushort> second = Vector256.Narrow(lanes16, lanes24);
+        return (Vector256.Narrow(first >> 8, second >> 8), Vector256.Narrow(first, second));
     }
 
     /// <summary>
@@ -162,6 +295,63 @@ internal abstract class QBitColumnCodec : IColumnCodec
 
         return vector;
     }
+
+    /// <summary>
+    /// Transposes row vectors into a plane-major body. Rows go first into a small buffer laid out like the body but
+    /// holding only a block of rows per plane, and each plane's run is then copied into the body. A row writes the
+    /// same offset in every plane: in the body those offsets are a plane apart and can share cache and TLB sets,
+    /// while the small buffer stays in L1 cache.
+    /// </summary>
+    private void WriteTransposed(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    {
+        if (length == 0)
+        {
+            return;
+        }
+
+        int planeBytes = checked(length * BytesPerRow);
+        int bodyBytes = checked(BitWidth * planeBytes);
+        int blockRows = Math.Clamp(TransposeBlockBytes / (BitWidth * BytesPerRow), 1, length);
+        byte[] body = ArrayPool<byte>.Shared.Rent(bodyBytes);
+
+        // A slice that fits in one block is transposed straight into the body, which is then as small.
+        byte[] block = blockRows < length ? ArrayPool<byte>.Shared.Rent(BitWidth * blockRows * BytesPerRow) : body;
+        int blockPlane = blockRows < length ? blockRows * BytesPerRow : planeBytes;
+        try
+        {
+            for (int first = 0; first < length; first += blockRows)
+            {
+                int rows = Math.Min(blockRows, length - first);
+                for (int r = 0; r < rows; r++)
+                {
+                    TransposeRow(column, start + first + r, block.AsSpan(r * BytesPerRow), blockPlane);
+                }
+
+                if (block != body)
+                {
+                    int run = rows * BytesPerRow;
+                    for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
+                    {
+                        block.AsSpan(wireIndex * blockPlane, run).CopyTo(body.AsSpan((wireIndex * planeBytes) + (first * BytesPerRow)));
+                    }
+                }
+            }
+
+            writer.WriteBytes(body.AsSpan(0, bodyBytes));
+        }
+        finally
+        {
+            if (block != body)
+            {
+                ArrayPool<byte>.Shared.Return(block);
+            }
+
+            ArrayPool<byte>.Shared.Return(body);
+        }
+    }
+
+    /// <summary>Writes one 32-element block; see <see cref="TransposeBlocks{T}"/> for <paramref name="offset"/>.</summary>
+    protected delegate void BlockWriter<T>(ReadOnlySpan<T> block, Span<byte> destination, int offset, int planeStride);
 }
 
 /// <summary>
@@ -186,40 +376,24 @@ internal sealed class QBitSByteColumnCodec : QBitColumnCodec
     protected override IColumn CreateColumn(string name, string typeName, byte[] blob, int rowCount, bool pooled)
         => new QBitSByteColumn(name, typeName, Dimension, blob, rowCount, pooled);
 
-    protected override void WriteTransposed(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    protected override void TransposeRow(IColumn column, int row, Span<byte> destination, int planeStride)
     {
-        var typed = (IColumn<sbyte[]>)column;
-        byte[] scratch = RentScratch(length, out int byteCount);
-        try
-        {
-            int planeStride = length * BytesPerRow;
-            for (int r = 0; r < length; r++)
-            {
-                sbyte[] vector = Validate(typed[start + r], start + r);
-                int rowBase = r * BytesPerRow;
-                for (int i = 0; i < vector.Length; i++)
-                {
-                    // Preserve the element's two's-complement bit pattern.
-                    uint raw = unchecked((byte)vector[i]);
-                    int slot = QBitLayout.ByteOfGroup(i >> 3, BytesPerRow);
-                    byte bit = (byte)(1 << (i & 7));
-                    for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
-                    {
-                        if (((raw >> (7 - wireIndex)) & 1) != 0)
-                        {
-                            scratch[(wireIndex * planeStride) + rowBase + slot] |= bit;
-                        }
-                    }
-                }
-            }
+        sbyte[] vector = Validate(((IColumn<sbyte[]>)column)[row], row);
 
-            writer.WriteBytes(scratch.AsSpan(0, byteCount));
-        }
-        finally
+        // Use the element's two's-complement bit pattern.
+        ReadOnlySpan<byte> raw = MemoryMarshal.AsBytes(vector.AsSpan());
+        if (Vector256.IsHardwareAccelerated)
         {
-            ArrayPool<byte>.Shared.Return(scratch);
+            TransposeBlocks(raw, destination, planeStride, WriteBlock);
+        }
+        else
+        {
+            TransposeScalar(raw, destination, planeStride);
         }
     }
+
+    private static void WriteBlock(ReadOnlySpan<byte> block, Span<byte> destination, int offset, int planeStride)
+        => StorePlanes(destination, offset, Vector256.Create(block), planeStride);
 }
 
 /// <summary>
@@ -228,11 +402,13 @@ internal sealed class QBitSByteColumnCodec : QBitColumnCodec
 /// </summary>
 internal sealed class QBitFloatColumnCodec : QBitColumnCodec
 {
+    private readonly BlockWriter<uint> writeBlock;
     private float[] nullPlaceholder;
 
     public QBitFloatColumnCodec(string typeName, int dimension, int bitWidth)
         : base(typeName, dimension, bitWidth)
     {
+        writeBlock = bitWidth == 16 ? WriteBFloat16Block : WriteFloat32Block;
     }
 
     public override Type ElementType => typeof(float[]);
@@ -245,67 +421,38 @@ internal sealed class QBitFloatColumnCodec : QBitColumnCodec
     protected override IColumn CreateColumn(string name, string typeName, byte[] blob, int rowCount, bool pooled)
         => new QBitFloatColumn(name, typeName, Dimension, BitWidth, blob, rowCount, pooled);
 
-    protected override void WriteTransposed(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    protected override void TransposeRow(IColumn column, int row, Span<byte> destination, int planeStride)
     {
-        var typed = (IColumn<float[]>)column;
-        byte[] scratch = RentScratch(length, out int byteCount);
-        try
+        float[] vector = Validate(((IColumn<float[]>)column)[row], row);
+
+        // BFloat16 planes are the high 16 bits of the widened float.
+        ReadOnlySpan<uint> raw = MemoryMarshal.Cast<float, uint>(vector.AsSpan());
+        if (Vector256.IsHardwareAccelerated)
         {
-            bool simd = Vector256.IsHardwareAccelerated;
-            int planeStride = length * BytesPerRow;
-            for (int r = 0; r < length; r++)
-            {
-                float[] vector = Validate(typed[start + r], start + r);
-                int rowBase = (r * BytesPerRow);
-                int whole = simd ? Dimension >> 3 : 0;
-
-                if (whole != 0)
-                {
-                    TransposeGroups(scratch, vector, whole, rowBase, planeStride);
-                }
-
-                // Handle the tail, or the entire vector when SIMD is unavailable.
-                for (int i = whole << 3; i < vector.Length; i++)
-                {
-                    uint raw = BitConverter.SingleToUInt32Bits(vector[i]);
-                    int slot = QBitLayout.ByteOfGroup(i >> 3, BytesPerRow);
-                    byte bit = (byte)(1 << (i & 7));
-                    for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
-                    {
-                        // BFloat16 planes are the high 16 bits of the widened float.
-                        if (((raw >> (31 - wireIndex)) & 1) != 0)
-                        {
-                            scratch[(wireIndex * planeStride) + rowBase + slot] |= bit;
-                        }
-                    }
-                }
-            }
-
-            writer.WriteBytes(scratch.AsSpan(0, byteCount));
+            TransposeBlocks(raw, destination, planeStride, writeBlock);
         }
-        finally
+        else
         {
-            ArrayPool<byte>.Shared.Return(scratch);
+            TransposeScalar(raw, destination, planeStride);
         }
     }
 
-    /// <summary>
-    /// Transposes complete eight-element groups. Each <see cref="Vector256{T}.ExtractMostSignificantBits"/> call
-    /// produces one plane byte; shifting the lanes left exposes the next plane.
-    /// </summary>
-    private void TransposeGroups(byte[] scratch, float[] vector, int whole, int rowBase, int planeStride)
+    private static void WriteFloat32Block(ReadOnlySpan<uint> block, Span<byte> destination, int offset, int planeStride)
+        => StoreWords(
+            destination,
+            offset,
+            planeStride,
+            Vector256.Create(block),
+            Vector256.Create(block.Slice(8)),
+            Vector256.Create(block.Slice(16)),
+            Vector256.Create(block.Slice(24)));
+
+    private static void WriteBFloat16Block(ReadOnlySpan<uint> block, Span<byte> destination, int offset, int planeStride)
     {
-        ref uint source = ref Unsafe.As<float, uint>(ref MemoryMarshal.GetArrayDataReference(vector));
-        for (int group = 0; group < whole; group++)
-        {
-            Vector256<uint> lanes = Vector256.LoadUnsafe(ref source, (nuint)(group << 3));
-            int slot = rowBase + QBitLayout.ByteOfGroup(group, BytesPerRow);
-            for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
-            {
-                scratch[(wireIndex * planeStride) + slot] = (byte)lanes.ExtractMostSignificantBits();
-                lanes <<= 1;
-            }
-        }
+        (Vector256<byte> byte3, Vector256<byte> byte2) = HighBytes(
+            Vector256.Create(block), Vector256.Create(block.Slice(8)), Vector256.Create(block.Slice(16)), Vector256.Create(block.Slice(24)));
+        offset = StorePlanes(destination, offset, byte3, planeStride);
+        StorePlanes(destination, offset, byte2, planeStride);
     }
 }
 
@@ -329,66 +476,41 @@ internal sealed class QBitDoubleColumnCodec : QBitColumnCodec
     protected override IColumn CreateColumn(string name, string typeName, byte[] blob, int rowCount, bool pooled)
         => new QBitDoubleColumn(name, typeName, Dimension, blob, rowCount, pooled);
 
-    protected override void WriteTransposed(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    protected override void TransposeRow(IColumn column, int row, Span<byte> destination, int planeStride)
     {
-        var typed = (IColumn<double[]>)column;
-        byte[] scratch = RentScratch(length, out int byteCount);
-        try
+        double[] vector = Validate(((IColumn<double[]>)column)[row], row);
+        ReadOnlySpan<ulong> raw = MemoryMarshal.Cast<double, ulong>(vector.AsSpan());
+        if (Vector256.IsHardwareAccelerated)
         {
-            bool simd = Vector256.IsHardwareAccelerated;
-            int planeStride = length * BytesPerRow;
-            for (int r = 0; r < length; r++)
-            {
-                double[] vector = Validate(typed[start + r], start + r);
-                int rowBase = r * BytesPerRow;
-                int whole = simd ? Dimension >> 3 : 0;
-
-                if (whole != 0)
-                {
-                    TransposeGroups(scratch, vector, whole, rowBase, planeStride);
-                }
-
-                for (int i = whole << 3; i < vector.Length; i++)
-                {
-                    ulong raw = BitConverter.DoubleToUInt64Bits(vector[i]);
-                    int slot = QBitLayout.ByteOfGroup(i >> 3, BytesPerRow);
-                    byte bit = (byte)(1 << (i & 7));
-                    for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
-                    {
-                        if (((raw >> (63 - wireIndex)) & 1) != 0)
-                        {
-                            scratch[(wireIndex * planeStride) + rowBase + slot] |= bit;
-                        }
-                    }
-                }
-            }
-
-            writer.WriteBytes(scratch.AsSpan(0, byteCount));
+            TransposeBlocks(raw, destination, planeStride, WriteBlock);
         }
-        finally
+        else
         {
-            ArrayPool<byte>.Shared.Return(scratch);
+            TransposeScalar(raw, destination, planeStride);
         }
     }
 
-    /// <summary>
-    /// Transposes complete eight-element groups. Each four-lane vector contributes one nibble to a plane byte.
-    /// </summary>
-    private void TransposeGroups(byte[] scratch, double[] vector, int whole, int rowBase, int planeStride)
+    private static void WriteBlock(ReadOnlySpan<ulong> block, Span<byte> destination, int offset, int planeStride)
     {
-        ref ulong source = ref Unsafe.As<double, ulong>(ref MemoryMarshal.GetArrayDataReference(vector));
-        for (int group = 0; group < whole; group++)
-        {
-            Vector256<ulong> low = Vector256.LoadUnsafe(ref source, (nuint)(group << 3));
-            Vector256<ulong> high = Vector256.LoadUnsafe(ref source, (nuint)((group << 3) + 4));
-            int slot = rowBase + QBitLayout.ByteOfGroup(group, BytesPerRow);
-            for (int wireIndex = 0; wireIndex < BitWidth; wireIndex++)
-            {
-                uint bits = low.ExtractMostSignificantBits() | (high.ExtractMostSignificantBits() << 4);
-                scratch[(wireIndex * planeStride) + slot] = (byte)bits;
-                low <<= 1;
-                high <<= 1;
-            }
-        }
+        // Split each element into its high and low 32 bits, then each half into bytes.
+        Vector256<ulong> lanes0 = Vector256.Create(block);
+        Vector256<ulong> lanes4 = Vector256.Create(block.Slice(4));
+        Vector256<ulong> lanes8 = Vector256.Create(block.Slice(8));
+        Vector256<ulong> lanes12 = Vector256.Create(block.Slice(12));
+        Vector256<ulong> lanes16 = Vector256.Create(block.Slice(16));
+        Vector256<ulong> lanes20 = Vector256.Create(block.Slice(20));
+        Vector256<ulong> lanes24 = Vector256.Create(block.Slice(24));
+        Vector256<ulong> lanes28 = Vector256.Create(block.Slice(28));
+        Vector256<uint> high0 = Vector256.Narrow(lanes0 >> 32, lanes4 >> 32);
+        Vector256<uint> high8 = Vector256.Narrow(lanes8 >> 32, lanes12 >> 32);
+        Vector256<uint> high16 = Vector256.Narrow(lanes16 >> 32, lanes20 >> 32);
+        Vector256<uint> high24 = Vector256.Narrow(lanes24 >> 32, lanes28 >> 32);
+        Vector256<uint> low0 = Vector256.Narrow(lanes0, lanes4);
+        Vector256<uint> low8 = Vector256.Narrow(lanes8, lanes12);
+        Vector256<uint> low16 = Vector256.Narrow(lanes16, lanes20);
+        Vector256<uint> low24 = Vector256.Narrow(lanes24, lanes28);
+
+        offset = StoreWords(destination, offset, planeStride, high0, high8, high16, high24);
+        StoreWords(destination, offset, planeStride, low0, low8, low16, low24);
     }
 }
