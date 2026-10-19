@@ -23,6 +23,12 @@ internal static class QBitLayout
     /// Returns <c>ceil(span / 8)</c> without overflowing when <paramref name="span"/> is positive.
     /// </summary>
     public static int BytesPerRow(int span) => ((span - 1) / 8) + 1;
+
+    /// <summary>
+    /// Gets whether rows are transposed 32 elements at a time with 256-bit vectors. The block kernels assume
+    /// little-endian byte order.
+    /// </summary>
+    public static bool TransposesBlocks => Vector256.IsHardwareAccelerated && BitConverter.IsLittleEndian;
 }
 
 /// <summary>
@@ -123,9 +129,6 @@ internal abstract class QBitColumn : IQBitColumn
         return blob.AsSpan(((wireIndex * rowCount) + start) * BytesPerRow, length * BytesPerRow);
     }
 
-    /// <summary>Gets whether rows decode 32 elements at a time with 256-bit vectors.</summary>
-    protected static bool DecodesBlocks => Vector256.IsHardwareAccelerated && BitConverter.IsLittleEndian;
-
     /// <summary>Gets the distance in bytes between two planes of the body.</summary>
     protected int PlaneStride => rowCount * BytesPerRow;
 
@@ -223,10 +226,11 @@ internal abstract class QBitColumn : IQBitColumn
         Vector256<byte> bytes = Vector256<byte>.Zero;
         for (int i = 0; i < 8; i++)
         {
-            uint mask = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref start, offset + (i * planeStride)));
+            // The block's last group has the lowest address, so reversing the bytes puts element j in bit j.
+            uint mask = BinaryPrimitives.ReverseEndianness(Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref start, offset + (i * planeStride))));
 
             // Shift the earlier planes up and add this plane's bit: the set lanes are all ones, that is -1.
-            bytes = bytes + bytes - ExpandBits(BitConverter.IsLittleEndian ? BinaryPrimitives.ReverseEndianness(mask) : mask);
+            bytes = bytes + bytes - ExpandBits(mask);
         }
 
         offset += 8 * planeStride;
@@ -366,7 +370,7 @@ internal sealed class QBitFloatColumn : QBitColumnBase<float>
 
         // Build each IEEE-754 pattern directly in the destination array. BFloat16 fills the high 16 bits.
         Span<uint> bits = MemoryMarshal.Cast<float, uint>(vector.AsSpan());
-        if (DecodesBlocks)
+        if (QBitLayout.TransposesBlocks)
         {
             DetransposeBlocks(planes, bits, BitWidth == 16 ? BFloat16Reader : Float32Reader);
         }
@@ -419,7 +423,7 @@ internal sealed class QBitSByteColumn : QBitColumnBase<sbyte>
 
         // Use an unsigned view so the sign plane sets bit 7 without numeric conversion.
         Span<byte> bits = MemoryMarshal.Cast<sbyte, byte>(vector.AsSpan());
-        if (DecodesBlocks)
+        if (QBitLayout.TransposesBlocks)
         {
             DetransposeBlocks(planes, bits, ReadBlock);
         }
@@ -448,7 +452,7 @@ internal sealed class QBitDoubleColumn : QBitColumnBase<double>
         ReadOnlySpan<byte> planes = RowPlanes(row);
         var vector = new double[Dimension];
         Span<ulong> bits = MemoryMarshal.Cast<double, ulong>(vector.AsSpan());
-        if (DecodesBlocks)
+        if (QBitLayout.TransposesBlocks)
         {
             DetransposeBlocks(planes, bits, ReadBlock);
         }

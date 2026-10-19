@@ -207,7 +207,7 @@ internal abstract class QBitColumnCodec : IColumnCodec
     /// <summary>
     /// Writes eight planes of a complete block. Each <see cref="Vector256.ExtractMostSignificantBits{T}"/> call
     /// yields one plane's bit of all 32 elements, element <c>j</c> in bit <c>j</c>, and adding the vector to itself
-    /// exposes the next plane. The block's last group has the lowest address, so the mask is stored big-endian.
+    /// exposes the next plane. The block's last group has the lowest address, so the mask is stored byte-reversed.
     /// </summary>
     /// <returns>The offset of the block in the next plane.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -221,10 +221,9 @@ internal abstract class QBitColumnCodec : IColumnCodec
         ref byte start = ref MemoryMarshal.GetReference(destination);
         for (int i = 0; i < 8; i++)
         {
-            uint mask = bytes.ExtractMostSignificantBits();
             Unsafe.WriteUnaligned(
                 ref Unsafe.Add(ref start, offset + (i * planeStride)),
-                BitConverter.IsLittleEndian ? BinaryPrimitives.ReverseEndianness(mask) : mask);
+                BinaryPrimitives.ReverseEndianness(bytes.ExtractMostSignificantBits()));
             bytes += bytes;
         }
 
@@ -382,7 +381,7 @@ internal sealed class QBitSByteColumnCodec : QBitColumnCodec
 
         // Use the element's two's-complement bit pattern.
         ReadOnlySpan<byte> raw = MemoryMarshal.AsBytes(vector.AsSpan());
-        if (Vector256.IsHardwareAccelerated)
+        if (QBitLayout.TransposesBlocks)
         {
             TransposeBlocks(raw, destination, planeStride, WriteBlock);
         }
@@ -427,7 +426,7 @@ internal sealed class QBitFloatColumnCodec : QBitColumnCodec
 
         // BFloat16 planes are the high 16 bits of the widened float.
         ReadOnlySpan<uint> raw = MemoryMarshal.Cast<float, uint>(vector.AsSpan());
-        if (Vector256.IsHardwareAccelerated)
+        if (QBitLayout.TransposesBlocks)
         {
             TransposeBlocks(raw, destination, planeStride, writeBlock);
         }
@@ -480,7 +479,7 @@ internal sealed class QBitDoubleColumnCodec : QBitColumnCodec
     {
         double[] vector = Validate(((IColumn<double[]>)column)[row], row);
         ReadOnlySpan<ulong> raw = MemoryMarshal.Cast<double, ulong>(vector.AsSpan());
-        if (Vector256.IsHardwareAccelerated)
+        if (QBitLayout.TransposesBlocks)
         {
             TransposeBlocks(raw, destination, planeStride, WriteBlock);
         }
