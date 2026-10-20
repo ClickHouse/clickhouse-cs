@@ -91,7 +91,7 @@ ClickHouse.Driver.ADO.ClickHouseDataSource.CreateConnection() -> ClickHouse.Driv
 ClickHouse.Driver.ADO.ClickHouseDataSource.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory
 ClickHouse.Driver.ADO.ClickHouseDataSource.LoggerFactory.set -> void
 ClickHouse.Driver.ADO.ClickHouseDataSource.OpenConnection() -> ClickHouse.Driver.ADO.ClickHouseConnection
-ClickHouse.Driver.ADO.ClickHouseDataSource.OpenConnectionAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<ClickHouse.Driver.ADO.ClickHouseConnection>
+ClickHouse.Driver.ADO.ClickHouseDataSource.OpenConnectionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<ClickHouse.Driver.ADO.ClickHouseConnection>
 ClickHouse.Driver.ADO.ClickHouseDataSource.Settings.get -> ClickHouse.Driver.ADO.ClickHouseClientSettings
 ClickHouse.Driver.ADO.ClickHouseDefaults
 ClickHouse.Driver.ADO.Feature.Dynamic = 2048 -> ClickHouse.Driver.ADO.Feature
