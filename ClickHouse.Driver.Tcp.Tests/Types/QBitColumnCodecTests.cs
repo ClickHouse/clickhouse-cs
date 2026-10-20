@@ -1,9 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
+using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
@@ -371,6 +374,17 @@ public class QBitColumnCodecTests
     }
 
     [Test]
+    public async Task WriteColumn_EmptySliceOfRowVectors_WritesNoBytes()
+    {
+        IColumnCodec codec = Codec(Float32X4);
+        using var column = new ArrayColumn<float[]>("v", Float32X4, new[] { new[] { 1f, 2f, 3f, 4f } });
+
+        byte[] bytes = await CodecTestHarness.WriteSliceAsync(codec, column, start: 1, length: 0);
+
+        Assert.That(bytes, Is.Empty);
+    }
+
+    [Test]
     public void ReadColumnAsync_TruncatedPlaneBody_ThrowsConnectionException()
     {
         IColumnCodec codec = Codec(Float32X4);
@@ -413,4 +427,177 @@ public class QBitColumnCodecTests
             () => Codec(type),
             Throws.InstanceOf<NotSupportedException>().With.Message.Contains("Int8, BFloat16, Float32 and Float64"));
     }
+
+    // The transpose works on 8-element groups and 32-element blocks: these widths cover a lone partial group,
+    // whole groups, whole blocks, and whole blocks followed by each kind of partial block. The last three cases
+    // write several blocks of rows, the last of them partly filled.
+    private static IEnumerable<TestCaseData> BlockShapes()
+    {
+        foreach (string element in new[] { "Int8", "BFloat16", "Float32", "Float64" })
+        {
+            foreach (int dimension in new[] { 1, 7, 8, 9, 31, 32, 33, 40, 63, 64, 65, 100, 256 })
+            {
+                yield return new TestCaseData(element, dimension, 3).SetArgDisplayNames(element, $"{dimension}", "3 rows");
+            }
+        }
+
+        yield return new TestCaseData("Float32", 1024, 40).SetArgDisplayNames("Float32", "1024", "40 rows");
+        yield return new TestCaseData("Float64", 100, 401).SetArgDisplayNames("Float64", "100", "401 rows");
+        yield return new TestCaseData("Int8", 8, 1000).SetArgDisplayNames("Int8", "8", "1000 rows");
+    }
+
+    [TestCaseSource(nameof(BlockShapes))]
+    public async Task WriteColumn_SliceOfVectorsOfEveryBlockShape_ProducesTheReferenceLayout(string element, int dimension, int rows)
+    {
+        string type = $"QBit({element}, {dimension})";
+        ulong[][] patterns = RandomPatterns(element, rows + 1, dimension);
+        using IColumn column = VectorColumn(element, type, patterns);
+
+        byte[] bytes = await CodecTestHarness.WriteSliceAsync(Codec(type), column, start: 1, length: rows);
+
+        Assert.That(bytes, Is.EqualTo(ReferenceBody(element, patterns.Skip(1).ToArray(), dimension)));
+    }
+
+    [TestCaseSource(nameof(BlockShapes))]
+    public void TransposeScalar_VectorsOfEveryBlockShape_WritesEveryByteOfTheReferenceLayout(string element, int dimension, int rows)
+    {
+        string type = $"QBit({element}, {dimension})";
+        var codec = (QBitColumnCodec)Codec(type);
+        ulong[][] patterns = RandomPatterns(element, rows, dimension);
+        int bytesPerRow = (dimension + 7) / 8;
+        int planeStride = rows * bytesPerRow;
+
+        // Every byte starts dirty, so a byte the transpose skips shows up as a mismatch.
+        byte[] body = Enumerable.Repeat((byte)0xA5, PlaneCount(element) * planeStride).ToArray();
+        for (int row = 0; row < rows; row++)
+        {
+            Span<byte> destination = body.AsSpan(row * bytesPerRow);
+            switch (element)
+            {
+                case "Int8":
+                    codec.TransposeScalar(patterns[row].Select(b => (byte)b).ToArray().AsSpan(), destination, planeStride);
+                    break;
+                case "Float64":
+                    codec.TransposeScalar(patterns[row].AsSpan(), destination, planeStride);
+                    break;
+                default:
+                    codec.TransposeScalar(patterns[row].Select(b => (uint)b).ToArray().AsSpan(), destination, planeStride);
+                    break;
+            }
+        }
+
+        Assert.That(body, Is.EqualTo(ReferenceBody(element, patterns, dimension)));
+    }
+
+    [TestCaseSource(nameof(BlockShapes))]
+    public async Task GetValue_ReferenceLayoutOfEveryBlockShape_DecodesEveryVector(string element, int dimension, int rows)
+    {
+        string type = $"QBit({element}, {dimension})";
+        ulong[][] patterns = RandomPatterns(element, rows, dimension);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(ReferenceBody(element, patterns, dimension));
+
+        using IColumn read = await Codec(type).ReadColumnAsync(reader, "v", type, rows, CodecTestHarness.None);
+
+        for (int row = 0; row < rows; row++)
+        {
+            Assert.That(Patterns(read.GetValue(row)), Is.EqualTo(Decoded(element, patterns[row])), $"row {row}");
+        }
+    }
+
+    [TestCaseSource(nameof(BlockShapes))]
+    public async Task DetransposeScalar_ReferenceLayoutOfEveryBlockShape_DecodesEveryVector(string element, int dimension, int rows)
+    {
+        string type = $"QBit({element}, {dimension})";
+        ulong[][] patterns = RandomPatterns(element, rows, dimension);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(ReferenceBody(element, patterns, dimension));
+        using IColumn read = await Codec(type).ReadColumnAsync(reader, "v", type, rows, CodecTestHarness.None);
+        var column = (QBitColumn)read;
+
+        for (int row = 0; row < rows; row++)
+        {
+            ulong[] decoded;
+            switch (element)
+            {
+                case "Int8":
+                    var bytes = new byte[dimension];
+                    column.DetransposeScalar(column.RowPlanes(row), bytes.AsSpan());
+                    decoded = bytes.Select(b => (ulong)b).ToArray();
+                    break;
+                case "Float64":
+                    decoded = new ulong[dimension];
+                    column.DetransposeScalar(column.RowPlanes(row), decoded.AsSpan());
+                    break;
+                default:
+                    var words = new uint[dimension];
+                    column.DetransposeScalar(column.RowPlanes(row), words.AsSpan());
+                    decoded = words.Select(w => (ulong)w).ToArray();
+                    break;
+            }
+
+            Assert.That(decoded, Is.EqualTo(Decoded(element, patterns[row])), $"row {row}");
+        }
+    }
+
+    private static int ElementBits(string element) => element switch
+    {
+        "Int8" => 8,
+        "Float64" => 64,
+        _ => 32,
+    };
+
+    private static int PlaneCount(string element) => element == "BFloat16" ? 16 : ElementBits(element);
+
+    /// <summary>Returns random element bit patterns, including NaN payloads, in the low bits of each value.</summary>
+    private static ulong[][] RandomPatterns(string element, int rows, int dimension)
+    {
+        var random = new Random(dimension * 31 + rows);
+        int bits = ElementBits(element);
+        ulong mask = bits == 64 ? ulong.MaxValue : (1UL << bits) - 1;
+        return Enumerable.Range(0, rows)
+            .Select(_ => Enumerable.Range(0, dimension).Select(_ => (ulong)random.NextInt64() ^ ((ulong)random.Next() << 63)).Select(v => v & mask).ToArray())
+            .ToArray();
+    }
+
+    /// <summary>Builds the Native body bit by bit from the layout in <see cref="QBitColumnCodec"/>'s summary.</summary>
+    private static byte[] ReferenceBody(string element, ulong[][] patterns, int dimension)
+    {
+        int elementBits = ElementBits(element);
+        int planes = PlaneCount(element);
+        int bytesPerRow = (dimension + 7) / 8;
+        var body = new byte[planes * patterns.Length * bytesPerRow];
+        for (int plane = 0; plane < planes; plane++)
+        {
+            for (int row = 0; row < patterns.Length; row++)
+            {
+                for (int i = 0; i < dimension; i++)
+                {
+                    if (((patterns[row][i] >> (elementBits - 1 - plane)) & 1) != 0)
+                    {
+                        body[(((plane * patterns.Length) + row) * bytesPerRow) + bytesPerRow - 1 - (i / 8)] |= (byte)(1 << (i % 8));
+                    }
+                }
+            }
+        }
+
+        return body;
+    }
+
+    private static IColumn VectorColumn(string element, string type, ulong[][] patterns) => element switch
+    {
+        "Int8" => new ArrayColumn<sbyte[]>("v", type, patterns.Select(r => r.Select(b => unchecked((sbyte)b)).ToArray()).ToArray()),
+        "Float64" => new ArrayColumn<double[]>("v", type, patterns.Select(r => r.Select(BitConverter.UInt64BitsToDouble).ToArray()).ToArray()),
+        _ => new ArrayColumn<float[]>("v", type, patterns.Select(r => r.Select(b => BitConverter.UInt32BitsToSingle((uint)b)).ToArray()).ToArray()),
+    };
+
+    /// <summary>Returns the patterns a decoder yields: BFloat16 keeps only the high 16 bits of each float.</summary>
+    private static ulong[] Decoded(string element, ulong[] patterns)
+        => element == "BFloat16" ? patterns.Select(b => b & 0xFFFF0000UL).ToArray() : patterns;
+
+    private static ulong[] Patterns(object vector) => vector switch
+    {
+        sbyte[] v => v.Select(x => (ulong)unchecked((byte)x)).ToArray(),
+        float[] v => v.Select(x => (ulong)BitConverter.SingleToUInt32Bits(x)).ToArray(),
+        double[] v => v.Select(BitConverter.DoubleToUInt64Bits).ToArray(),
+        _ => throw new ArgumentException($"Unexpected vector type {vector?.GetType()}.", nameof(vector)),
+    };
 }
