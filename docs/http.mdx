@@ -89,6 +89,7 @@ Below is a full list of all the settings, their default values, and their effect
 | Port | `ushort` | 8123 (HTTP) / 8443 (HTTPS) | `Port` | Port number; defaults based on protocol |
 | Username | `string` | `"default"` | `Username` | Authentication username |
 | Password | `string` | `""` | `Password` | Authentication password |
+| BearerToken | `string` | `null` | `BearerToken` | Token (for example a JWT) sent as `Authorization: Bearer <token>` instead of `Username`/`Password`; see [JWT authentication](#jwt-authentication) |
 | Database | `string` | `""` | `Database` | Default database; empty uses server/user default |
 | Protocol | `string` | `"http"` | `Protocol` | Connection protocol: `"http"` or `"https"` |
 | Path | `string` | `null` | `Path` | URL path for reverse proxy scenarios (e.g., `/clickhouse`) |
@@ -130,6 +131,46 @@ The `ClickHouseConnection` class normally allows for parallel operation (multipl
 | Property | Type | Default | Connection String Key | Description |
 |----------|------|---------|----------------------|-------------|
 | SkipServerCertificateValidation | `bool` | `false` | — | Skip HTTPS certificate validation; **not for production use** |
+
+### JWT authentication {#jwt-authentication}
+
+ClickHouse Cloud can authenticate a request with a [JSON Web Token (JWT)](/concepts/features/security/external-authenticators/jwt). Set `BearerToken` to send the token in the `Authorization: Bearer <token>` header. When a bearer token is set, the client does not send `Username` and `Password`. The server runs the request as an ephemeral user named `JWT::<subject>::<claims_hash>`, with the rights that the token's claims give (see the server documentation).
+
+Set the token for all requests of a client:
+
+```csharp
+var settings = new ClickHouseClientSettings("Host=your-service.clickhouse.cloud;Protocol=https")
+{
+    BearerToken = jwt,
+};
+using var client = new ClickHouseClient(settings);
+```
+
+Or in the connection string:
+
+```text
+Host=your-service.clickhouse.cloud;Protocol=https;BearerToken=eyJhbGciOiJSUzI1NiIs...
+```
+
+A token set for one query (`QueryOptions.BearerToken` or `InsertOptions.BearerToken`) or for one ADO.NET command (`ClickHouseCommand.BearerToken`) replaces the client token for that request only:
+
+```csharp
+var user = await client.ExecuteScalarAsync(
+    "SELECT currentUser()", options: new QueryOptions { BearerToken = jwt });
+
+using var command = connection.CreateCommand();
+command.BearerToken = jwt;
+```
+
+A query or command token has priority over the client token. If no token is set, the client uses `Username` and `Password`.
+
+`ClickHouseConnection.ConnectionString` and `ClickHouseDataSource.ConnectionString` contain the token in clear text, as they contain `Password`.
+
+<Note>
+A JWT expires at the time in its `exp` claim. A client keeps the `ClickHouseClientSettings.BearerToken` that it was created with. To use a new token before the current one expires, pass it with each request (`QueryOptions.BearerToken` or `ClickHouseCommand.BearerToken`), or create a new client. If you create clients often, share one `HttpClient` or `IHttpClientFactory` between them (see [HTTP client configuration](#http-client-configuration)), so that the connection pool is kept.
+
+JWT authentication is intended for user-to-service access. For service-to-service access, use credentials that do not expire.
+</Note>
 
 ### HTTP client configuration {#http-client-configuration}
 

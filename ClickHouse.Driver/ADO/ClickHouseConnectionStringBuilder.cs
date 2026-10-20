@@ -37,6 +37,18 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
         set => this["Password"] = value;
     }
 
+    /// <summary>
+    /// Gets or sets the bearer token (for example a JWT) sent as <c>Authorization: Bearer &lt;token&gt;</c>.
+    /// Maps onto <see cref="ClickHouseClientSettings.BearerToken"/>: when set, it is used instead of
+    /// <see cref="Username"/> and <see cref="Password"/>.
+    /// Default: null
+    /// </summary>
+    public string BearerToken
+    {
+        get => GetStringOrDefault("BearerToken", null);
+        set => this["BearerToken"] = value;
+    }
+
     public string Protocol
     {
         get => GetStringOrDefault("Protocol", "http");
@@ -253,6 +265,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             Database = settings.Database,
             Username = settings.Username,
             Password = settings.Password,
+            BearerToken = settings.BearerToken,
             Path = settings.Path,
             Compression = settings.UseCompression,
             UseSession = settings.UseSession,
