@@ -145,7 +145,8 @@ public class InsertBinaryQueryPlacementTests : AbstractConnectionTestFixture
                 options);
         }
 
-        var expectedStatement = $"INSERT INTO {table} (`Id`, `Value`) FORMAT RowBinary";
+        var expectedStatement =
+            $"INSERT INTO `{TestUtilities.TestDatabase}`.`{TestUtilities.BareTableName(table)}` (`Id`, `Value`) FORMAT RowBinary";
         var urlQuery = HttpUtility.ParseQueryString(sentUri.Query).Get("query");
         var body = Decoded(sentBody, compressor);
 
