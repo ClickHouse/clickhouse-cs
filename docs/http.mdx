@@ -749,6 +749,8 @@ var reader = await client.ExecuteReaderAsync(
 If you're specifying a custom `QueryId`, ensure it is unique for every call. A random GUID is a good choice.
 </Tip>
 
+For `InsertBinaryAsync`, the id identifies the insert itself: each batch is sent as `{QueryId}-1`, `{QueryId}-2`, and so on. The schema probe the insert runs first (`SELECT ... WHERE 1=0`) uses an id of its own, so it is never logged under your id. Because of the batch suffix, look the insert up with `WHERE query_id LIKE '<your id>-%'` rather than an equality test.
+
 ---
 
 ### Custom parameter type mapping {#parameter-type-mapping}
