@@ -1032,7 +1032,7 @@ or in the connection string, for ORM users who never touch `ClickHouseClientSett
 Host=localhost;AcceptEncoding=br, gzip
 ```
 
-Setting it also forces `enable_http_compression=1` on the URL, which ClickHouse requires before it honors the header at all — including when `UseCompression` is `false`, since naming a codec explicitly is taken as asking for one. With no value set, `UseCompression=false` sends no `Accept-Encoding` at all.
+Setting it also forces `enable_http_compression=1` on the URL, which ClickHouse requires before it honors the header at all — including when `UseCompression` is `false`, since naming a codec explicitly is taken as asking for one. With no value set, `UseCompression=false` offers no codec and sends no `enable_http_compression`, so the server does not reject the query for this setting for a `readonly = 1` user, whatever value of the setting is in effect for them. This covers the compression setting only: the default `JsonWriteMode.String` sends `input_format_binary_read_json_as_string=1`, which a stock readonly user cannot set either. To send no JSON settings, also set `JsonReadMode` and `JsonWriteMode` to `None` (see [JSON type](#type-map-reading-json)). An `Accept-Encoding` added through `CustomHeaders` is still sent; the server's own `enable_http_compression` then decides whether it is honored.
 
 `Accept-Encoding` can be set in four places. The first of these that names a codec wins:
 
