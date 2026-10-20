@@ -118,7 +118,10 @@ Both refer to parameters by name in `ClickHouseParameterCollection`. A `{name:Ty
 1. Explicit `ClickHouseDbParameter.ClickHouseType` on the parameter object
 2. SQL type hint from `{name:Type}` in the query
 3. Custom `IParameterTypeResolver` (per-query `QueryOptions.ParameterTypeResolver`, then client-level `ClickHouseClientSettings.ParameterTypeResolver`)
-4. `decimal` special case: `Decimal128(scale)` where scale is read from the value's bits
+4. `decimal` special case: `Decimal128(scale)` where scale is read from the value's bits.
+   `ClickHouseDecimal` special case: `Decimal128(9)` if it holds the value exactly, else the value's
+   scale without trailing zeros (raised to 9 where there is room) in `Decimal128` or, above 38 digits,
+   `Decimal256`
 5. `TypeConverter.ToClickHouseType(value)`: inferred from the .NET runtime value (not just the static
    type, so e.g. `IPAddress` is disambiguated into `IPv4`/`IPv6` by `AddressFamily`)
 
