@@ -175,15 +175,16 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
     /// <summary>
     /// <c>Array(UInt8)</c> also materializes as a <c>byte[]</c>, so decoding must key off the ClickHouse
     /// type. Asserted against literal values rather than flag-on-vs-flag-off: these paths read
-    /// identically under both settings, so the equality test below cannot catch a regression here. The
-    /// expected base64 is the pre-existing output for a byte array reached through a wrapper.
+    /// identically under both settings, so the equality test below cannot catch a regression here. Every
+    /// shape renders the array the server renders, because the wrapper is resolved before the value
+    /// is read; the base64 form was the pre-existing output of reading the array whole.
     /// </summary>
     [Test]
     [RequiredFeature(Feature.Json | Feature.Variant)]
-    [TestCase("{\"v\":[1,2]}", "v Variant(Array(UInt8), String)", "AQI=", TestName = "VariantOfByteArrayAndString")]
-    [TestCase("{\"v\":[1,2]}", "v Variant(Array(UInt8), UInt64)", "AQI=", TestName = "VariantOfByteArrayAndInt")]
-    [TestCase("{\"v\":[255,254]}", "v Variant(Array(UInt8), String)", "//4=", TestName = "VariantOfByteArrayNotValidUtf8")]
-    [TestCase("{\"v\":[1,2]}", "v SimpleAggregateFunction(anyLast, Array(UInt8))", "AQI=", TestName = "SimpleAggregateFunctionOfByteArray")]
+    [TestCase("{\"v\":[1,2]}", "v Variant(Array(UInt8), String)", "[1,2]", TestName = "VariantOfByteArrayAndString")]
+    [TestCase("{\"v\":[1,2]}", "v Variant(Array(UInt8), UInt64)", "[1,2]", TestName = "VariantOfByteArrayAndInt")]
+    [TestCase("{\"v\":[255,254]}", "v Variant(Array(UInt8), String)", "[255,254]", TestName = "VariantOfByteArrayNotValidUtf8")]
+    [TestCase("{\"v\":[1,2]}", "v SimpleAggregateFunction(anyLast, Array(UInt8))", "[1,2]", TestName = "SimpleAggregateFunctionOfByteArray")]
     public async Task ReadJson_WithNonTextByteArrayPath_IsNotDecodedAsText(string json, string typeDefinition, string expected)
     {
         using var byteArrayConnection = CreateByteArrayConnection();
@@ -194,17 +195,18 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
 
         Assert.Multiple(() =>
         {
-            Assert.That(withFlag["v"].GetValue<string>(), Is.EqualTo(expected));
-            Assert.That(withoutFlag["v"].GetValue<string>(), Is.EqualTo(expected));
+            Assert.That(withFlag["v"].ToJsonString(), Is.EqualTo(expected));
+            Assert.That(withoutFlag["v"].ToJsonString(), Is.EqualTo(expected));
         });
     }
 
     /// <summary>
     /// Every shape that can carry a string, hinted and dynamic. An empty type definition means dynamic
     /// paths, whose types come from <c>BinaryTypeDecoder</c> rather than <c>TypeConverter</c> — two
-    /// construction sites, each honouring the setting independently. Seven of the ten fail without the
-    /// fix; <c>FixedString</c> (already correct), <c>NullString</c> (null arm) and <c>EmptyString</c>
-    /// (base64 of zero bytes is also empty) are regression guards that cannot discriminate.
+    /// construction sites, each honouring the setting independently. A <c>Dynamic</c> hint is a third:
+    /// the type is the one the value carries, read per value. <c>FixedString</c> (already correct),
+    /// <c>NullString</c> (null arm) and <c>EmptyString</c> (base64 of zero bytes is also empty) are
+    /// regression guards that cannot discriminate; the rest fail without the fix.
     /// </summary>
     public static IEnumerable<TestCaseData> StringBearingJsonShapes()
     {
@@ -213,6 +215,7 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
         yield return new TestCaseData("{\"s\":\"\"}", "s String").SetName("EmptyString");
         yield return new TestCaseData("{\"s\":null}", "s Nullable(String)").SetName("NullString");
         yield return new TestCaseData("{\"s\":\"low\"}", "s LowCardinality(String)").SetName("LowCardinalityString");
+        yield return new TestCaseData("{\"s\":\"plain\"}", "s Dynamic").SetName("DynamicHintedString");
         yield return new TestCaseData("{\"s\":\"exact\"}", "s FixedString(5)").SetName("FixedString");
         yield return new TestCaseData("{\"a\":[\"x\",\"y\"]}", "a Array(String)").SetName("ArrayOfString");
         yield return new TestCaseData("{\"a\":[[\"x\",\"y\"],[\"z\"]]}", "a Array(Array(String))").SetName("NestedArrayOfString");
