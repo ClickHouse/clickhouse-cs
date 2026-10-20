@@ -523,6 +523,21 @@ public class ConnectionTests : AbstractConnectionTestFixture
         Assert.That(queryResult.QueryId, Is.EqualTo(queryId));
     }
 
+    [Test]
+    public async Task PostStreamAsync_AfterChangeDatabase_RunsInSelectedDatabase([Values] bool useCallback, [Values] bool withQueryId)
+    {
+        using var conn = client.CreateConnection();
+        conn.ChangeDatabase("system");
+        const string sql = "SELECT currentDatabase() FORMAT TabSeparated";
+        var queryId = withQueryId ? Guid.NewGuid().ToString() : null;
+
+        using var response = useCallback
+            ? await conn.PostStreamAsync(sql, (_, _) => Task.CompletedTask, false, CancellationToken.None, queryId)
+            : await conn.PostStreamAsync(sql, new MemoryStream(), false, CancellationToken.None, queryId);
+
+        Assert.That(await response.Content.ReadAsStringAsync(), Is.EqualTo("system\n"));
+    }
+
     private static string[] GetColumnNames(DataTable table) => table.Columns.Cast<DataColumn>().Select(dc => dc.ColumnName).ToArray();
 
     [Test]
