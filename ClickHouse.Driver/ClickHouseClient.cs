@@ -298,9 +298,9 @@ public sealed class ClickHouseClient : IClickHouseClient
         bool rawBody = false,
         CancellationToken cancellationToken = default)
     {
-        using var activity = this.StartActivity("PostSqlQueryAsync");
-
         var uriBuilder = CreateUriBuilder(queryOverride: options);
+
+        using var activity = this.StartActivity("PostSqlQueryAsync", uriBuilder.Database);
 
         var logger = GetLogger(ClickHouseLogCategories.Command);
         var isDebugLoggingEnabled = logger?.IsEnabled(LogLevel.Debug) ?? false;
@@ -931,10 +931,10 @@ public sealed class ClickHouseClient : IClickHouseClient
 
     private async Task<HttpResponseMessage> PostStreamAsync(string sql, HttpContent content, string contentEncoding, QueryOptions queryOptions, CancellationToken token)
     {
-        using var activity = this.StartActivity("PostStreamAsync");
-        activity.SetQuery(sql);
-
         var builder = CreateUriBuilder(sql, queryOptions);
+
+        using var activity = this.StartActivity("PostStreamAsync", builder.Database);
+        activity.SetQuery(sql);
 
         using var postMessage = CreatePostStreamRequest(builder, queryOptions);
         // rawBody: this method returns the HttpResponseMessage itself — PostStreamAsync and
