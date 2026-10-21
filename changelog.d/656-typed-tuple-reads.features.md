@@ -1,0 +1,1 @@
+* `GetFieldValue<T>` can now read a `Tuple(...)` column as a C# `ValueTuple` of any length, or as a `System.Tuple` of more than 7 elements, including arrays of tuples and nested tuples ([#656](https://github.com/ClickHouse/clickhouse-cs/issues/656)). Values returned by `GetValue` are unchanged.
