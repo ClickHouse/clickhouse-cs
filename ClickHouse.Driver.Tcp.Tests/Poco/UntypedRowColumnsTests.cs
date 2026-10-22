@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Poco;
@@ -139,6 +140,63 @@ public class UntypedRowColumnsTests
         Assert.That(error.Message, Does.Contain("row 1").And.Contain("System.String"));
     }
 
+    /// <summary>
+    /// The CLR casts an array of an integer type to an array of the other sign, and an array of an enum to an array of
+    /// an integer type other than its underlying type. The cast gives each element another meaning, so a later value of
+    /// such a type is refused with its row, as the derivation refuses it as the first value.
+    /// </summary>
+    /// <param name="type">The target type.</param>
+    /// <param name="first">The first value, which chooses the write type.</param>
+    /// <param name="later">A later value that the CLR casts to the write type.</param>
+    [TestCaseSource(nameof(ReinterpretedLaterValues))]
+    public void Gather_LaterArrayThatTheCastGivesAnotherMeaning_ThrowsNamingTheRow(string type, object first, object later)
+    {
+        Block schema = SchemaOf(Target("value", type));
+        object[][] rows = { new[] { first }, new[] { later } };
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => GatherAll(schema, rows, rows.Length));
+
+        Assert.That(error.Message, Does.Contain("row 1 holds a " + later.GetType()));
+    }
+
+    /// <summary>A later value of another sign in a later block is refused with its row in the insert.</summary>
+    [Test]
+    public void Gather_UInt32ArrayInALaterBlockThanTheInt32Array_ThrowsNamingTheRow()
+    {
+        Block schema = SchemaOf(Target("value", "Array(Int32)"));
+        object[][] rows = { new object[] { new[] { 7 } }, new object[] { new[] { 3_000_000_000u } } };
+        using var buffer = PocoRowBuffer<object[]>.Create(rows, "rows", blockRows: 1, CancellationToken.None);
+        using PocoInsertSource<object[]> source = UntypedRowColumns.CreateSource(schema, buffer, blockRows: 1);
+
+        source.Gather(0, 1);
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => source.Gather(1, 1));
+
+        Assert.That(
+            error.Message,
+            Is.EqualTo("Column 0 ('value', Array(Int32)) is written as System.Int32[], but row 1 holds a System.UInt32[]. Every value of one column must have the same CLR type."));
+    }
+
+    /// <summary>
+    /// An array of an enum and an array of its underlying type keep the integer value of each element, so they share a
+    /// column in either order.
+    /// </summary>
+    [Test]
+    public void Gather_EnumArrayAndArrayOfItsUnderlyingType_ShareAColumn()
+    {
+        Block schema = SchemaOf(Target("a", "Array(Int32)"), Target("b", "Array(Int32)"));
+        object[][] rows = { new object[] { new[] { 7 }, new[] { IntLevel.B } }, new object[] { new[] { IntLevel.B }, new[] { 7 } } };
+
+        using PocoInsertSource<object[]> source = GatherAll(schema, rows, rows.Length);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(FirstElement(source.Columns[0], 0), Is.EqualTo(7));
+            Assert.That(FirstElement(source.Columns[0], 1), Is.EqualTo(2));
+            Assert.That(FirstElement(source.Columns[1], 0), Is.EqualTo(2));
+            Assert.That(FirstElement(source.Columns[1], 1), Is.EqualTo(7));
+        });
+    }
+
     [Test]
     public void Gather_ADynamicTarget_TakesEveryValueThroughItsObjectSurface()
     {
@@ -244,8 +302,31 @@ public class UntypedRowColumnsTests
         }
     }
 
+    private static IEnumerable<TestCaseData> ReinterpretedLaterValues()
+    {
+        yield return new TestCaseData("Array(Int32)", new[] { 7 }, new[] { 3_000_000_000u }).SetName("{m}(UInt32ArrayAfterInt32Array)");
+        yield return new TestCaseData("Array(UInt8)", new byte[] { 7 }, new sbyte[] { -1 }).SetName("{m}(SByteArrayAfterByteArray)");
+        yield return new TestCaseData("Array(Array(Int32))", new[] { new[] { 7 } }, new[] { new[] { 3_000_000_000u } }).SetName("{m}(JaggedUInt32AfterJaggedInt32)");
+        yield return new TestCaseData("Array(Int32)", new[] { 7 }, new[] { UIntLevel.A }).SetName("{m}(UIntEnumArrayAfterInt32Array)");
+        yield return new TestCaseData("Array(Int32)", new[] { IntLevel.B }, new[] { 3_000_000_000u }).SetName("{m}(UInt32ArrayAfterIntEnumArray)");
+    }
+
+    // The first element of the array at the row, as a number.
+    private static long FirstElement(IColumn column, int row) => Convert.ToInt64(((Array)column.GetValue(row)).GetValue(0));
+
     private static IColumn Target(string name, string typeName) => new ArrayColumn<object>(name, typeName, Array.Empty<object>());
 
     private static Block SchemaOf(params IColumn[] columns)
         => new(string.Empty, BlockInfo.Default, rowCount: 0, columns, ColumnCodecRegistry.Default, new ResolveContext { ServerTimezone = "UTC" });
+
+    internal enum IntLevel
+    {
+        A = 1,
+        B = 2,
+    }
+
+    internal enum UIntLevel : uint
+    {
+        A = 1,
+    }
 }
