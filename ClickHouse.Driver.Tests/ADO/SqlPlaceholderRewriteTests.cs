@@ -1,4 +1,7 @@
+using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Text;
 using ClickHouse.Driver.ADO.Parameters;
 using NUnit.Framework;
 
@@ -85,6 +88,7 @@ public class SqlPlaceholderRewriteTests
         new TestCaseData("SELECT 1,$t$a@id$t$, @id", "SELECT 1,$t$a@id$t$, {id:Int32}").SetName("heredoc after a comma"),
         new TestCaseData("SELECT\n$t$a@id$t$, @id", "SELECT\n$t$a@id$t$, {id:Int32}").SetName("heredoc after a newline"),
         new TestCaseData("SELECT 1 AS `x`$t$a@id$t$, @id", "SELECT 1 AS `x`$t$a@id$t$, {id:Int32}").SetName("heredoc after a quoted identifier"),
+        new TestCaseData("SELECT @$t$ @id $t$, @id", "SELECT @$t$ @id $t$, {id:Int32}").SetName("heredoc after an unknown placeholder's at sign"),
         new TestCaseData("SELECT @id $", "SELECT {id:Int32} $").SetName("trailing dollar sign"),
         new TestCaseData("SELECT @id $tag$", "SELECT {id:Int32} $tag$").SetName("trailing unclosed tag"),
         // A $ continues a placeholder name, matching the server's word lexer and the $ it accepts in
@@ -169,5 +173,35 @@ public class SqlPlaceholderRewriteTests
         };
 
         Assert.That(collection.ReplacePlaceholders(sql, DollarResolvedTypes), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void ReplacePlaceholders_MultiRowInsertWithManyParameters_RewritesAllQuickly()
+    {
+        const int rows = 4000;
+        const int columns = 18;
+        var sql = new StringBuilder("INSERT INTO t VALUES ");
+        var expected = new StringBuilder("INSERT INTO t VALUES ");
+        var collection = new ClickHouseParameterCollection();
+        var resolvedTypes = new Dictionary<string, string>();
+        for (var n = 0; n < rows * columns; n++)
+        {
+            var separator = n == 0 ? "(" : n % columns == 0 ? "), (" : ", ";
+            sql.Append(separator).Append("@p").Append(n);
+            expected.Append(separator).Append("{p").Append(n).Append(":Int32}");
+            collection.Add(new ClickHouseDbParameter { ParameterName = "p" + n, ClickHouseType = "Int32", Value = n });
+            resolvedTypes["p" + n] = "Int32";
+        }
+
+        sql.Append(')');
+        expected.Append(')');
+
+        var stopwatch = Stopwatch.StartNew();
+        var result = collection.ReplacePlaceholders(sql.ToString(), resolvedTypes);
+        stopwatch.Stop();
+
+        Assert.That(result, Is.EqualTo(expected.ToString()));
+        // Searching every parameter name at each @ would make this quadratic in the row count
+        Assert.That(stopwatch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(3)));
     }
 }
