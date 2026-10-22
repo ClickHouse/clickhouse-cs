@@ -8,17 +8,6 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// Chooses the CLR write type of one target column of an untyped row insert.
-/// </summary>
-/// <param name="codec">The target column's codec.</param>
-/// <param name="target">The target column, for its name and type.</param>
-/// <param name="rows">The insert's rows.</param>
-/// <param name="index">The column's position in every row.</param>
-/// <returns>The write type.</returns>
-/// <exception cref="InvalidOperationException">The values' type is not one the target accepts.</exception>
-internal delegate Type UntypedWriteTypeChooser(IColumnCodec codec, IColumn target, PocoRowBuffer<object[]> rows, int index);
-
-/// <summary>
 /// Transposes positional <c>object[]</c> rows into typed columns. The CLR type of the values selects each column's
 /// write type, through the converter derivation, so convenience values such as <see cref="DateTime"/> and canonical
 /// values returned by an untyped read are both written.
@@ -46,18 +35,6 @@ internal static class UntypedRowColumns
     public static PocoInsertSource<object[]> CreateSource(Block schema, PocoRowBuffer<object[]> rows, int blockRows)
     {
         ConverterDerivation derivation = schema.Codecs.Converters;
-        ResolveContext context = schema.Context;
-        return CreateSource(schema, rows, blockRows, (codec, target, values, index) => ChooseWriteType(derivation, context, codec, target, values, index));
-    }
-
-    /// <summary>Opens one insert, with the write type of each column from <paramref name="choose"/>.</summary>
-    /// <param name="schema">The server's sample block, naming and typing the target columns.</param>
-    /// <param name="rows">The insert's rows; not owned by the source.</param>
-    /// <param name="blockRows">The most rows one wire block will hold.</param>
-    /// <param name="choose">Chooses the CLR write type of each target column.</param>
-    /// <returns>The source, owning its gather buffers until it is disposed.</returns>
-    internal static PocoInsertSource<object[]> CreateSource(Block schema, PocoRowBuffer<object[]> rows, int blockRows, UntypedWriteTypeChooser choose)
-    {
         int columnCount = schema.ColumnCount;
         var builders = new PocoColumnBuilder<object[]>[columnCount];
 
@@ -65,7 +42,7 @@ internal static class UntypedRowColumns
         {
             IColumn target = schema[i];
             IColumnCodec codec = schema.Codecs.Resolve(target.TypeName, schema.Context);
-            Type writeType = choose(codec, target, rows, i);
+            Type writeType = ChooseWriteType(derivation, schema.Context, codec, target, rows, i);
 
             builders[i] = (PocoColumnBuilder<object[]>)CreateBuilderMethod
                 .MakeGenericMethod(writeType)
@@ -128,7 +105,7 @@ internal static class UntypedRowColumns
         Derivation derived = derivation.Derive(target.TypeName, in context, present, ConversionDirection.Write);
         if (!derived.Succeeded)
         {
-            throw PocoWriteErrors.ValuesNotWritable(index, target, codec, present);
+            throw PocoWriteErrors.ValuesNotWritable(index, target, derivation.SuggestedTypes(target.TypeName, in context, ConversionDirection.Write), present);
         }
 
         return derived.Converter is ICastWriter cast
