@@ -22,6 +22,9 @@ internal sealed class NullableValueWriter<T> : ColumnWriter<T?>
     /// <param name="inner">The writer of X.</param>
     public NullableValueWriter(ColumnWriter<T> inner) => this.inner = inner;
 
+    /// <summary>The writer of X.</summary>
+    public ColumnWriter<T> Inner => inner;
+
     /// <inheritdoc/>
     public override bool HasPrefix => inner.HasPrefix;
 

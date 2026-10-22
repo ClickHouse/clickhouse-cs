@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace ClickHouse.Driver.Tcp.Types.Converters;
@@ -38,7 +39,9 @@ internal sealed class ClrKeyedByteInterner<T> : IDisposable
 
     private Dictionary<T, int> clrKeys;
     private byte[] scratch = Array.Empty<byte>();
-    private int lookups;
+
+    // The CLR lookups left before the interner decides whether to keep the CLR lookup, and the misses so far.
+    private int probeLeft = ProbeValues;
     private int misses;
 
     /// <summary>Initializes an interner for one write.</summary>
@@ -60,49 +63,39 @@ internal sealed class ClrKeyedByteInterner<T> : IDisposable
     public bool UsesClrKeys => clrKeys is not null;
 
     /// <summary>The key of <paramref name="value"/>.</summary>
+    /// <remarks>
+    /// A value that the CLR lookup finds costs one lookup and one decrement. A new value, and every value when there is no
+    /// CLR lookup, go to a method that is not inlined, as does the end of the probe, so this method stays small enough to
+    /// inline.
+    /// </remarks>
     /// <param name="value">The value. The caller handles a NULL of a nullable column before it calls this.</param>
-    /// <param name="position">The zero-based position of the value in the write, for error messages.</param>
     /// <returns>The key.</returns>
-    /// <exception cref="ArgumentException">The leaf cannot store the value.</exception>
-    public int Intern(T value, int position)
+    /// <exception cref="ArgumentException">
+    /// The leaf cannot store the value. The message names the value by the dictionary slot that it would take.
+    /// </exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int Intern(T value)
     {
         Dictionary<T, int> map = clrKeys;
 
         // A null has no CLR key. The leaf decides what a null means, and usually refuses it.
-        if (map is null || value is null)
+        if (map is not null && value is not null)
         {
-            return canonical.Intern(leaf.ToCanonical(value, position, ref scratch));
-        }
+            ref int slot = ref CollectionsMarshal.GetValueRefOrAddDefault(map, value, out bool exists);
+            if (exists)
+            {
+                if (--probeLeft == 0)
+                {
+                    EndProbe();
+                }
 
-        ref int slot = ref CollectionsMarshal.GetValueRefOrAddDefault(map, value, out bool exists);
-        int key;
-        if (exists)
-        {
-            key = slot;
-        }
-        else
-        {
-            try
-            {
-                key = canonical.Intern(leaf.ToCanonical(value, position, ref scratch));
-            }
-            catch
-            {
-                // Do not keep an entry with no key behind a value that the leaf refused.
-                map.Remove(value);
-                throw;
+                return slot;
             }
 
-            slot = key;
-            misses++;
+            return InternNew(value, map, ref slot);
         }
 
-        if (++lookups == ProbeValues && misses * 2 > ProbeValues)
-        {
-            clrKeys = null;
-        }
-
-        return key;
+        return InternNew(value, null, ref Unsafe.NullRef<int>());
     }
 
     /// <summary>Returns the buffers to the pool. The interner cannot be used after this.</summary>
@@ -116,5 +109,49 @@ internal sealed class ClrKeyedByteInterner<T> : IDisposable
         }
 
         clrKeys = null;
+    }
+
+    // The key of the canonical bytes of a value that the CLR lookup does not find (map is the lookup, and slot is the
+    // slot that it added for the value), or of a value with no CLR lookup (map is null). A refused value is named by the
+    // dictionary slot that it would take, and leaves no slot in the CLR lookup. Both cases are in this one method, with
+    // the conversion and the byte lookup written in it, so that the JIT can inline them here: for a column of many
+    // distinct values, almost every value comes here.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private int InternNew(T value, Dictionary<T, int> map, ref int slot)
+    {
+        if (map is null)
+        {
+            return canonical.Intern(leaf.ToCanonical(value, canonical.Count, ref scratch));
+        }
+
+        int key;
+        try
+        {
+            key = canonical.Intern(leaf.ToCanonical(value, canonical.Count, ref scratch));
+        }
+        catch
+        {
+            map.Remove(value);
+            throw;
+        }
+
+        slot = key;
+        misses++;
+        if (--probeLeft == 0)
+        {
+            EndProbe();
+        }
+
+        return key;
+    }
+
+    // The end of the probe: the CLR lookup stops when more than half of the probe lookups failed.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void EndProbe()
+    {
+        if (misses * 2 > ProbeValues)
+        {
+            clrKeys = null;
+        }
     }
 }
