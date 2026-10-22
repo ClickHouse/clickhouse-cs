@@ -226,7 +226,7 @@ internal sealed class NullableColumnCodec : IColumnCodec
             return false;
         }
 
-        projection = ColumnProjection.Close(ProjectNullableMethod, innerProjection, targetType);
+        projection = LegacyColumnProjection.Close(ProjectNullableMethod, innerProjection, targetType);
         return true;
     }
 
@@ -242,7 +242,7 @@ internal sealed class NullableColumnCodec : IColumnCodec
     private static IColumn ProjectNullable<T>(IColumn source, ColumnReadProjection innerProjection)
         where T : class
     {
-        INullableColumn nullable = ColumnProjection.Surface<INullableColumn>(source);
+        INullableColumn nullable = LegacyColumnProjection.Surface<INullableColumn>(source);
         var values = (IColumn<T>)innerProjection(nullable.Inner);
         return new ProjectedReadColumn<T>(
             source,
