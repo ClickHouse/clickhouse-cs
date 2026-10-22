@@ -10,16 +10,6 @@ namespace ClickHouse.Driver.Tcp.Format;
 /// </summary>
 internal readonly struct InsertColumn
 {
-    /// <summary>Initializes a descriptor pairing a target header and codec with the caller's values.</summary>
-    /// <param name="name">The target column name, written to the block header.</param>
-    /// <param name="typeName">The target's resolved type string, written to the block header.</param>
-    /// <param name="codec">The codec that serializes <paramref name="values"/>, resolved from <paramref name="typeName"/>.</param>
-    /// <param name="values">The caller-supplied values for this column.</param>
-    public InsertColumn(string name, string typeName, IColumnCodec codec, IColumn values)
-        : this(name, typeName, codec, values, codec is null ? null : InsertColumnWrite.ThroughCodec(codec))
-    {
-    }
-
     /// <summary>Initializes a descriptor that writes the caller's values with <paramref name="write"/>.</summary>
     /// <param name="name">The target column name, written to the block header.</param>
     /// <param name="typeName">The target's resolved type string, written to the block header.</param>

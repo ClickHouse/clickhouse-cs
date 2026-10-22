@@ -106,7 +106,7 @@ public class RefusalMessageTests
         Assert.That(InsertColumnWrite.For(codec, values, type, Context, ConverterDerivation.Default), Is.Null, "the insert plan refuses the column");
 
         string message = ClickHouseTcpConnection.DescribeUnwritableColumn(
-            new InsertColumn("value", type, codec, values),
+            new InsertColumn("value", type, codec, values, write: null),
             ConverterDerivation.Default.SuggestedTypes(type, Context, ConversionDirection.Write));
 
         Assert.That(message, Is.EqualTo(expected));

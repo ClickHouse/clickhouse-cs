@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Types.Converters;
 
@@ -18,6 +19,41 @@ internal sealed partial class ConverterDerivation
         typeof(TupleWriter<,,,,,>),
         typeof(TupleWriter<,,,,,,>),
     };
+
+    /// <summary>
+    /// Whether a column of the type holds NULL: <c>Nullable(X)</c>, <c>LowCardinality(Nullable(X))</c>, <c>Variant</c>,
+    /// <c>Dynamic</c> and <c>Geometry</c>, also as the value type of a <c>SimpleAggregateFunction</c>.
+    /// </summary>
+    /// <param name="type">The ClickHouse type string. It must be well formed.</param>
+    /// <returns>Whether the type holds NULL.</returns>
+    public bool HoldsNull(string type)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        if (holdsNullCache.TryGetValue(type, out bool holds))
+        {
+            return holds;
+        }
+
+        holds = HoldsNull(TypeParser.Parse(type));
+        if (holdsNullCache.Count < MaxCachedDerivations)
+        {
+            holdsNullCache.TryAdd(type, holds);
+        }
+
+        return holds;
+    }
+
+    private bool HoldsNull(TypeNode node)
+    {
+        string name = registry.TryCanonicalName(node.Name, out string canonical) ? canonical : node.Name;
+        return name switch
+        {
+            "Nullable" or "Variant" or "Dynamic" or "Geometry" => true,
+            "LowCardinality" => node.Arguments.Count == 1 && HoldsNull(node.Arguments[0]),
+            "SimpleAggregateFunction" => node.Arguments.Count == 2 && HoldsNull(node.Arguments[1]),
+            _ => false,
+        };
+    }
 
     // A composite node, or a node that is written only from its canonical type.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
@@ -40,15 +76,29 @@ internal sealed partial class ConverterDerivation
             case "Tuple" when node.Arguments.Count > 0:
                 return DeriveTupleWrite(node, root, in context, clrType);
 
+            case "Tuple":
+                return RefuseOtherThanCanonical(node, root, in context, clrType) ?? Derivation.Of(EmptyTupleWriter.Instance);
+
             case "Variant":
-                return DeriveVariantWrite(node, root, in context, clrType);
+                return DeriveVariantWrite(node, root, in context, clrType, node.ToString());
+
+            case "Dynamic":
+                return DeriveDynamicWrite(node, root, in context, clrType);
+
+            case "QBit":
+                return DeriveQBitWrite(node, root, in context, clrType);
 
             // A Nested column is written from the column that a query of the same type read, and from nothing else.
             case "Nested":
                 return Refuse(node, root, $"'{node}' cannot be written from {clrType}. No column built from a CLR element type can fill it; insert a column of the same type that a query read.");
 
             default:
-                return DeriveCanonicalOnlyWrite(node, root, in context, clrType);
+                if (GeoColumnCodecs.TryGetStructure(name, out TypeNode structure))
+                {
+                    return DeriveGeoWrite(name, node, structure, root, in context, clrType);
+                }
+
+                return Refuse(node, root, $"'{node}' cannot be written from {clrType}.");
         }
     }
 
@@ -203,9 +253,9 @@ internal sealed partial class ConverterDerivation
 
     // Variant(...) from object. Each alternative must be written from its canonical type, as a Variant whose
     // alternative cannot be written (Nothing) is refused before a write starts. The writer derives the alternatives for
-    // the other CLR types of the values when a write meets them.
+    // the other CLR types of the values when a write meets them. typeName: the type that the messages name.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    private Derivation DeriveVariantWrite(TypeNode node, TypeNode root, in ResolveContext context, Type clrType)
+    private Derivation DeriveVariantWrite(TypeNode node, TypeNode root, in ResolveContext context, Type clrType, string typeName)
     {
         if (clrType != typeof(object))
         {
@@ -236,20 +286,73 @@ internal sealed partial class ConverterDerivation
             return derived.Succeeded ? Child(type, derived.Converter) : null;
         }
 
-        return Derivation.Of(new VariantWriter(node.ToString(), codecs, canonical, DeriveAlternative));
+        return Derivation.Of(new VariantWriter(typeName, codecs, canonical, DeriveAlternative));
     }
 
-    // Dynamic, QBit, the geo types and Tuple() are written only from their canonical type, through their codec.
+    // Dynamic from object. The writer infers the type of each value, and derives the tree of each type that it meets
+    // from the canonical CLR type of the type.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    private Derivation DeriveCanonicalOnlyWrite(TypeNode node, TypeNode root, in ResolveContext context, Type clrType)
+    private Derivation DeriveDynamicWrite(TypeNode node, TypeNode root, in ResolveContext context, Type clrType)
     {
-        IColumnCodec codec = registry.ResolveNode(node, in context);
-        if (clrType != codec.ElementType)
+        Derivation refused = RefuseOtherThanCanonical(node, root, in context, clrType);
+        if (refused is not null)
         {
-            return Refuse(node, root, $"'{node}' cannot be written from {clrType}. It is written from: {codec.ElementType}.");
+            return refused;
         }
 
-        return Derivation.Of(Activator.CreateInstance(typeof(CodecWriter<>).MakeGenericType(clrType), codec));
+        ResolveContext captured = context;
+        VariantChild DeriveType(string type)
+        {
+            Type canonical = registry.Resolve(type, in captured).ElementType;
+            Derivation derived = Derive(type, in captured, canonical, ConversionDirection.Write);
+            return derived.Succeeded ? Child(canonical, derived.Converter) : throw new NotSupportedException(derived.Refusal);
+        }
+
+        return Derivation.Of(new DynamicWriter(DeriveType));
+    }
+
+    // QBit(X, N) from the vectors of its element type.
+    private Derivation DeriveQBitWrite(TypeNode node, TypeNode root, in ResolveContext context, Type clrType)
+    {
+        Derivation refused = RefuseOtherThanCanonical(node, root, in context, clrType);
+        if (refused is not null)
+        {
+            return refused;
+        }
+
+        ColumnWriter writer = registry.ResolveNode(node, in context) switch
+        {
+            QBitSByteColumnCodec bytes => new QBitSByteWriter(bytes.TypeName, bytes.Dimension),
+            QBitFloatColumnCodec floats => new QBitFloatWriter(floats.TypeName, floats.Dimension, floats.BitWidth),
+            QBitDoubleColumnCodec doubles => new QBitDoubleWriter(doubles.TypeName, doubles.Dimension),
+            _ => null,
+        };
+
+        return writer is not null ? Derivation.Of(writer) : Refuse(node, root, $"'{node}' cannot be written from {clrType}.");
+    }
+
+    // A geo type from its canonical CLR type only, through the writers of its structure: a Tuple, an Array or a Variant.
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private Derivation DeriveGeoWrite(string name, TypeNode node, TypeNode structure, TypeNode root, in ResolveContext context, Type clrType)
+    {
+        Derivation refused = RefuseOtherThanCanonical(node, root, in context, clrType);
+        if (refused is not null)
+        {
+            return refused;
+        }
+
+        return name == "Geometry"
+            ? DeriveVariantWrite(structure, root, in context, clrType, name)
+            : DeriveNode(structure, root, in context, clrType, ConversionDirection.Write);
+    }
+
+    // The refusal of a CLR type other than the canonical CLR type of the node, or null for the canonical type.
+    private Derivation RefuseOtherThanCanonical(TypeNode node, TypeNode root, in ResolveContext context, Type clrType)
+    {
+        IColumnCodec codec = registry.ResolveNode(node, in context);
+        return clrType == codec.ElementType
+            ? null
+            : Refuse(node, root, $"'{node}' cannot be written from {clrType}. It is written from: {codec.ElementType}.");
     }
 
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
