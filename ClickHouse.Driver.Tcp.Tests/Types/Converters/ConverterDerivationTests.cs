@@ -98,7 +98,7 @@ public class ConverterDerivationTests
         });
     }
 
-    /// <summary>A composite has no converter yet, so it is refused, not thrown.</summary>
+    /// <summary>A composite has no write converter yet, so its write is refused, not thrown.</summary>
     [TestCase("Nullable(Int32)")]
     [TestCase("Array(String)")]
     [TestCase("LowCardinality(String)")]
@@ -106,9 +106,9 @@ public class ConverterDerivationTests
     [TestCase("Map(String, Int32)")]
     [TestCase("Variant(Int32, String)")]
     [TestCase("Point")]
-    public void Derive_Composite_RefusesWithNoConverter(string type)
+    public void Derive_CompositeWrite_RefusesWithNoConverter(string type)
     {
-        Derivation derivation = Fresh().Derive(type, ConverterHarness.Context, typeof(object), ConversionDirection.Read);
+        Derivation derivation = Fresh().Derive(type, ConverterHarness.Context, typeof(object), ConversionDirection.Write);
 
         Assert.That(derivation.Refusal, Is.EqualTo($"'{type}' has no converter for System.Object."));
     }
