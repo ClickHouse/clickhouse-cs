@@ -10,13 +10,18 @@ namespace ClickHouse.Driver.Tcp;
 /// </summary>
 public static class ClickHouseTcpTypes
 {
-    /// <summary>Whether a column of <paramref name="elementType"/> values can be written as <paramref name="clickHouseType"/>.</summary>
+    /// <summary>
+    /// Whether a column of <paramref name="elementType"/> values can be written as <paramref name="clickHouseType"/> by
+    /// <c>InsertAsync</c>.
+    /// </summary>
     /// <param name="clickHouseType">The target column's ClickHouse type (e.g. <c>Array(Nullable(DateTime))</c>).</param>
     /// <param name="elementType">The CLR type of one row's value.</param>
     /// <returns>Whether a column of that element type can be written to that type.</returns>
     /// <remarks>
-    /// <c>Variant</c> accepts only the canonical CLR type of a declared alternative. <c>Dynamic</c> infers a
-    /// ClickHouse type from each runtime value.
+    /// <c>Variant</c> is written from <see cref="object"/>. A value goes to the alternative whose canonical CLR type is the
+    /// value's type, or, when there is none, to the alternative that is written from the value's type. <c>Dynamic</c>
+    /// infers a ClickHouse type from each runtime value. <c>Nested</c> is written only from a column that a query of the
+    /// same type read, so the answer is false for it.
     /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="clickHouseType"/> or <paramref name="elementType"/> is null.</exception>
     /// <exception cref="FormatException"><paramref name="clickHouseType"/> is not a well-formed ClickHouse type.</exception>
@@ -24,7 +29,10 @@ public static class ClickHouseTcpTypes
     public static bool CanWrite(string clickHouseType, Type elementType)
     {
         ArgumentNullException.ThrowIfNull(elementType);
-        return Resolve(clickHouseType).CanWriteElementType(elementType);
+        ArgumentNullException.ThrowIfNull(clickHouseType);
+
+        // The same derivation as the insert of a column.
+        return ConverterDerivation.Default.Derive(clickHouseType, ResolveContext.ForWrite, elementType, ConversionDirection.Write).Succeeded;
     }
 
     /// <summary>
@@ -50,11 +58,5 @@ public static class ClickHouseTcpTypes
 
         // The same derivation as ReadAs.
         return ConverterDerivation.Default.Derive(clickHouseType, ResolveContext.ForWrite, elementType, ConversionDirection.Read).Succeeded;
-    }
-
-    private static IColumnCodec Resolve(string clickHouseType)
-    {
-        ArgumentNullException.ThrowIfNull(clickHouseType);
-        return ColumnCodecRegistry.Default.Resolve(clickHouseType, ResolveContext.ForWrite);
     }
 }

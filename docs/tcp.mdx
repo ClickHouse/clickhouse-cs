@@ -578,6 +578,18 @@ This API avoids the row-to-column projection and value-type boxing required by r
 column read from a borrowed result block can also be passed directly to `InsertAsync`, provided the
 insert completes before that block is released.
 
+`InsertAsync` writes each column in one of two ways:
+
+- A column that a query read is written from the data it holds, with no conversion. So a `String`
+  value that is not valid UTF-8 goes back to the server with the bytes that the server sent. An
+  array column that `ClickHouseTcpColumn.CreateArray` builds is written in the same way, from its
+  offsets and its inner column.
+- Any other column is converted from the CLR type of its values to the target type, with the
+  mappings of [Type mapping: writing to ClickHouse](#type-map-writing). `ClickHouseTcpTypes.CanWrite`
+  gives the answer of this conversion. A value that the target type cannot hold (a text that is too
+  long for a `FixedString(N)`, a decimal past its precision) is refused with its row, and the insert
+  stops.
+
 #### Row inserts {#row-inserts}
 
 `InsertRowsAsync` accepts `object[]` rows. Values match the SQL column list by position:
@@ -1000,7 +1012,8 @@ logical batch may be retried.
 The tables below distinguish the type returned by the decoded `IColumn<T>` from additional types
 available through conversion via `Block.ReadAs<T>`, `QueryAsync<T>` POCO mapping, or inserts. You can ask the same
 resolver used by those operations whether a particular mapping is supported. `CanRead` gives the answer of
-`Block.ReadAs<T>`, including the [read rules](#read-as) for enums, casts and nullable types:
+`Block.ReadAs<T>`, including the [read rules](#read-as) for enums, casts and nullable types. `CanWrite` gives the
+answer of [`InsertAsync`](#columnar-inserts) for a column of that element type:
 
 ```csharp
 bool canRead = ClickHouseTcpTypes.CanRead("Array(Nullable(DateTime))", typeof(DateTime?[]));
@@ -1231,10 +1244,11 @@ The write throws `OverflowException` when the scaled mantissa exceeds the declar
 | ClickHouse type | Accepted .NET types | Notes |
 |---|---|---|
 | `String` | `string`, `byte[]` | Strings are encoded as UTF-8; byte arrays are written unchanged. |
-| `FixedString(N)` | `byte[]` | Every value must contain exactly `N` bytes. |
+| `FixedString(N)` | `byte[]`, `string` | A `byte[]` must contain exactly `N` bytes. A `string` is written as its UTF-8 bytes, padded with zero bytes to `N`. |
 
-`FixedString(N)` deliberately does not accept `string`; encode and pad the value explicitly so its
-exact binary representation is unambiguous.
+A `byte[]` value for `FixedString(N)` is not padded or cut: the caller controls each byte, so a
+value of another length is an error. A `string` value is padded, because the number of UTF-8 bytes
+of a text is not under the caller's control; a text of more than `N` UTF-8 bytes is refused.
 
 #### Date and time types {#type-map-writing-datetime}
 
@@ -1283,6 +1297,10 @@ row and `Map(String, UInt32)` accepts a `KeyValuePair<string, uint>[]`.
 | `LowCardinality(T)` | Same as `T` |
 | `Nested(...)` | No row-oriented CLR shape |
 
+A `LowCardinality` dictionary holds each distinct encoded value once: two values that encode to the
+same bytes share one entry, for example two `byte[]` values with the same content, or two strings
+with the same UTF-8 bytes.
+
 Direct `Nested` writes use the dense column shape returned by a previous read. For application-built
 inserts, keep the default `flatten_nested = 1` representation and write each dotted `Array(T)` field
 as its own column.
@@ -1295,10 +1313,14 @@ as its own column.
 | `Dynamic` | `object` | The runtime type is inferred for each non-null value. |
 | `JSON` | `string` | The value must be valid JSON text. |
 
-For `Variant`, the runtime type must uniquely match an alternative's default CLR type. Convenience
-mappings such as writing a `DateTime` to a `DateTime` alternative are not used inside a variant;
-use the alternative's default raw type instead. `Dynamic` supports scalar and recursively supported
-array, map, and tuple values.
+For `Variant`, a value goes to the alternative whose default CLR type is the value's runtime type.
+When several alternatives share that type, the value must say which one it means: an `IPAddress`
+goes to `IPv4` or `IPv6` by its address family, and any other such value is refused. A value whose
+runtime type is the default type of no alternative goes to the alternative that is written from
+that type, with the same rule when there are several: for example a `byte[]` goes to a `String`
+alternative, and a `DateTimeOffset` to a `DateTime` alternative. The values of one `Array`, `Map`,
+or `Tuple` alternative must have one CLR type in one insert block. `Dynamic` supports scalar and
+recursively supported array, map, and tuple values.
 
 #### Geometry types {#type-map-writing-geometry}
 

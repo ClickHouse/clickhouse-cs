@@ -1,4 +1,5 @@
 using System;
+using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Poco;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
@@ -7,9 +8,10 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
 /// <summary>
 /// The old path: the arm of each tier that the candidates are compared with. <see cref="ReadAs"/> and
-/// <see cref="CanRead"/> run the old dispatch of the columnar read tier (<see cref="LegacyColumnarRead"/>), and
-/// <see cref="Poco"/> runs the old POCO read plan (<see cref="LegacyPocoRead"/>), because the client's entry points read
-/// through the converter derivation. The other arms are the client's own entry points (<see cref="ClientArms"/>).
+/// <see cref="CanRead"/> run the old dispatch of the columnar read tier (<see cref="LegacyColumnarRead"/>),
+/// <see cref="Poco"/> runs the old POCO read plan (<see cref="LegacyPocoRead"/>), and <see cref="Write"/> and
+/// <see cref="CanWrite"/> run the old dispatch of the columnar write tier (<see cref="LegacyColumnarWrite"/>), because the
+/// client's entry points read and write through the converter derivation.
 /// </summary>
 /// <remarks>
 /// The old members that the converter layer replaces stay in production until the old path is removed. When a tier
@@ -28,9 +30,9 @@ internal static class ReferenceArms
 
     public static AnswerArm CanRead { get; } = new ClientArms.FunctionAnswerArm("Old path: CanRead", Tier.CanRead, LegacyColumnarRead.CanRead);
 
-    public static WriteArm Write => ClientArms.Write;
+    public static WriteArm Write { get; } = new LegacyColumnarWrite.WriteArm("Old path: Write");
 
-    public static AnswerArm CanWrite => ClientArms.CanWrite;
+    public static AnswerArm CanWrite { get; } = new ClientArms.FunctionAnswerArm("Old path: CanWrite", Tier.CanWrite, LegacyColumnarWrite.CanWrite);
 }
 
 /// <summary>The client's entry points, one arm for each tier.</summary>
@@ -48,8 +50,11 @@ internal static class ClientArms
     /// <summary><c>ClickHouseTcpTypes.CanRead</c>.</summary>
     public static readonly AnswerArm CanRead = new FunctionAnswerArm("Client.CanRead", Tier.CanRead, ClickHouseTcpTypes.CanRead);
 
-    /// <summary>The column's codec: <c>CanWrite</c>, then <c>BeginWrite</c>, the state prefix and the body.</summary>
-    public static readonly WriteArm Write = new CodecWriteArm("Client.Write");
+    /// <summary>
+    /// The write of one column of the insert plan (<see cref="InsertColumnWrite.For"/>), then its <c>Begin</c>, state prefix
+    /// and body for the rows, as the block writer runs them.
+    /// </summary>
+    public static readonly WriteArm Write = new InsertWriteArm("Client.Write");
 
     /// <summary><c>ClickHouseTcpTypes.CanWrite</c>.</summary>
     public static readonly AnswerArm CanWrite = new FunctionAnswerArm("Client.CanWrite", Tier.CanWrite, ClickHouseTcpTypes.CanWrite);
@@ -108,9 +113,9 @@ internal static class ClientArms
         }
     }
 
-    private sealed class CodecWriteArm : WriteArm
+    private sealed class InsertWriteArm : WriteArm
     {
-        public CodecWriteArm(string name)
+        public InsertWriteArm(string name)
             : base(name)
         {
         }
@@ -118,18 +123,16 @@ internal static class ClientArms
         public override SliceWriter Bind<T>(IColumn<T> column, string columnType, ResolveContext context)
         {
             IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(columnType, context);
-            if (!codec.CanWrite(column))
-            {
-                throw new ArmRefusal($"The codec of '{columnType}' refuses a column of {TypeNames.Of(typeof(T))} ({column.GetType().Name}).");
-            }
+            InsertColumnWrite write = InsertColumnWrite.For(codec, column, columnType, context, ColumnCodecRegistry.Default.Converters)
+                ?? throw new ArmRefusal($"The insert plan of '{columnType}' refuses a column of {TypeNames.Of(typeof(T))} ({column.GetType().Name}).");
 
             return (writer, start, length) =>
             {
-                IColumnWriteState state = codec.BeginWrite(column, start, length);
+                IColumnWriteState state = write.Begin(column, start, length);
                 try
                 {
-                    codec.WriteStatePrefix(writer, column, start, length, state);
-                    codec.WriteColumn(writer, column, start, length, state);
+                    write.WritePrefix(writer, column, start, length, state);
+                    write.Write(writer, column, start, length, state);
                 }
                 finally
                 {
