@@ -697,6 +697,10 @@ client-side convenience: before the request is sent, each one is rewritten to
 [type resolution](#parameter-type-mapping) for how the type is chosen. Use the explicit
 `{name:Type}` form where you can.
 
+The name is the whole run of letters, digits, `_`, and `$` after the `@`. Any other character,
+such as `.` or `-`, ends the name, so `@id_2` binds `id_2` and `@t.1` binds `t`. ClickHouse does
+not accept those characters in a parameter name either.
+
 A `@name` with no matching parameter is left untouched for the server to reject. Matching is
 case-sensitive, so `@ID` does not bind a parameter named `id`.
 
