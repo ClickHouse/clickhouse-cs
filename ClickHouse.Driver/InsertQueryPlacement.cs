@@ -16,7 +16,9 @@ public enum InsertQueryPlacement
     /// makes the statement available to routing and logging that inspect only the URL, without decoding
     /// and inspecting the request body. The effective URL limit is the lowest imposed by the .NET runtime,
     /// an intermediary, and the server. On .NET 6 through .NET 9, the complete encoded URI cannot exceed
-    /// 65,519 characters; the server's <c>http_max_uri_size</c> is 1 MiB by default.
+    /// 65,519 characters. The server limits each URL parameter value, including the encoded <c>query</c>
+    /// statement, to <c>http_max_field_value_size</c> (128 KiB by default); a query-level setting cannot
+    /// raise this parsing limit. <c>http_max_uri_size</c> separately limits the whole URI to 1 MiB by default.
     /// </summary>
     Url = 1,
 }
