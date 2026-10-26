@@ -55,14 +55,14 @@ jobs:
       # Unpinned on purpose: new audits ship in new versions, and the Security
       # tab is where we want to see them first.
       - name: Report findings to code scanning
-        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+        uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
         with:
           advanced-security: true
 
       # The gate. Version-pinned so that a zizmor release cannot turn an
       # unrelated pull request red; bump it deliberately.
       - name: Fail on high-severity findings
-        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+        uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
         with:
           version: "1.29.0"
           advanced-security: false
