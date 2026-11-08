@@ -16,6 +16,8 @@ public class TrackingHandler : DelegatingHandler
 
     public int RequestCount => requests.Count;
 
+    public bool IsDisposed { get; private set; }
+
     /// <summary>
     /// Creates a tracking handler that forwards requests to the inner handler.
     /// </summary>
@@ -45,5 +47,15 @@ public class TrackingHandler : DelegatingHandler
         }
 
         return base.SendAsync(request, cancellationToken);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            IsDisposed = true;
+        }
+
+        base.Dispose(disposing);
     }
 }
