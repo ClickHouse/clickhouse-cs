@@ -2139,8 +2139,8 @@ Property name matching with column type hints is case-sensitive. A property `Use
 | Tuple(T1, T2, ...) | `ITuple`, `IList` | Element count must match tuple arity. See [ValueTuple caveat](#valuetuple-caveat) for >7 elements. |
 | Map(K, V) | `IDictionary`, `IEnumerable<KeyValuePair<K, V>>` | A pair sequence (for example the `List<KeyValuePair<K, V>>` produced by `MapReadMode=KeyValuePairs`) is accepted in either read mode, and can repeat a key. Applies to binary inserts and to query parameters |
 | Nullable(T) | `null`, `DBNull`, or types accepted by T | Writes null flag byte before value |
-| Enum8 | `string`, `sbyte`, numeric types | String looked up in enum dictionary |
-| Enum16 | `string`, `short`, numeric types | String looked up in enum dictionary |
+| Enum8 | `string`, `sbyte`, numeric types | String looked up in enum dictionary. A number must be a declared ordinal. `null`, `DBNull` and an undeclared ordinal throw `ArgumentException`; use `Nullable(Enum8(...))` to store nulls |
+| Enum16 | `string`, `short`, numeric types | String looked up in enum dictionary. A number must be a declared ordinal. `null`, `DBNull` and an undeclared ordinal throw `ArgumentException`; use `Nullable(Enum16(...))` to store nulls |
 | LowCardinality(T) | Types accepted by T | Delegates to underlying type |
 | SimpleAggregateFunction | Types accepted by underlying type | Delegates to underlying type |
 | Nested(...) | `IList` of tuples | Element count must match field count |
