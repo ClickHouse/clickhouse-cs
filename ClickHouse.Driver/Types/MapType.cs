@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
+using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Types;
 
@@ -31,6 +32,7 @@ internal class MapType : ParameterizedType
     private ClickHouseType keyType;
     private ClickHouseType valueType;
     private MapShape shape;
+    private bool entriesIdentifyMap;
 
     public MapType()
         : this(MapReadMode.Dictionary)
@@ -52,6 +54,7 @@ internal class MapType : ParameterizedType
             // and CanWrite is called per value written, so resolve the pair once
             entryTypes = (keyType.FrameworkType, valueType.FrameworkType);
             shape = ShapeCache.GetOrAdd(entryTypes, static types => GetShape(types.Key, types.Value, RuntimeFeature.IsDynamicCodeSupported));
+            entriesIdentifyMap = IdentifiedByFrameworkType(keyType) && IdentifiedByFrameworkType(valueType);
             frameworkType = readMode == MapReadMode.KeyValuePairs ? shape.ListType : shape.DictionaryType;
         }
     }
@@ -249,9 +252,10 @@ internal class MapType : ParameterizedType
     /// A Variant member is selected by <see cref="CanWrite"/>, so it must accept every
     /// representation <see cref="Write"/> accepts, in either <see cref="MapReadMode"/>. A
     /// dictionary and a key-value-pair sequence both enumerate as
-    /// <see cref="KeyValuePair{TKey, TValue}"/>, so the entry types are what identify the map.
-    /// Under native AOT a map can read with <see cref="object"/> keys and values, so one that does also
-    /// accepts object entries that its key and value types accept.
+    /// <see cref="KeyValuePair{TKey, TValue}"/>, so the entry types identify the map, unless the key or value
+    /// type is one whose CLR type several ClickHouse types share (see <see cref="IdentifiedByFrameworkType"/>):
+    /// then the entries also have to fit. Under native AOT a map can read with <see cref="object"/> keys and
+    /// values, so one that does also accepts object entries that its key and value types accept.
     /// </summary>
     public override bool CanWrite(object value)
     {
@@ -260,11 +264,39 @@ internal class MapType : ParameterizedType
 
         var valueEntryTypes = GetEntryTypes(value.GetType());
         if (Array.IndexOf(valueEntryTypes, entryTypes) >= 0)
-            return true;
+            return entriesIdentifyMap || value is not ICollection || EntriesFit(value);
 
         return shape.IsObjectFallback
+            && value is ICollection
             && Array.IndexOf(valueEntryTypes, (typeof(object), typeof(object))) >= 0
-            && EnumerateEntries(value).All(entry => EntryFits(keyType, entry.Key) && EntryFits(valueType, entry.Value));
+            && EntriesFit(value);
+    }
+
+    // Enumerates the value, so callers pass only a collection: Write enumerates it again afterwards, and a
+    // one-shot sequence would then be empty.
+    private bool EntriesFit(object value) =>
+        EnumerateEntries(value).All(entry => EntryFits(keyType, entry.Key) && EntryFits(valueType, entry.Value));
+
+    /// <summary>
+    /// Whether a value's CLR type alone tells which ClickHouse type it is for, so that matching a map's entry
+    /// types is enough. It does not for IPv4 and IPv6 (both <see cref="System.Net.IPAddress"/>), a tuple that
+    /// reads as <see cref="LargeTuple"/>, an <see cref="object"/>-typed Variant or Dynamic value, a map whose
+    /// entries do not identify it either, or an array of any of these.
+    /// </summary>
+    private static bool IdentifiedByFrameworkType(ClickHouseType type)
+    {
+        type = TransparentWrapper.Unwrap(type);
+        if (type is NullableType nullable)
+            type = TransparentWrapper.Unwrap(nullable.UnderlyingType);
+
+        return type switch
+        {
+            IPv4Type or IPv6Type => false,
+            TupleType tuple => tuple.FrameworkType != typeof(LargeTuple),
+            MapType map => map.entriesIdentifyMap && !map.shape.IsObjectFallback,
+            ArrayType array => IdentifiedByFrameworkType(array.UnderlyingType),
+            _ => type.FrameworkType != typeof(object),
+        };
     }
 
     private static bool EntryFits(ClickHouseType type, object value)

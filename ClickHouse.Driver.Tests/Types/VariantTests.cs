@@ -192,6 +192,30 @@ public class VariantTests : AbstractConnectionTestFixture
         });
     }
 
+    // Map members whose key and value CLR types are the same can still be different ClickHouse types: IPv4 and
+    // IPv6 are both IPAddress, and every 8+ element tuple is a LargeTuple. The entries have to pick the member.
+    // The server orders a Variant's members by name, so the first member is the one the write path tries first.
+    [TestCase("Map(String, IPv4)", "Map(String, IPv6)", "map('a', toIPv6('::1'))")]
+    [TestCase(
+        "Map(String, Tuple(String, String, String, String, String, String, String, String))",
+        "Map(String, Tuple(UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8))",
+        "map('a', (1, 2, 3, 4, 5, 6, 7, 8))")]
+    [RequiredFeature(Feature.Variant)]
+    public async Task InsertBinaryAsync_MapIntoVariantOfMapsWithSameEntryTypes_SelectsTheMemberItFits(
+        string first, string member, string map)
+    {
+        var targetTable = CreateTableName();
+
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {targetTable} (id UInt32, val Variant({first}, {member})) ENGINE = Memory");
+
+        var value = await client.ExecuteScalarAsync($"SELECT {map}::{member}");
+        await client.InsertBinaryAsync(targetTable, ["id", "val"], [new object[] { 1u, value }]);
+
+        var written = await client.ExecuteScalarAsync($"SELECT variantType(val) FROM {targetTable}");
+        Assert.That(((string)written).Replace(" ", string.Empty), Is.EqualTo(member.Replace(" ", string.Empty)));
+    }
+
     private static IEnumerable<object> Elements(ITuple tuple) => Enumerable.Range(0, tuple.Length).Select(i => tuple[i]);
 
     // Three-type variant: exercises the write path's O(1) lookup (VariantType builds the lookup for
