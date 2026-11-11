@@ -29,7 +29,9 @@ internal class Enum16Type : EnumType, ITypedReader<string>, ITypedReader<int>
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
-        var enumIndex = value is string enumStr ? (short)Lookup(enumStr) : Convert.ToInt16(value, CultureInfo.InvariantCulture);
+        var enumIndex = value is string enumStr
+            ? (short)Lookup(enumStr)
+            : (short)RequireDeclared(Convert.ToInt16(RequireNotNull(value), CultureInfo.InvariantCulture));
         writer.Write(enumIndex);
     }
 }
