@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 using ClickHouse.Driver.Formats;
@@ -77,6 +78,7 @@ internal static class PocoWriteExpressionFactory
     /// <param name="type">The resolved ClickHouse column type.</param>
     /// <param name="value">Expression yielding the property value; its <see cref="Expression.Type"/> is the CLR property type.</param>
     /// <param name="writer">The <see cref="ExtendedBinaryWriter"/> parameter expression.</param>
+    [RequiresDynamicCode("Closes generic types and methods over the column's CLR types.")]
     public static Expression TryBuildWriteBody(ClickHouseType type, Expression value, Expression writer)
     {
         var clrType = value.Type;
@@ -127,6 +129,7 @@ internal static class PocoWriteExpressionFactory
     // mirroring the boxed path's Convert.ToXxx. Returns null (→ boxed fallback) for reference types, for
     // value types with no matching Convert overload (DateTime, Guid, custom structs — the boxed path throws
     // for those, and we preserve that by falling back), and for column types not covered here.
+    [RequiresDynamicCode("Closes generic types and methods over the column's CLR types.")]
     private static Expression TryBuildNumericCoercion(ClickHouseType type, Type clrType, Expression value, Expression writer)
     {
         // Only value types box on the getter, so only they can gain. Reference types (string) are skipped:
@@ -196,10 +199,13 @@ internal static class PocoWriteExpressionFactory
         return method != null && method.GetParameters()[0].ParameterType == sourceType ? method : null;
     }
 
+    [RequiresDynamicCode("Closes generic types and methods over the column's CLR types.")]
     private static Expression TryBuildNullableWrite(NullableType nullableType, Expression value, Expression writer)
     {
-        // value.Type is Nullable<U>; recurse on the typed .Value (type U).
-        var innerBody = TryBuildWriteBody(nullableType.UnderlyingType, Expression.Property(value, "Value"), writer);
+        // value.Type is Nullable<U>; recurse on the typed value (type U). The explicit conversion is .Value,
+        // and the null comparison below is .HasValue.
+        var underlying = Expression.Convert(value, Nullable.GetUnderlyingType(value.Type));
+        var innerBody = TryBuildWriteBody(nullableType.UnderlyingType, underlying, writer);
         if (innerBody == null)
             return null;
 
@@ -209,9 +215,11 @@ internal static class PocoWriteExpressionFactory
             innerBody);
         var writeNull = Expression.Call(writer, writeMarker, Expression.Constant((byte)1));
 
-        return Expression.IfThenElse(Expression.Property(value, "HasValue"), writeNotNull, writeNull);
+        var hasValue = Expression.NotEqual(value, Expression.Constant(null, value.Type));
+        return Expression.IfThenElse(hasValue, writeNotNull, writeNull);
     }
 
+    [RequiresDynamicCode("Closes generic types and methods over the column's CLR types.")]
     private static Expression TryBuildTypedWriterCall(ClickHouseType type, Type clrType, Expression value, Expression writer)
     {
         var writerInterface = typeof(ITypedWriter<>).MakeGenericType(clrType);

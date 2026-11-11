@@ -41,6 +41,8 @@ Both APIs share the same underlying HTTP connection pool and can be used togethe
 * .NET 9.0
 * .NET 10.0
 
+On .NET 8.0 and later the client can be trimmed and compiled with native AOT. See [Native AOT and trimming](#native-aot).
+
 ## Supported ClickHouse versions {#supported-clickhouse-versions}
 
 The client officially supports the last 3 releases plus the last two LTS releases.
@@ -3299,6 +3301,29 @@ Beyond migrations, the provider also does not yet support:
 - **`UPDATE` / `DELETE`**
 - **Transactions**: `BeginTransaction` is a no-op. No support for ACID transactions in ClickHouse.
 - **JSON path query translation**: `entity.Data["key"]` in LINQ does not translate to ClickHouse's `data.key` SQL syntax. Filter on non-JSON columns and inspect JSON in memory.
+
+## Native AOT and trimming {#native-aot}
+
+On .NET 8.0 and later, the HTTP client is annotated for trimming and native AOT: publishing an app with `PublishTrimmed` or `PublishAot` produces no trim or AOT warnings from the driver's own code. The one API that warns at its call site is `RegisterJsonSerializationType` (see below). The native TCP client is not AOT-compatible yet.
+
+Native AOT cannot create a generic type over a value type that it did not compile ahead of time. So when dynamic code is not supported, a few types read as a different CLR type than they do with the JIT. That is the case in a native AOT app, and also under `dotnet run` of a project that sets `PublishAot`, because the SDK sets the same feature switches for it:
+
+| ClickHouse type | With the JIT | Under native AOT |
+|---|---|---|
+| Map(K, V) | `Dictionary<K, V>` | `Dictionary<object, object>`, except Map(String, String), which stays `Dictionary<string, string>` |
+| Map(K, V) with `MapReadMode.KeyValuePairs` | `List<KeyValuePair<K, V>>` | `List<KeyValuePair<object, object>>`, except for Map(String, String) |
+| Tuple(T1, ..., T7) | `Tuple<T1, ..., T7>` | `LargeTuple`, an `ITuple`, except Tuple(Float64, Float64), which stays `Tuple<double, double>` |
+
+Arrays of these types hold the same representations, and `GetFieldType` reports the type the reader returns. Code that reads a Map through `IDictionary` and a Tuple through `ITuple` works with both. A value read this way can be written back, including into a `Variant` column. Point, Ring, Polygon and the other geo types do not change.
+
+Other differences under native AOT:
+
+- **Writing a Map from key-value pairs:** a sequence of `KeyValuePair<object, object>` or `KeyValuePair<string, string>` is accepted. Pass any other map as an `IDictionary`.
+- **POCOs:** `RegisterPocoType<T>` and `RegisterBinaryInsertType<T>` tell the trimmer to keep `T`'s public properties, and `RegisterPocoType<T>` its public parameterless constructor too. A property bound to a Map or Tuple column needs a type the AOT representation is assignable to, such as `IDictionary`, `ITuple` or `object`. Properties are read and written through reflection, not compiled expression trees.
+- **JSON from objects:** trimmed and native AOT apps turn reflection-based `System.Text.Json` off. Writing a POCO to a JSON column in the default `JsonWriteMode.String`, or passing a POCO as a JSON parameter, then fails with `System.Text.Json`'s `InvalidOperationException` (the inner exception, for an insert). Pass a `string` or a `JsonNode` instead, or use `JsonWriteMode.Binary` with a type registered through `RegisterJsonSerializationType`. An app that turns reflection-based serialization back on (`JsonSerializerIsReflectionEnabledByDefault`) gets no trim warning for this from the driver, and must keep the serialized types' properties itself.
+- **`RegisterJsonSerializationType`** has a trim warning: the trimmer keeps the registered type's properties, but not those of a nested object type it serializes too. Register each nested type as well.
+
+---
 
 ## Limitations {#limitations}
 

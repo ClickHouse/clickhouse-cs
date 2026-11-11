@@ -21,6 +21,8 @@
     <AnalysisMode>Recommended</AnalysisMode>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest</AnalysisLevel>
+    <!-- Trim and AOT analyzers. They need net8.0 or later, so the net6.0 build is not checked. -->
+    <IsAotCompatible Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsAotCompatible>
     <!-- Pack the referenced ClickHouse.Driver.Tcp assembly into this package instead of adding it as a dependency. -->
     <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeTcpAssemblyInPackage</TargetsForTfmSpecificBuildOutput>
   </PropertyGroup>

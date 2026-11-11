@@ -11,6 +11,7 @@ in it.**
 | The shared code in `ClickHouse.Driver.Common/` | Both client files. Both clients use this code, so run both test suites. |
 | The examples: `examples/` | [`examples/AGENTS.md`](examples/AGENTS.md) |
 | The benchmarks: `ClickHouse.Driver.Benchmark/` | This file only (see Benchmarks below). |
+| The native AOT smoke test: `ClickHouse.Driver.AotSmokeTest/` | [`ClickHouse.Driver/AGENTS.md`](ClickHouse.Driver/AGENTS.md) |
 
 ## Repository Overview
 
@@ -42,6 +43,7 @@ ClickHouse.Driver.sln
 ├── ClickHouse.Driver.Tcp/               # Native TCP client, packed into ClickHouse.Driver
 ├── ClickHouse.Driver.Tcp.Tests/         # Native TCP client tests (NUnit, net8.0+)
 ├── ClickHouse.Driver.Common/            # Compression code shared by both clients
+├── ClickHouse.Driver.AotSmokeTest/      # HTTP client as a native AOT app, run by CI (net10.0)
 └── ClickHouse.Driver.Benchmark/         # BenchmarkDotNet benchmarks for both clients
 examples/                                # Runnable examples for both clients
 docs/                                    # Public documentation (see Documentation below)

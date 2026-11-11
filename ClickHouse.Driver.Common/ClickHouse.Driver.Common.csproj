@@ -12,6 +12,8 @@
     <AnalysisMode>Recommended</AnalysisMode>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest</AnalysisLevel>
+    <!-- Trim and AOT analyzers. They need net8.0 or later, so the net6.0 build is not checked. -->
+    <IsAotCompatible Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsAotCompatible>
     <!-- Bundled into the ClickHouse.Driver package (see that project's pack target); never shipped on its own. -->
     <IsPackable>false</IsPackable>
     <!-- This assembly is strong-named (AssemblyInfo.cs carries [AssemblyKeyFile], as the sibling

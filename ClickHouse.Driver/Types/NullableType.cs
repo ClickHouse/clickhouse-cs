@@ -13,7 +13,7 @@ internal class NullableType : ParameterizedType
         get
         {
             var underlyingFrameworkType = UnderlyingType.FrameworkType;
-            return underlyingFrameworkType.IsValueType ? typeof(Nullable<>).MakeGenericType(underlyingFrameworkType) : underlyingFrameworkType;
+            return underlyingFrameworkType.IsValueType ? ClrTypes.MakeNullable(underlyingFrameworkType) : underlyingFrameworkType;
         }
     }
 

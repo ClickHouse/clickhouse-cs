@@ -10,7 +10,7 @@ internal class NestedType : TupleType
 {
     public override string Name => "Nested";
 
-    public override Type FrameworkType => base.FrameworkType.MakeArrayType();
+    public override Type FrameworkType => ClrTypes.MakeArrayType(base.FrameworkType);
 
     public override ParameterizedType Parse(SyntaxTreeNode node, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings)
     {
@@ -37,7 +37,7 @@ internal class NestedType : TupleType
     public override object Read(ExtendedBinaryReader reader)
     {
         var length = reader.Read7BitEncodedInt();
-        var data = Array.CreateInstance(base.FrameworkType, length);
+        var data = ClrTypes.CreateArray(base.FrameworkType, length);
         for (var i = 0; i < length; i++)
         {
             data.SetValue(ClearDBNull(base.Read(reader)), i);

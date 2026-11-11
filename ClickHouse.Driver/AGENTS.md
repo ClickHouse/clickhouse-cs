@@ -75,6 +75,12 @@ var users = connection.Query<User>("SELECT * FROM users");
 - **ClickHouse version support**: Respect `FeatureSwitch`, `ClickHouseFeatureMap` for multi-version compatibility
 - **Hot paths**: Core code in `ADO/`, `Types/`, `Utility/` - avoid allocations, boxing, unnecessary copies
 - **Connection pooling**: Respect HTTP connection pool behavior, avoid connection leaks
+- **Trimming and native AOT**: the project sets `IsAotCompatible` for net8.0 and later, so the build reports
+  trim and AOT warnings (IL2xxx, IL3xxx). Leave none. Code that builds a generic type over a runtime value
+  type, or compiles an expression tree, keeps a path for `RuntimeFeature.IsDynamicCodeSupported == false`;
+  `Types/ClrTypes.cs`, `MapType` and `TupleType` show the pattern. `ClickHouse.Driver.AotSmokeTest`
+  publishes the client as a native AOT app and runs it against a server (`.github/workflows/tests-aot.yml`);
+  `dotnet run` of that project applies the same AOT feature switches with the JIT, which is quicker to debug.
 - **ADO.NET compliance**: Follow ADO.NET patterns and interfaces correctly
 
 ### Configuration & Settings

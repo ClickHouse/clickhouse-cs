@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Net.Http;
 using System.Threading;
@@ -8,6 +9,7 @@ using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Json;
+using ClickHouse.Driver.Poco;
 
 namespace ClickHouse.Driver;
 
@@ -170,7 +172,7 @@ public interface IClickHouseClient : IDisposable
     /// <see cref="RegisterPocoType{T}"/>.
     /// </summary>
     /// <typeparam name="T">The POCO type to register.</typeparam>
-    void RegisterBinaryInsertType<T>()
+    void RegisterBinaryInsertType<[DynamicallyAccessedMembers(PocoMembers.Insert)] T>()
         where T : class;
 
     /// <summary>
@@ -183,7 +185,7 @@ public interface IClickHouseClient : IDisposable
     /// skipped — they keep their default value even if a matching result column is present.
     /// </summary>
     /// <typeparam name="T">The POCO type to register.</typeparam>
-    void RegisterPocoType<T>()
+    void RegisterPocoType<[DynamicallyAccessedMembers(PocoMembers.Read)] T>()
         where T : class;
 
     /// <summary>
@@ -210,7 +212,8 @@ public interface IClickHouseClient : IDisposable
     /// <exception cref="ClickHouseJsonSerializationException">
     /// Thrown if any property type cannot be mapped to a ClickHouse type.
     /// </exception>
-    void RegisterJsonSerializationType<T>()
+    [RequiresUnreferencedCode(JsonTypeRegistry.NestedTypesWarning)]
+    void RegisterJsonSerializationType<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>()
         where T : class;
 
     /// <summary>
@@ -222,7 +225,8 @@ public interface IClickHouseClient : IDisposable
     /// <exception cref="ClickHouseJsonSerializationException">
     /// Thrown if any property type cannot be mapped to a ClickHouse type.
     /// </exception>
-    void RegisterJsonSerializationType(Type type);
+    [RequiresUnreferencedCode(JsonTypeRegistry.NestedTypesWarning)]
+    void RegisterJsonSerializationType([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type type);
 
     /// <summary>
     /// Creates a new <see cref="ClickHouseConnection"/> that uses this client's HTTP connection pool.

@@ -2,6 +2,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -209,21 +210,23 @@ public sealed class ClickHouseClient : IClickHouseClient
     }
 
     /// <inheritdoc />
-    public void RegisterJsonSerializationType<T>()
+    [RequiresUnreferencedCode(JsonTypeRegistry.NestedTypesWarning)]
+    public void RegisterJsonSerializationType<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>()
         where T : class
         => jsonTypeRegistry.RegisterType<T>();
 
     /// <inheritdoc />
-    public void RegisterJsonSerializationType(Type type)
+    [RequiresUnreferencedCode(JsonTypeRegistry.NestedTypesWarning)]
+    public void RegisterJsonSerializationType([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type type)
         => jsonTypeRegistry.RegisterType(type);
 
     /// <inheritdoc />
-    public void RegisterBinaryInsertType<T>()
+    public void RegisterBinaryInsertType<[DynamicallyAccessedMembers(PocoMembers.Insert)] T>()
         where T : class
         => pocoTypeRegistry.RegisterForInsert<T>(GetLogger(ClickHouseLogCategories.Client));
 
     /// <inheritdoc />
-    public void RegisterPocoType<T>()
+    public void RegisterPocoType<[DynamicallyAccessedMembers(PocoMembers.Read)] T>()
         where T : class
         => pocoTypeRegistry.RegisterForBoth<T>(GetLogger(ClickHouseLogCategories.Client));
 

@@ -174,6 +174,20 @@ public class TupleTypeTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public void MakeTuple_EachSystemTupleArity_ReturnsTypedTupleWithValues([Range(1, 7)] int count)
+    {
+        var elements = string.Join(", ", Enumerable.Repeat("Int32", count));
+        var tupleType = (TupleType)TypeConverter.ParseClickHouseType($"Tuple({elements})", TypeSettings.Default);
+        var tuple = tupleType.MakeTuple(Enumerable.Range(1, count).Cast<object>().ToArray());
+        Assert.Multiple(() =>
+        {
+            Assert.That(tuple.GetType(), Is.EqualTo(tupleType.FrameworkType));
+            Assert.That(tuple.GetType().FullName, Does.StartWith($"System.Tuple`{count}["));
+            Assert.That(AsEnumerable(tuple), Is.EqualTo(Enumerable.Range(1, count)).AsCollection);
+        });
+    }
+
+    [Test]
     public void ParseClickHouseType_EmptyTuple_ReturnsTupleWithoutUnderlyingTypes()
     {
         var type = TypeConverter.ParseClickHouseType("Tuple()", TypeSettings.Default);

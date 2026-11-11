@@ -23,7 +23,7 @@ internal class ArrayType : ParameterizedType
 
     public ClickHouseType UnderlyingType { get; set; }
 
-    public override Type FrameworkType => UnderlyingType.FrameworkType.MakeArrayType();
+    public override Type FrameworkType => ClrTypes.MakeArrayType(UnderlyingType.FrameworkType);
 
     public override string Name => "Array";
 
@@ -51,7 +51,7 @@ internal class ArrayType : ParameterizedType
             return typedReader(UnderlyingType, reader, length);
 
         // Fallback: reflection-based read for element types without a typed reader.
-        var data = Array.CreateInstance(elementType, length);
+        var data = ClrTypes.CreateArray(elementType, length);
         for (var i = 0; i < length; i++)
         {
             data.SetValue(ClearDBNull(UnderlyingType.Read(reader)), i);

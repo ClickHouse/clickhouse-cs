@@ -7,7 +7,6 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
 using System.Text;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Json;
@@ -355,7 +354,7 @@ internal class JsonType : ParameterizedType
         {
             string s => s,
             JsonNode node => node.ToJsonString(),
-            _ => JsonSerializer.Serialize(value) // POCO
+            _ => ReflectionJson.Serialize(value) // POCO
         };
 
         writer.Write(jsonString);
@@ -570,7 +569,7 @@ internal class JsonType : ParameterizedType
             IPAddress ip => JsonValue.Create(ip.ToString()),
             ClickHouseDecimal chDec => JsonValue.Create(chDec.ToString(CultureInfo.InvariantCulture)),
             // Default: try JsonSerializer for complex types
-            _ => JsonValue.Create(JsonSerializer.SerializeToElement(value))
+            _ => JsonValue.Create(ReflectionJson.SerializeToElement(value))
         };
     }
 

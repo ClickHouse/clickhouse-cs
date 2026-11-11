@@ -2,8 +2,10 @@
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
-using System.Linq.Expressions;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
 
@@ -11,22 +13,24 @@ namespace ClickHouse.Driver.Types;
 
 internal class MapType : ParameterizedType
 {
-    // Process-wide so each map shape is compiled once, even though the Dynamic read path
+    // Process-wide so each map shape is built once, even though the Dynamic read path
     // creates a fresh MapType per value.
-    private static readonly ConcurrentDictionary<Type, Func<int, IDictionary>> DictionaryFactoryCache = new();
-    private static readonly ConcurrentDictionary<Type, Func<int, IList>> ListFactoryCache = new();
-    private static readonly ConcurrentDictionary<Type, Func<object, object, object>> PairFactoryCache = new();
+    private static readonly ConcurrentDictionary<(Type Key, Type Value), MapShape> ShapeCache = new();
     private static readonly ConcurrentDictionary<Type, (Func<object, object> Key, Func<object, object> Value)> PairAccessorCache = new();
     private static readonly ConcurrentDictionary<Type, (Type Key, Type Value)[]> EntryTypesCache = new();
+
+    private static readonly MethodInfo BuildShapeMethod =
+        typeof(MapType).GetMethod(nameof(BuildShape), BindingFlags.NonPublic | BindingFlags.Static);
+
+    private static readonly MethodInfo BuildPairAccessorsMethod =
+        typeof(MapType).GetMethod(nameof(BuildPairAccessors), BindingFlags.NonPublic | BindingFlags.Static);
 
     private readonly MapReadMode readMode;
     private Type frameworkType;
     private (Type Key, Type Value) entryTypes;
     private ClickHouseType keyType;
     private ClickHouseType valueType;
-    private Func<int, IDictionary> dictionaryFactory;
-    private Func<int, IList> listFactory;
-    private Func<object, object, object> pairFactory;
+    private MapShape shape;
 
     public MapType()
         : this(MapReadMode.Dictionary)
@@ -44,73 +48,78 @@ internal class MapType : ParameterizedType
             keyType = value.Item1;
             valueType = value.Item2;
 
-            // Wrapper types (Array, Nullable) rebuild their FrameworkType reflectively per access,
+            // Wrapper types (Array, Nullable) rebuild their FrameworkType per access,
             // and CanWrite is called per value written, so resolve the pair once
             entryTypes = (keyType.FrameworkType, valueType.FrameworkType);
-
-            if (readMode == MapReadMode.KeyValuePairs)
-            {
-                var pairType = typeof(KeyValuePair<,>).MakeGenericType([entryTypes.Key, entryTypes.Value]);
-                frameworkType = typeof(List<>).MakeGenericType(pairType);
-                listFactory = ListFactoryCache.GetOrAdd(frameworkType, static type => BuildListFactory(type));
-                pairFactory = PairFactoryCache.GetOrAdd(pairType, static type => BuildPairFactory(type));
-            }
-            else
-            {
-                var genericType = typeof(Dictionary<,>);
-                frameworkType = genericType.MakeGenericType([entryTypes.Key, entryTypes.Value]);
-                dictionaryFactory = DictionaryFactoryCache.GetOrAdd(frameworkType, static type => BuildDictionaryFactory(type));
-            }
+            shape = ShapeCache.GetOrAdd(entryTypes, static types => GetShape(types.Key, types.Value, RuntimeFeature.IsDynamicCodeSupported));
+            frameworkType = readMode == MapReadMode.KeyValuePairs ? shape.ListType : shape.DictionaryType;
         }
     }
 
+    /// <summary>
+    /// Gets the CLR representation of a map whose key and value have the given framework types. With
+    /// dynamic code it is typed (<c>Dictionary&lt;TKey, TValue&gt;</c>). Native AOT cannot instantiate a
+    /// generic type over a value type it did not compile ahead of time, so there it is typed only for the
+    /// shapes listed below, and otherwise holds <see cref="object"/> keys and values.
+    /// </summary>
+    /// <param name="key">The key's framework type.</param>
+    /// <param name="value">The value's framework type.</param>
+    /// <param name="dynamicCode"><see cref="RuntimeFeature.IsDynamicCodeSupported"/>, a parameter so tests can pass false.</param>
+    internal static MapShape GetShape(Type key, Type value, bool dynamicCode)
+    {
+        if (dynamicCode)
+            return BuildTypedShape(key, value);
+
+        if (key == typeof(string) && value == typeof(string))
+            return BuildShape<string, string>();
+
+        return BuildShape<object, object>() with { IsObjectFallback = key != typeof(object) || value != typeof(object) };
+    }
+
+    [UnconditionalSuppressMessage("AotAnalysis", "IL3050", Justification = "Called only when dynamic code is supported.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2060", Justification = "The generic method's type parameters have no DynamicallyAccessedMembers requirements.")]
+    private static MapShape BuildTypedShape(Type key, Type value) =>
+        (MapShape)BuildShapeMethod.MakeGenericMethod(key, value).Invoke(null, null);
+
     // Avoids Activator.CreateInstance(Type, params object[]), which resolves the constructor
     // and boxes the capacity on every call.
-    private static Func<int, IDictionary> BuildDictionaryFactory(Type dictionaryType)
+    private static MapShape BuildShape<TKey, TValue>() => new(
+        typeof(Dictionary<TKey, TValue>),
+        static capacity => new Dictionary<TKey, TValue>(capacity),
+        typeof(List<KeyValuePair<TKey, TValue>>),
+        static capacity => new List<KeyValuePair<TKey, TValue>>(capacity),
+        static (key, value) => new KeyValuePair<TKey, TValue>((TKey)key, (TValue)value));
+
+    internal static (Func<object, object> Key, Func<object, object> Value) GetPairAccessors(Type pairType, bool dynamicCode)
     {
-        var constructor = dictionaryType.GetConstructor([typeof(int)])
-            ?? throw new InvalidOperationException($"{dictionaryType} has no constructor taking a capacity");
-
-        var capacity = Expression.Parameter(typeof(int), "capacity");
-        var body = Expression.Convert(Expression.New(constructor, capacity), typeof(IDictionary));
-        return Expression.Lambda<Func<int, IDictionary>>(body, capacity).Compile();
-    }
-
-    private static Func<int, IList> BuildListFactory(Type listType)
-    {
-        var constructor = listType.GetConstructor([typeof(int)])
-            ?? throw new InvalidOperationException($"{listType} has no constructor taking a capacity");
-
-        var capacity = Expression.Parameter(typeof(int), "capacity");
-        var body = Expression.Convert(Expression.New(constructor, capacity), typeof(IList));
-        return Expression.Lambda<Func<int, IList>>(body, capacity).Compile();
-    }
-
-    private static Func<object, object, object> BuildPairFactory(Type pairType)
-    {
-        var arguments = pairType.GetGenericArguments();
-        var constructor = pairType.GetConstructor(arguments)
-            ?? throw new InvalidOperationException($"{pairType} has no key-value constructor");
-
-        var key = Expression.Parameter(typeof(object), "key");
-        var value = Expression.Parameter(typeof(object), "value");
-        var body = Expression.Convert(
-            Expression.New(constructor, Expression.Convert(key, arguments[0]), Expression.Convert(value, arguments[1])),
-            typeof(object));
-        return Expression.Lambda<Func<object, object, object>>(body, key, value).Compile();
-    }
-
-    private static (Func<object, object> Key, Func<object, object> Value) BuildPairAccessors(Type pairType)
-    {
-        if (!pairType.IsGenericType || pairType.GetGenericTypeDefinition() != typeof(KeyValuePair<,>))
+        if (!IsKeyValuePair(pairType))
             throw new ArgumentException($"Map entries must be KeyValuePair<,>, got {pairType}", nameof(pairType));
 
-        var pair = Expression.Parameter(typeof(object), "pair");
-        var typed = Expression.Convert(pair, pairType);
-        return (
-            Expression.Lambda<Func<object, object>>(Expression.Convert(Expression.Property(typed, "Key"), typeof(object)), pair).Compile(),
-            Expression.Lambda<Func<object, object>>(Expression.Convert(Expression.Property(typed, "Value"), typeof(object)), pair).Compile());
+        if (pairType == typeof(KeyValuePair<object, object>))
+            return BuildPairAccessors<object, object>();
+
+        if (pairType == typeof(KeyValuePair<string, string>))
+            return BuildPairAccessors<string, string>();
+
+        if (!dynamicCode)
+        {
+            throw new NotSupportedException(
+                $"Cannot read map entries of type {pairType} under native AOT. Pass the map as an IDictionary instead.");
+        }
+
+        return BuildTypedPairAccessors(pairType);
     }
+
+    [UnconditionalSuppressMessage("AotAnalysis", "IL3050", Justification = "Called only when dynamic code is supported.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2060", Justification = "The generic method's type parameters have no DynamicallyAccessedMembers requirements.")]
+    private static (Func<object, object> Key, Func<object, object> Value) BuildTypedPairAccessors(Type pairType) =>
+        ((Func<object, object> Key, Func<object, object> Value))BuildPairAccessorsMethod
+            .MakeGenericMethod(pairType.GetGenericArguments())
+            .Invoke(null, null);
+
+    private static (Func<object, object> Key, Func<object, object> Value) BuildPairAccessors<TKey, TValue>() => (
+        static pair => ((KeyValuePair<TKey, TValue>)pair).Key,
+        static pair => ((KeyValuePair<TKey, TValue>)pair).Value);
 
     public ClickHouseType KeyType => keyType;
 
@@ -136,17 +145,17 @@ internal class MapType : ParameterizedType
         // pre-allocating the result array with its length).
         if (readMode == MapReadMode.KeyValuePairs)
         {
-            var list = listFactory(length);
+            var list = shape.NewList(length);
             for (var i = 0; i < length; i++)
             {
                 var pairKey = KeyType.Read(reader);
                 var pairValue = ClearDBNull(ValueType.Read(reader));
-                list.Add(pairFactory(pairKey, pairValue));
+                list.Add(shape.NewPair(pairKey, pairValue));
             }
             return list;
         }
 
-        var dict = dictionaryFactory(length);
+        var dict = shape.NewDictionary(length);
 
         for (var i = 0; i < length; i++)
         {
@@ -241,16 +250,37 @@ internal class MapType : ParameterizedType
     /// representation <see cref="Write"/> accepts, in either <see cref="MapReadMode"/>. A
     /// dictionary and a key-value-pair sequence both enumerate as
     /// <see cref="KeyValuePair{TKey, TValue}"/>, so the entry types are what identify the map.
+    /// Under native AOT a map can read with <see cref="object"/> keys and values, so one that does also
+    /// accepts object entries that its key and value types accept.
     /// </summary>
-    public override bool CanWrite(object value) =>
-        value is not null
-        && entryTypes.Key is not null
-        && Array.IndexOf(GetEntryTypes(value.GetType()), entryTypes) >= 0;
+    public override bool CanWrite(object value)
+    {
+        if (value is null || entryTypes.Key is null)
+            return false;
+
+        var valueEntryTypes = GetEntryTypes(value.GetType());
+        if (Array.IndexOf(valueEntryTypes, entryTypes) >= 0)
+            return true;
+
+        return shape.IsObjectFallback
+            && Array.IndexOf(valueEntryTypes, (typeof(object), typeof(object))) >= 0
+            && EnumerateEntries(value).All(entry => EntryFits(keyType, entry.Key) && EntryFits(valueType, entry.Value));
+    }
+
+    private static bool EntryFits(ClickHouseType type, object value)
+    {
+        value = ClearDBNull(value);
+        if (type is NullableType nullable)
+            return value is null || nullable.UnderlyingType.CanWrite(value);
+        return value is not null && type.CanWrite(value);
+    }
 
     /// <summary>
     /// The key and value types of every <see cref="KeyValuePair{TKey, TValue}"/> sequence the type
     /// enumerates as. Empty when the type is not a map representation.
     /// </summary>
+    // The type is a value's runtime type, so its interfaces are those it is cast to and enumerated through.
+    [UnconditionalSuppressMessage("Trimming", "IL2070", Justification = "Reads the interfaces of an instantiated type.")]
     private static (Type Key, Type Value)[] GetEntryTypes(Type type) =>
         EntryTypesCache.GetOrAdd(type, static candidate => candidate
             .GetInterfaces()
@@ -285,8 +315,21 @@ internal class MapType : ParameterizedType
 
         foreach (var item in (IEnumerable)value)
         {
-            var accessors = PairAccessorCache.GetOrAdd(item.GetType(), static type => BuildPairAccessors(type));
+            var accessors = PairAccessorCache.GetOrAdd(item.GetType(), static type => GetPairAccessors(type, RuntimeFeature.IsDynamicCodeSupported));
             yield return new KeyValuePair<object, object>(accessors.Key(item), accessors.Value(item));
         }
     }
+
+#pragma warning disable SA1313 // Positional record parameters are properties
+    internal sealed record MapShape(
+        Type DictionaryType,
+        Func<int, IDictionary> NewDictionary,
+        Type ListType,
+        Func<int, IList> NewList,
+        Func<object, object, object> NewPair)
+    {
+        /// <summary>Gets a value indicating whether the shape holds objects only because the typed one could not be built.</summary>
+        public bool IsObjectFallback { get; init; }
+    }
+#pragma warning restore SA1313
 }

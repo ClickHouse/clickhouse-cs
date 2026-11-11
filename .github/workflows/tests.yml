@@ -1,6 +1,7 @@
 name: Tests
 
-# Runs the HTTP driver suite. The path filters select the HTTP driver and its test projects, the shared
+# Runs the HTTP driver suite. The path filters select the HTTP driver and its test projects (the native AOT
+# smoke test among them), the shared
 # ClickHouse.Driver.Common project, the shared build inputs, the workflows of this suite, and codecov.yml
 # (the Codecov settings for its coverage report). The shared build inputs are the files that MSBuild, the
 # SDK and NuGet read from the repository root (some do not exist yet), the analyzer settings and the
@@ -17,6 +18,7 @@ on:
       - "ClickHouse.Driver/**"
       - "ClickHouse.Driver.Tests/**"
       - "ClickHouse.Driver.IntegrationTests/**"
+      - "ClickHouse.Driver.AotSmokeTest/**"
       - "ClickHouse.Driver.Common/**"
       - "Directory.Packages.props"
       - "Directory.Build.*"
@@ -28,6 +30,7 @@ on:
       - ".github/workflows/tests.yml"
       - ".github/workflows/reusable.yml"
       - ".github/workflows/tests-integration.yml"
+      - ".github/workflows/tests-aot.yml"
       - ".github/workflows/tests-cloud.yml"
       - ".github/workflows/tests-windows.yml"
       - ".github/workflows/tests-macos.yml"
@@ -38,6 +41,7 @@ on:
       - "ClickHouse.Driver/**"
       - "ClickHouse.Driver.Tests/**"
       - "ClickHouse.Driver.IntegrationTests/**"
+      - "ClickHouse.Driver.AotSmokeTest/**"
       - "ClickHouse.Driver.Common/**"
       - "Directory.Packages.props"
       - "Directory.Build.*"
@@ -49,6 +53,7 @@ on:
       - ".github/workflows/tests.yml"
       - ".github/workflows/reusable.yml"
       - ".github/workflows/tests-integration.yml"
+      - ".github/workflows/tests-aot.yml"
       - ".github/workflows/tests-cloud.yml"
       - ".github/workflows/tests-windows.yml"
       - ".github/workflows/tests-macos.yml"
@@ -104,6 +109,12 @@ jobs:
     name: Integration
     uses: ./.github/workflows/tests-integration.yml
     secrets: inherit
+    with:
+      ref: ${{ inputs.ref }}
+
+  aot:
+    name: Native AOT
+    uses: ./.github/workflows/tests-aot.yml
     with:
       ref: ${{ inputs.ref }}
 
