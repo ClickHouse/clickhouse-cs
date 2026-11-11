@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Tests.Attributes;
@@ -160,6 +163,36 @@ public class VariantTests : AbstractConnectionTestFixture
 
         ClassicAssert.IsFalse(reader.Read());
     }
+
+    // Tuples of 8+ elements read as LargeTuple whatever their element types, as do most smaller tuples under
+    // native AOT, so the runtime type alone cannot pick the Variant member: arity and elements have to. The server
+    // orders a Variant's members by name, so the String tuple below is the first member the write path tries.
+    [TestCase("Tuple(UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8)", "(1, 2, 3, 4, 5, 6, 7, 8)")]
+    [TestCase("Tuple(UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8)", "(1, 2, 3, 4, 5, 6, 7, 8, 9)")]
+    [RequiredFeature(Feature.Variant)]
+    public async Task InsertBinaryAsync_LargeTupleIntoVariantOfTuples_SelectsTheMemberItFits(string member, string tuple)
+    {
+        var targetTable = CreateTableName();
+        const string first = "Tuple(String, String, String, String, String, String, String, String)";
+
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {targetTable} (id UInt32, val Variant({first}, {member})) ENGINE = Memory");
+
+        var value = (ITuple)await client.ExecuteScalarAsync($"SELECT {tuple}::{member}");
+        Assert.That(value, Is.InstanceOf<LargeTuple>());
+
+        await client.InsertBinaryAsync(targetTable, ["id", "val"], [new object[] { 1u, value }]);
+
+        using var reader = await connection.ExecuteReaderAsync($"SELECT val, variantType(val) FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.Multiple(() =>
+        {
+            Assert.That(reader.GetString(1).Replace(" ", string.Empty), Is.EqualTo(member.Replace(" ", string.Empty)));
+            Assert.That(Elements((ITuple)reader.GetValue(0)), Is.EqualTo(Elements(value)).AsCollection);
+        });
+    }
+
+    private static IEnumerable<object> Elements(ITuple tuple) => Enumerable.Range(0, tuple.Length).Select(i => tuple[i]);
 
     // Three-type variant: exercises the write path's O(1) lookup (VariantType builds the lookup for
     // 3+ types). IPv4 and IPv6 land in the same FrameworkType=IPAddress bucket and must still be

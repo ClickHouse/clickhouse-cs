@@ -149,17 +149,19 @@ internal class TupleType : ParameterizedType
     public override Type FrameworkType => frameworkType;
 
     /// <summary>
-    /// A Variant member is selected by <see cref="CanWrite"/>. Under native AOT a tuple of 1 to 7 elements can read
-    /// as a <see cref="LargeTuple"/>, which callers cannot construct, so such a tuple also accepts any
-    /// <see cref="ITuple"/> of its arity whose elements its element types accept, as <see cref="Write"/> does.
+    /// A Variant member is selected by <see cref="CanWrite"/>. Every tuple whose framework type is
+    /// <see cref="LargeTuple"/> (8 or more elements, and under native AOT most of 1 to 7) reads as that one type, so
+    /// the runtime type cannot tell such tuples apart: a value must also have the tuple's arity, and elements its
+    /// element types accept. Under native AOT a tuple of 1 to 7 elements also accepts any such <see cref="ITuple"/>,
+    /// since callers cannot construct a <see cref="LargeTuple"/>.
     /// </summary>
     public override bool CanWrite(object value)
     {
-        if (base.CanWrite(value))
-            return true;
+        if (frameworkType != typeof(LargeTuple))
+            return base.CanWrite(value);
 
         var count = underlyingTypes.Length;
-        if (frameworkType != typeof(LargeTuple) || count is 0 or > 7 || value is not ITuple tuple || tuple.Length != count)
+        if (value is not ITuple tuple || tuple.Length != count || (value is not LargeTuple && count is 0 or > 7))
             return false;
 
         for (var i = 0; i < count; i++)

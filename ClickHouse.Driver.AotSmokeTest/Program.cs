@@ -277,29 +277,33 @@ await checks.Run("Write Tuple and Map values into Variant columns, and write bac
         (
             Id UInt64,
             Vt Variant(String, Tuple(Int32, String)),
-            Vm Variant(String, Map(String, Int32))
+            Vm Variant(String, Map(String, Int32)),
+            -- Under native AOT both members read as LargeTuple, so arity and elements pick the member
+            Vp Variant(Tuple(Int32, String), Tuple(String, String))
         )
         ENGINE = Memory
         """);
-    string[] variantColumns = ["Id", "Vt", "Vm"];
+    string[] variantColumns = ["Id", "Vt", "Vm", "Vp"];
     await client.InsertBinaryAsync(variantTable, variantColumns,
     [
-        [1UL, Tuple.Create(1, "a"), new Dictionary<string, int> { ["k"] = 1 }],
-        [2UL, "s", "t"],
+        [1UL, Tuple.Create(1, "a"), new Dictionary<string, int> { ["k"] = 1 }, Tuple.Create("x", "y")],
+        [2UL, "s", "t", Tuple.Create(2, "z")],
     ]);
 
     // Native AOT reads these as a LargeTuple and a Dictionary<object, object>
-    using (var reader = await client.ExecuteReaderAsync($"SELECT Vt, Vm FROM {variantTable} WHERE Id = 1"))
+    using (var reader = await client.ExecuteReaderAsync($"SELECT Vt, Vm, Vp FROM {variantTable} WHERE Id = 1"))
     {
         True(reader.Read(), "no row");
-        await client.InsertBinaryAsync(variantTable, variantColumns, [[3UL, reader.GetValue(0), reader.GetValue(1)]]);
+        await client.InsertBinaryAsync(variantTable, variantColumns, [[3UL, reader.GetValue(0), reader.GetValue(1), reader.GetValue(2)]]);
     }
 
-    using var all = await client.ExecuteReaderAsync($"SELECT Id, Vt, Vm FROM {variantTable} ORDER BY Id");
+    using var all = await client.ExecuteReaderAsync($"SELECT Id, Vt, Vm, Vp, variantType(Vp) FROM {variantTable} ORDER BY Id");
     var rows = new List<string>();
     while (all.Read())
-        rows.Add($"{Show(all.GetValue(0))} {Show(all.GetValue(1))} {Show(all.GetValue(2))}");
-    Equal("1 (1, a) {k: 1};2 s t;3 (1, a) {k: 1}", string.Join(";", rows));
+        rows.Add(string.Join(" ", Enumerable.Range(0, all.FieldCount).Select(i => Show(all.GetValue(i)))));
+    Equal(
+        "1 (1, a) {k: 1} (x, y) Tuple(String, String);2 s t (2, z) Tuple(Int32, String);3 (1, a) {k: 1} (x, y) Tuple(String, String)",
+        string.Join(";", rows));
 });
 
 var jsonTable = $"aot_smoke_json_{suffix}";
