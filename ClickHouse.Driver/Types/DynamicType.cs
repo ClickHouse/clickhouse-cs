@@ -18,6 +18,10 @@ internal class DynamicType : ClickHouseType
 
     public override string ToString() => "Dynamic";
 
+    // Reached only for a Dynamic inside a composite Variant member (a map value, an array element): Write infers
+    // the type of any value it can, so a non-null value fits. ValueFit.Fits handles null.
+    public override bool CanWrite(object value) => value is not null and not DBNull;
+
     public override object Read(ExtendedBinaryReader reader) =>
         BinaryTypeDecoder.
             FromByteCode(reader, TypeSettings).

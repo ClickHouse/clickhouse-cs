@@ -126,11 +126,12 @@ public class BoxFreeReaderAccessorTests : AbstractConnectionTestFixture
     // message from this same call; only the unit test
     // (ColumnSlotTests.Create_AggregateFunctionColumn_FallsBackToBoxedWithoutEvaluatingFrameworkType) can
     // distinguish them.
-    [Test]
-    public async Task Read_AggregateFunctionColumn_OpensTheReaderAndFailsOnlyOnTheValue()
+    [TestCase("quantileState(0.5)(number)")]
+    [TestCase("[quantileState(0.5)(number)]")]
+    public async Task Read_AggregateFunctionColumn_OpensTheReaderAndFailsOnlyOnTheValue(string column)
     {
         using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
-            "SELECT quantileState(0.5)(number) AS c FROM numbers(10)");
+            $"SELECT {column} AS c FROM numbers(10)");
 
         Assert.That(reader.FieldCount, Is.EqualTo(1));
         var ex = Assert.Throws<AggregateFunctionType.AggregateFunctionException>(() => reader.Read());

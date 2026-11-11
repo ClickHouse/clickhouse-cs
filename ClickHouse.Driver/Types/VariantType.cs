@@ -40,6 +40,10 @@ internal class VariantType : ParameterizedType
         };
     }
 
+    // Reached only for a Variant inside a composite Variant member (a map value, an array element): a value fits
+    // when one of the members accepts it, as Write selects it. ValueFit.Fits handles null.
+    public override bool CanWrite(object value) => value is not null and not DBNull && UnderlyingTypes.Any(type => type.CanWrite(value));
+
     public override string ToString() => $"{Name}({string.Join(",", UnderlyingTypes.Select(t => t.ToString()))})";
 
     internal override string CacheSignature =>

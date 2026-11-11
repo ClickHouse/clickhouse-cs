@@ -216,6 +216,82 @@ public class VariantTests : AbstractConnectionTestFixture
         Assert.That(((string)written).Replace(" ", string.Empty), Is.EqualTo(member.Replace(" ", string.Empty)));
     }
 
+    private const string StringFields = "a String, b String, c String, d String, e String, f String, g String, h String";
+    private const string UInt8Fields = "a UInt8, b UInt8, c UInt8, d UInt8, e UInt8, f UInt8, g UInt8, h UInt8";
+    private const string StringTuple = "Tuple(String, String, String, String, String, String, String, String)";
+    private const string UInt8Tuple = "Tuple(UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8)";
+    private const string EightUInt8s = "(1, 2, 3, 4, 5, 6, 7, 8)";
+
+    // first, member, value literal. The server orders a Variant's members by name, so where both members could
+    // take the value, first is the member the write path tries first.
+    private static readonly object[] MembersSharingAClrType =
+    [
+        // A member whose CLR type is shared, inside an array, a tuple, a Nested, or a map's array or LowCardinality
+        // value: IPv4 and IPv6 are both IPAddress, and every 8+ element tuple is a LargeTuple.
+        new object[] { "Array(IPv4)", "Array(IPv6)", "[toIPv6('::1')]" },
+        new object[] { $"Array({StringTuple})", $"Array({UInt8Tuple})", $"[{EightUInt8s}]" },
+        new object[] { "Tuple(IPv4, UInt8)", "Tuple(IPv6, UInt8)", "(toIPv6('::1'), 1)" },
+        new object[] { $"Nested({StringFields})", $"Nested({UInt8Fields})", $"[{EightUInt8s}]" },
+        new object[] { $"Nested({UInt8Fields})", UInt8Tuple, EightUInt8s },
+        new object[] { "Map(String, Array(IPv4))", "Map(String, Array(IPv6))", "map('a', [toIPv6('::1')])" },
+        new object[] { "Map(String, LowCardinality(IPv4))", "Map(String, LowCardinality(IPv6))", "map('a', toIPv6('::1'))" },
+        new object[]
+        {
+            "Map(String, LowCardinality(Nullable(IPv4)))", "Map(String, LowCardinality(Nullable(IPv6)))", "map('a', toIPv6('::1'), 'b', NULL)",
+        },
+
+        // An element that does not identify the tuple makes every element be checked, a LowCardinality(Nullable)
+        // value type among them.
+        new object[] { "String", "Tuple(IPv4, LowCardinality(Nullable(UUID)))", "(toIPv4('1.2.3.4'), generateUUIDv4())" },
+
+        // A Variant or Dynamic value reads as object, and must still accept its values, null among them.
+        new object[] { "String", "Map(String, Dynamic)", "map('a', 1, 'b', NULL)" },
+        new object[] { "String", "Map(String, Variant(String, UInt8))", "map('a', 1, 'b', NULL)" },
+        new object[] { "String", "Array(Dynamic)", "[1, NULL]" },
+    ];
+
+    [TestCaseSource(nameof(MembersSharingAClrType))]
+    [RequiredFeature(Feature.Variant)]
+    public async Task InsertBinaryAsync_ValueIntoVariantOfMembersSharingAClrType_SelectsTheMemberItFits(
+        string first, string member, string literal)
+    {
+        var targetTable = CreateTableName();
+        var options = new QueryOptions
+        {
+            CustomSettings = new Dictionary<string, object>
+            {
+                ["allow_suspicious_low_cardinality_types"] = 1,
+                ["flatten_nested"] = 0,
+            },
+        };
+
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {targetTable} (id UInt32, val Variant({first}, {member})) ENGINE = Memory", options: options);
+
+        var value = await client.ExecuteScalarAsync($"SELECT {literal}::{member}", options: options);
+        await client.InsertBinaryAsync(targetTable, ["id", "val"], [new object[] { 1u, value }]);
+
+        var written = await client.ExecuteScalarAsync($"SELECT variantType(val) FROM {targetTable}");
+        Assert.That(((string)written).Replace(" ", string.Empty), Is.EqualTo(member.Replace(" ", string.Empty)));
+    }
+
+    // An inner array that is null is written as empty, so it fits either member; the other element picks it.
+    [Test]
+    [RequiredFeature(Feature.Variant)]
+    public async Task InsertBinaryAsync_ArrayWithANullInnerArrayIntoVariant_SelectsTheMemberItFits()
+    {
+        var targetTable = CreateTableName();
+
+        await client.ExecuteNonQueryAsync(
+            $"CREATE TABLE {targetTable} (id UInt32, val Variant(Array(Array(IPv4)), Array(Array(IPv6)))) ENGINE = Memory");
+
+        var value = new IPAddress[][] { null, [IPAddress.IPv6Loopback] };
+        await client.InsertBinaryAsync(targetTable, ["id", "val"], [new object[] { 1u, value }]);
+
+        var written = await client.ExecuteScalarAsync($"SELECT variantType(val) FROM {targetTable}");
+        Assert.That(written, Is.EqualTo("Array(Array(IPv6))"));
+    }
+
     private static IEnumerable<object> Elements(ITuple tuple) => Enumerable.Range(0, tuple.Length).Select(i => tuple[i]);
 
     // Three-type variant: exercises the write path's O(1) lookup (VariantType builds the lookup for

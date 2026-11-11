@@ -8,7 +8,6 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types.Grammar;
-using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Types;
 
@@ -32,7 +31,9 @@ internal class MapType : ParameterizedType
     private ClickHouseType keyType;
     private ClickHouseType valueType;
     private MapShape shape;
-    private bool entriesIdentifyMap;
+
+    // See EntryTypesIdentifyMap: 0 until first read, then 1 (true) or 2 (false).
+    private int entriesIdentifyMap;
 
     public MapType()
         : this(MapReadMode.Dictionary)
@@ -54,7 +55,7 @@ internal class MapType : ParameterizedType
             // and CanWrite is called per value written, so resolve the pair once
             entryTypes = (keyType.FrameworkType, valueType.FrameworkType);
             shape = ShapeCache.GetOrAdd(entryTypes, static types => GetShape(types.Key, types.Value, RuntimeFeature.IsDynamicCodeSupported));
-            entriesIdentifyMap = IdentifiedByFrameworkType(keyType) && IdentifiedByFrameworkType(valueType);
+            entriesIdentifyMap = 0;
             frameworkType = readMode == MapReadMode.KeyValuePairs ? shape.ListType : shape.DictionaryType;
         }
     }
@@ -253,7 +254,7 @@ internal class MapType : ParameterizedType
     /// representation <see cref="Write"/> accepts, in either <see cref="MapReadMode"/>. A
     /// dictionary and a key-value-pair sequence both enumerate as
     /// <see cref="KeyValuePair{TKey, TValue}"/>, so the entry types identify the map, unless the key or value
-    /// type is one whose CLR type several ClickHouse types share (see <see cref="IdentifiedByFrameworkType"/>):
+    /// type is one whose CLR type several ClickHouse types share (see <see cref="ValueFit.IdentifiedByFrameworkType"/>):
     /// then the entries also have to fit. Under native AOT a map can read with <see cref="object"/> keys and
     /// values, so one that does also accepts object entries that its key and value types accept.
     /// </summary>
@@ -264,7 +265,7 @@ internal class MapType : ParameterizedType
 
         var valueEntryTypes = GetEntryTypes(value.GetType());
         if (Array.IndexOf(valueEntryTypes, entryTypes) >= 0)
-            return entriesIdentifyMap || value is not ICollection || EntriesFit(value);
+            return EntryTypesIdentifyMap || value is not ICollection || EntriesFit(value);
 
         return shape.IsObjectFallback
             && value is ICollection
@@ -275,36 +276,29 @@ internal class MapType : ParameterizedType
     // Enumerates the value, so callers pass only a collection: Write enumerates it again afterwards, and a
     // one-shot sequence would then be empty.
     private bool EntriesFit(object value) =>
-        EnumerateEntries(value).All(entry => EntryFits(keyType, entry.Key) && EntryFits(valueType, entry.Value));
+        EnumerateEntries(value).All(entry => ValueFit.Fits(keyType, entry.Key) && ValueFit.Fits(valueType, entry.Value));
 
     /// <summary>
-    /// Whether a value's CLR type alone tells which ClickHouse type it is for, so that matching a map's entry
-    /// types is enough. It does not for IPv4 and IPv6 (both <see cref="System.Net.IPAddress"/>), a tuple that
-    /// reads as <see cref="LargeTuple"/>, an <see cref="object"/>-typed Variant or Dynamic value, a map whose
-    /// entries do not identify it either, or an array of any of these.
+    /// Whether a map's entry types alone identify this type: its key and value types are identified by their CLR
+    /// types (see <see cref="ValueFit.IdentifiedByFrameworkType"/>), and it does not read with the native AOT
+    /// <see cref="object"/> fallback.
     /// </summary>
-    private static bool IdentifiedByFrameworkType(ClickHouseType type)
-    {
-        type = TransparentWrapper.Unwrap(type);
-        if (type is NullableType nullable)
-            type = TransparentWrapper.Unwrap(nullable.UnderlyingType);
+    internal bool EntriesIdentifyMap => EntryTypesIdentifyMap && !shape.IsObjectFallback;
 
-        return type switch
+    // Computed on first use, by CanWrite only: reading a Dynamic value builds a new type per value.
+    private bool EntryTypesIdentifyMap
+    {
+        get
         {
-            IPv4Type or IPv6Type => false,
-            TupleType tuple => tuple.FrameworkType != typeof(LargeTuple),
-            MapType map => map.entriesIdentifyMap && !map.shape.IsObjectFallback,
-            ArrayType array => IdentifiedByFrameworkType(array.UnderlyingType),
-            _ => type.FrameworkType != typeof(object),
-        };
-    }
+            var state = entriesIdentifyMap;
+            if (state == 0)
+            {
+                var identified = ValueFit.IdentifiedByFrameworkType(keyType) && ValueFit.IdentifiedByFrameworkType(valueType);
+                entriesIdentifyMap = state = identified ? 1 : 2;
+            }
 
-    private static bool EntryFits(ClickHouseType type, object value)
-    {
-        value = ClearDBNull(value);
-        if (type is NullableType nullable)
-            return value is null || nullable.UnderlyingType.CanWrite(value);
-        return value is not null && type.CanWrite(value);
+            return state == 1;
+        }
     }
 
     /// <summary>

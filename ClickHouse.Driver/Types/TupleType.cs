@@ -41,6 +41,9 @@ internal class TupleType : ParameterizedType
     private ClickHouseType[] underlyingTypes;
     private Delegate tupleFactory;
 
+    // See ElementsIdentifyTuple: 0 until first read, then 1 (true) or 2 (false).
+    private int elementsIdentifyTuple;
+
     public ClickHouseType[] UnderlyingTypes
     {
         get => underlyingTypes;
@@ -48,6 +51,27 @@ internal class TupleType : ParameterizedType
         {
             underlyingTypes = value;
             (frameworkType, tupleFactory) = GetShape(underlyingTypes, RuntimeFeature.IsDynamicCodeSupported);
+            elementsIdentifyTuple = 0;
+        }
+    }
+
+    /// <summary>
+    /// Whether a tuple's runtime type alone identifies this type: it is not a <see cref="LargeTuple"/>, and its
+    /// element types are identified by theirs (see <see cref="ValueFit.IdentifiedByFrameworkType"/>).
+    /// </summary>
+    // Computed on first use, by CanWrite only: reading a Dynamic value builds a new type per value.
+    internal bool ElementsIdentifyTuple
+    {
+        get
+        {
+            var state = elementsIdentifyTuple;
+            if (state == 0)
+            {
+                var identified = frameworkType != typeof(LargeTuple) && underlyingTypes.All(ValueFit.IdentifiedByFrameworkType);
+                elementsIdentifyTuple = state = identified ? 1 : 2;
+            }
+
+            return state == 1;
         }
     }
 
@@ -149,26 +173,33 @@ internal class TupleType : ParameterizedType
     public override Type FrameworkType => frameworkType;
 
     /// <summary>
-    /// A Variant member is selected by <see cref="CanWrite"/>. Every tuple whose framework type is
-    /// <see cref="LargeTuple"/> (8 or more elements, and under native AOT most of 1 to 7) reads as that one type, so
-    /// the runtime type cannot tell such tuples apart: a value must also have the tuple's arity, and elements its
-    /// element types accept. Under native AOT a tuple of 1 to 7 elements also accepts any such <see cref="ITuple"/>,
-    /// since callers cannot construct a <see cref="LargeTuple"/>.
+    /// A Variant member is selected by <see cref="CanWrite"/>. Several tuple types can share one runtime type:
+    /// every tuple whose framework type is <see cref="LargeTuple"/> (8 or more elements, and under native AOT
+    /// most of 1 to 7) reads as that one type, and elements such as IPv4 and IPv6 share theirs. Unless the
+    /// runtime type identifies the tuple (<see cref="ElementsIdentifyTuple"/>), a value must also have the tuple's
+    /// arity, and elements its element types accept. Under native AOT a tuple of 1 to 7 elements also accepts any
+    /// such <see cref="ITuple"/>, since callers cannot construct a <see cref="LargeTuple"/>.
     /// </summary>
-    public override bool CanWrite(object value)
+    public override bool CanWrite(object value) => TupleFits(value);
+
+    // Compares with the tuple's own framework type, not FrameworkType, which NestedType overrides with its array.
+    private protected bool TupleFits(object value)
     {
         if (frameworkType != typeof(LargeTuple))
-            return base.CanWrite(value);
+            return value?.GetType() == frameworkType && (ElementsIdentifyTuple || ElementsFit((ITuple)value));
 
         var count = underlyingTypes.Length;
         if (value is not ITuple tuple || tuple.Length != count || (value is not LargeTuple && count is 0 or > 7))
             return false;
 
-        for (var i = 0; i < count; i++)
+        return ElementsFit(tuple);
+    }
+
+    private bool ElementsFit(ITuple tuple)
+    {
+        for (var i = 0; i < underlyingTypes.Length; i++)
         {
-            var element = ClearDBNull(tuple[i]);
-            var elementType = underlyingTypes[i] is NullableType nullable ? nullable.UnderlyingType : underlyingTypes[i];
-            if (element is null ? underlyingTypes[i] is not NullableType : !elementType.CanWrite(element))
+            if (!ValueFit.Fits(underlyingTypes[i], tuple[i]))
                 return false;
         }
 

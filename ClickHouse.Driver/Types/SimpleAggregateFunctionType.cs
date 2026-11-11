@@ -23,6 +23,8 @@ internal class SimpleAggregateFunctionType : ParameterizedType
         };
     }
 
+    public override bool CanWrite(object value) => UnderlyingType.CanWrite(value);
+
     public override object Read(ExtendedBinaryReader reader) => UnderlyingType.Read(reader);
 
     public override string ToString() => $"{Name}({AggregateFunction}, {UnderlyingType})";

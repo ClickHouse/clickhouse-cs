@@ -25,6 +25,8 @@ internal class LowCardinalityType : ParameterizedType
     internal override string CacheSignature =>
         ComposeCacheSignature(children => $"{Name}({children[0]})", UnderlyingType);
 
+    public override bool CanWrite(object value) => UnderlyingType.CanWrite(value);
+
     public override object Read(ExtendedBinaryReader reader) => UnderlyingType.Read(reader);
 
     public override void Write(ExtendedBinaryWriter writer, object value) => UnderlyingType.Write(writer, value);

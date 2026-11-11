@@ -27,6 +27,9 @@ internal class NullableType : ParameterizedType
         };
     }
 
+    // Reached only for a Nullable inside a composite Variant member: a Variant cannot hold a Nullable itself.
+    public override bool CanWrite(object value) => value is null or DBNull || UnderlyingType.CanWrite(value);
+
     public override object Read(ExtendedBinaryReader reader) => reader.ReadByte() > 0 ? DBNull.Value : UnderlyingType.Read(reader);
 
     public override string ToString() => $"{Name}({UnderlyingType})";
