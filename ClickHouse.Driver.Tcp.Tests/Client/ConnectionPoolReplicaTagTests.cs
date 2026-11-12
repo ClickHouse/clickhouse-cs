@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Client;
@@ -171,23 +172,29 @@ public class ConnectionPoolReplicaTagTests
         Assert.That(factory.CreateCount, Is.EqualTo(1));
     }
 
-    [TestCase(ClickHouseTcpPoolReusePolicy.Lifo, 1)]
-    [TestCase(ClickHouseTcpPoolReusePolicy.Fifo, 0)]
-    public async Task RentAsync_SeveralIdleConnectionsWithTheTag_FollowsTheReusePolicyAmongThem(
+    // LIFO looks at the most recently returned connection first and FIFO at the least recently returned one, so each
+    // case returns the connection with the other tag where its policy looks first, and the scan has to skip it.
+    [TestCase(ClickHouseTcpPoolReusePolicy.Lifo, new[] { "a", "a", "b" }, 1)]
+    [TestCase(ClickHouseTcpPoolReusePolicy.Fifo, new[] { "b", "a", "a" }, 0)]
+    public async Task RentAsync_AnotherTagWhereThePolicyLooksFirst_SkipsItAndFollowsThePolicyAmongTheTag(
         ClickHouseTcpPoolReusePolicy policy,
+        string[] returnOrder,
         int expected)
     {
         var factory = new FakeConnectionFactory();
         await using var pool = new ConnectionPool(Options(reusePolicy: policy), factory, new ControlledTimeProvider());
 
-        // Idle order: a0, b, a1 — a connection with another tag between the two, so the scan has to skip it.
-        IConnectionLease a0 = await pool.RentAsync("a", None);
-        IConnectionLease b = await pool.RentAsync("b", None);
-        IConnectionLease a1 = await pool.RentAsync("a", None);
-        ClickHouseTcpConnection[] tagged = [a0.Connection, a1.Connection];
-        await a0.DisposeAsync();
-        await b.DisposeAsync();
-        await a1.DisposeAsync();
+        var leases = new IConnectionLease[returnOrder.Length];
+        for (int i = 0; i < returnOrder.Length; i++)
+        {
+            leases[i] = await pool.RentAsync(returnOrder[i], None);
+        }
+
+        ClickHouseTcpConnection[] tagged = leases.Where(lease => lease.ReplicaTag == "a").Select(lease => lease.Connection).ToArray();
+        foreach (IConnectionLease lease in leases)
+        {
+            await lease.DisposeAsync();
+        }
 
         await using IConnectionLease next = await pool.RentAsync("a", None);
 

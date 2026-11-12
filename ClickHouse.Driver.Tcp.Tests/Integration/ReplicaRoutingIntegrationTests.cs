@@ -122,6 +122,36 @@ public class ReplicaRoutingIntegrationTests
         Assert.That(ConnectionThatSent(queryId).ServerName, Is.EqualTo(Sticky("fromcs")));
     }
 
+    [Test]
+    public async Task ExecuteScalarAsync_WithAReplicaTag_LogsTheTagWhenItOpensTheConnection()
+    {
+        using var logging = new CapturingLoggerFactory();
+        await using var client = new ClickHouseTcpClient(ProxyOptions() with { LoggerFactory = logging });
+
+        await client.ExecuteScalarAsync("SELECT 1", new ClickHouseTcpQueryOptions { ReplicaTag = "logged" }, None);
+
+        CapturingLogger log = logging.Logger(ClickHouseTcpDiagnostics.ConnectionLogCategory);
+        Assert.Multiple(() =>
+        {
+            Assert.That(log.WithEventId(2004).Single().Message, Does.Contain("with replica tag logged"));
+            Assert.That(log.WithEventId(2000), Is.Empty, "a tagged dial is announced by its own event");
+        });
+    }
+
+    [Test]
+    public async Task DataSourceOpenSessionAsync_WithAReplicaTag_PinsAConnectionThatSentTheStickyName()
+    {
+        await using var dataSource = new ClickHouseTcpDataSource(ProxyOptions());
+        await using IClickHouseTcpSession session = await dataSource.OpenSessionAsync(
+            new ClickHouseTcpSessionOptions { ReplicaTag = "ds" },
+            None);
+        string queryId = NewQueryId();
+
+        await session.ExecuteScalarAsync("SELECT 1", new ClickHouseTcpQueryOptions { QueryId = queryId }, None);
+
+        Assert.That(ConnectionThatSent(queryId).ServerName, Is.EqualTo(Sticky("ds")));
+    }
+
     [TestCase(InsertPath.Columns)]
     [TestCase(InsertPath.Rows)]
     [TestCase(InsertPath.Poco)]
@@ -236,15 +266,17 @@ public class ReplicaRoutingIntegrationTests
     }
 
     private ClickHouseTcpClient CreateClient(string replicaTag = null)
-        => new(TcpServerFixture.Options() with
+        => new(ProxyOptions() with { ReplicaTag = replicaTag });
+
+    private ClickHouseTcpClientOptions ProxyOptions()
+        => TcpServerFixture.Options() with
         {
             Host = "127.0.0.1",
             Port = proxy.Port,
             UseTls = true,
             TlsServerName = CertificateName,
             TlsCaCertificatePath = authorityPath,
-            ReplicaTag = replicaTag,
-        });
+        };
 
     private sealed class IdRow
     {
