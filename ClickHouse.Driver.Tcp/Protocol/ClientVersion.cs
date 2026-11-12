@@ -15,7 +15,8 @@ namespace ClickHouse.Driver.Tcp.Protocol;
 internal static class ClientVersion
 {
     /// <summary>The version reported when the build carries no usable one.</summary>
-    internal static readonly (int Major, int Minor, int Patch) Fallback = (1, 0, 0);
+    /// <remarks>A property rather than a field, so <see cref="Current"/> can read it whatever the field order.</remarks>
+    internal static (int Major, int Minor, int Patch) Fallback => (1, 0, 0);
 
     /// <summary>The version of this build, read once from its informational version.</summary>
     internal static (int Major, int Minor, int Patch) Current { get; } = Parse(

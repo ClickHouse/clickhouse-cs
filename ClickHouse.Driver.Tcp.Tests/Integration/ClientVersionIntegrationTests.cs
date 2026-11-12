@@ -44,8 +44,13 @@ public class ClientVersionIntegrationTests
         }
 
         await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
+
+        // The server's own plaintext native port, which is not the port the suite dialled when a proxy or TLS is in
+        // between.
+        object port = await client.ExecuteScalarAsync("SELECT tcpPort()", cancellationToken: None);
         var parameters = new ClickHouseTcpParameterCollection
         {
+            new ClickHouseTcpParameter("address", $"localhost:{port}"),
             new ClickHouseTcpParameter("user", TcpServerFixture.Username),
             new ClickHouseTcpParameter("password", TcpServerFixture.Password),
         };
@@ -53,7 +58,7 @@ public class ClientVersionIntegrationTests
         // prefer_localhost_replica = 0 makes the server open a connection to itself instead of reading locally, so
         // the query takes the same path as a query to another replica.
         object rows = await client.ExecuteScalarAsync(
-            "SELECT count() FROM remote('localhost:9000', system.one, {user:String}, {password:String}) SETTINGS prefer_localhost_replica = 0",
+            "SELECT count() FROM remote({address:String}, system.one, {user:String}, {password:String}) SETTINGS prefer_localhost_replica = 0",
             new ClickHouseTcpQueryOptions { Parameters = parameters },
             None);
 
