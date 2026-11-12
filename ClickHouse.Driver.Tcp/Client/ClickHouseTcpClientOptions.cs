@@ -148,6 +148,27 @@ public sealed record ClickHouseTcpClientOptions
     /// </remarks>
     public Action<SslClientAuthenticationOptions> ConfigureTls { get; init; }
 
+    /// <summary>
+    /// The default replica tag for ClickHouse Cloud replica-aware routing, or null (the default) for normal load
+    /// balancing. Connections with the same tag go to the same replica while the number of replicas does not change.
+    /// A per-query <see cref="ClickHouseTcpQueryOptions.ReplicaTag"/> or a session's
+    /// <see cref="ClickHouseTcpSessionOptions.ReplicaTag"/> overrides it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The client sends the tag in the TLS server name (SNI) as <c>&lt;tag&gt;.sticky.&lt;host&gt;</c>, where the host
+    /// is <see cref="TlsServerName"/> or <see cref="Host"/>, and still connects to <see cref="Host"/>. It checks the
+    /// server certificate against the normal host name. This needs <see cref="UseTls"/>, and the service must have
+    /// replica-aware routing for the native protocol turned on. Routing is best effort: when the number of replicas
+    /// changes, a tag can move to another replica.
+    /// </para>
+    /// <para>
+    /// A tag is one DNS label: 1 to 63 characters from A-Z, a-z, 0-9 and '-', not starting or ending with '-'.
+    /// Other values are refused. An empty string means no tag.
+    /// </para>
+    /// </remarks>
+    public string ReplicaTag { get; init; }
+
     /// <summary>The default database for queries. Defaults to <c>default</c>.</summary>
     public string Database { get; init; } = DefaultDatabase;
 
@@ -459,6 +480,8 @@ public sealed record ClickHouseTcpClientOptions
                 $"{nameof(TlsAllowInvalidCertificates)} and {nameof(TlsCaCertificatePath)} cannot both be set: with certificate validation off the authority is never consulted.",
                 nameof(TlsCaCertificatePath));
         }
+
+        ReplicaRouting.Validate(ReplicaTag, this, nameof(ReplicaTag));
 
         RequireUsableTimeout(DialTimeout, nameof(DialTimeout));
 

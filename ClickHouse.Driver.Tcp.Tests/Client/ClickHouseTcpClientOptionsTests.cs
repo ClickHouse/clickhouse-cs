@@ -24,6 +24,7 @@ public class ClickHouseTcpClientOptionsTests
             Assert.That(options.TlsAllowInvalidCertificates, Is.False);
             Assert.That(options.TlsCaCertificatePath, Is.Null);
             Assert.That(options.ConfigureTls, Is.Null);
+            Assert.That(options.ReplicaTag, Is.Null, "no replica tag, so Cloud uses normal load balancing");
             Assert.That(options.Password, Is.EqualTo(string.Empty));
             Assert.That(options.Database, Is.EqualTo("default"));
             Assert.That(options.DialTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
@@ -210,7 +211,7 @@ public class ClickHouseTcpClientOptionsTests
         Assert.DoesNotThrow(() => new ClickHouseTcpClientOptions { TlsServerName = string.Empty }.Validate());
     }
 
-    // Named per case: ToString prints none of the four properties, so without SetName all four report under one
+    // Named per case: ToString prints none of these properties, so without SetName they all report under one
     // display name and a failure would not say which property regressed.
     private static readonly TestCaseData[] TlsPropertiesWithoutUseTls =
     [
@@ -222,6 +223,8 @@ public class ClickHouseTcpClientOptionsTests
             .SetName($"{{m}}({nameof(ClickHouseTcpClientOptions.TlsCaCertificatePath)})"),
         new TestCaseData(new ClickHouseTcpClientOptions { ConfigureTls = _ => { } })
             .SetName($"{{m}}({nameof(ClickHouseTcpClientOptions.ConfigureTls)})"),
+        new TestCaseData(new ClickHouseTcpClientOptions { Host = "service.example", ReplicaTag = "etl" })
+            .SetName($"{{m}}({nameof(ClickHouseTcpClientOptions.ReplicaTag)})"),
     ];
 
     [TestCaseSource(nameof(TlsPropertiesWithoutUseTls))]
@@ -471,6 +474,7 @@ public class ClickHouseTcpClientOptionsTests
             TlsAllowInvalidCertificates = true,
             TlsCaCertificatePath = "copy-ca.pem",
             ConfigureTls = _ => { },
+            ReplicaTag = "copy-tag",
             CustomSettings = new Dictionary<string, string> { ["max_threads"] = "4" },
             MaxSendBufferBytes = 4096,
             DialTimeout = TimeSpan.FromSeconds(3),

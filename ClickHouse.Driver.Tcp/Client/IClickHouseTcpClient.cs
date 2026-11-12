@@ -36,4 +36,24 @@ public interface IClickHouseTcpClient : IClickHouseTcpOperations
     /// <see cref="ClickHouseTcpClientOptions.PoolTimeout"/>.</exception>
     /// <exception cref="System.ObjectDisposedException">The client has been disposed.</exception>
     ValueTask<IClickHouseTcpSession> OpenSessionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reserves one pooled connection for a session, with the given session options. Set
+    /// <see cref="ClickHouseTcpSessionOptions.ReplicaTag"/> to open the session against one replica.
+    /// </summary>
+    /// <remarks>
+    /// Otherwise the same as <see cref="OpenSessionAsync(CancellationToken)"/>. With a replica tag, the session gets an
+    /// idle connection that was opened with that tag, or a new one.
+    /// </remarks>
+    /// <param name="options">The session options, or null for the client defaults.</param>
+    /// <param name="cancellationToken">A token to observe while waiting for and establishing the connection.</param>
+    /// <returns>A session pinned to one connection.</returns>
+    /// <exception cref="System.ArgumentException">The replica tag is not valid for this client (see
+    /// <see cref="ClickHouseTcpClientOptions.ReplicaTag"/>).</exception>
+    /// <exception cref="System.TimeoutException">No connection became available within
+    /// <see cref="ClickHouseTcpClientOptions.PoolTimeout"/>.</exception>
+    /// <exception cref="System.ObjectDisposedException">The client has been disposed.</exception>
+    ValueTask<IClickHouseTcpSession> OpenSessionAsync(
+        ClickHouseTcpSessionOptions options,
+        CancellationToken cancellationToken = default);
 }

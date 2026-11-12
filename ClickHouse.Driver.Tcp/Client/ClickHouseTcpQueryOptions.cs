@@ -59,4 +59,23 @@ public record ClickHouseTcpQueryOptions
     /// connection. See <see cref="ClickHouseTcpQueryCallbacks"/> for the full contract.
     /// </remarks>
     public ClickHouseTcpQueryCallbacks Callbacks { get; init; }
+
+    /// <summary>
+    /// The replica tag for this operation, for ClickHouse Cloud replica-aware routing. Null or empty uses
+    /// <see cref="ClickHouseTcpClientOptions.ReplicaTag"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The tag is sent when a connection opens, so the operation runs on a pooled connection that was opened with
+    /// this tag, or on a new one. The pool keeps connections with different tags apart, under one
+    /// <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>. When the pool is full, an idle connection with another
+    /// tag is closed to make room.
+    /// </para>
+    /// <para>
+    /// In a session the connection is already open. A session accepts a tag equal to its own and refuses a different
+    /// one with <see cref="InvalidOperationException"/>. See <see cref="ClickHouseTcpClientOptions.ReplicaTag"/> for
+    /// the rules a tag must follow.
+    /// </para>
+    /// </remarks>
+    public string ReplicaTag { get; init; }
 }

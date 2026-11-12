@@ -15,6 +15,14 @@ internal static partial class ConnectionLog
         Message = "Connecting to {Host}:{Port} as {Username} (TLS {Tls})")]
     public static partial void Opening(ILogger logger, string host, int port, string username, bool tls);
 
+    // A separate event rather than an extra field on 2000, so a connection with no tag logs exactly what it did.
+    // TLS is not a field here: a tag is refused without it.
+    [LoggerMessage(
+        EventId = 2004,
+        Level = LogLevel.Debug,
+        Message = "Connecting to {Host}:{Port} as {Username} (TLS True) with replica tag {ReplicaTag}")]
+    public static partial void OpeningWithReplicaTag(ILogger logger, string host, int port, string username, string replicaTag);
+
     // Both revisions, because they differ whenever the client and the server are not the same age, and only the
     // negotiated one governs which features the connection has.
     [LoggerMessage(

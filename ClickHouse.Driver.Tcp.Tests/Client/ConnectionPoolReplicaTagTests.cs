@@ -1,0 +1,306 @@
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Client;
+using ClickHouse.Driver.Tcp.Protocol;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
+
+namespace ClickHouse.Driver.Tcp.Tests.Client;
+
+// How the pool and a session handle replica tags, over connections that need no server. That a tagged connection
+// really sends the sticky TLS server name is covered by TlsParametersTests and ReplicaRoutingIntegrationTests.
+[TestFixture]
+public class ConnectionPoolReplicaTagTests
+{
+    private static readonly CancellationToken None = CancellationToken.None;
+
+    // A tag needs TLS and a DNS host name. The fake factory opens no socket, so neither is used beyond validation.
+    private static ClickHouseTcpClientOptions Options(
+        int maxPoolSize = 4,
+        string replicaTag = null,
+        ClickHouseTcpPoolReusePolicy reusePolicy = ClickHouseTcpPoolReusePolicy.Lifo)
+        => new()
+        {
+            Host = "service.example",
+            UseTls = true,
+            MaxPoolSize = maxPoolSize,
+            ReplicaTag = replicaTag,
+            PoolReusePolicy = reusePolicy,
+        };
+
+    [Test]
+    public async Task RentAsync_SameTagAfterReturn_ReusesThatConnection()
+    {
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(Options(), factory, new ControlledTimeProvider());
+
+        ClickHouseTcpConnection first;
+        await using (IConnectionLease lease = await pool.RentAsync("a", None))
+        {
+            first = lease.Connection;
+        }
+
+        await using IConnectionLease second = await pool.RentAsync("a", None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.Connection, Is.SameAs(first));
+            Assert.That(second.ReplicaTag, Is.EqualTo("a"));
+            Assert.That(factory.CreatedTags, Is.EqualTo(new[] { "a" }));
+        });
+    }
+
+    [Test]
+    public async Task RentAsync_AnotherTagWhileAConnectionIsIdle_OpensAConnectionWithTheOtherTag()
+    {
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(Options(), factory, new ControlledTimeProvider());
+
+        ClickHouseTcpConnection tagged;
+        await using (IConnectionLease lease = await pool.RentAsync("a", None))
+        {
+            tagged = lease.Connection;
+        }
+
+        await using IConnectionLease other = await pool.RentAsync("b", None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(other.Connection, Is.Not.SameAs(tagged));
+            Assert.That(other.ReplicaTag, Is.EqualTo("b"));
+            Assert.That(factory.CreatedTags, Is.EqualTo(new[] { "a", "b" }));
+            Assert.That(pool.IdleCount, Is.EqualTo(1), "the connection with tag 'a' stays pooled for its own tag");
+            Assert.That(tagged.State, Is.EqualTo(TcpConnectionState.Ready));
+        });
+    }
+
+    [Test]
+    public async Task RentAsync_NoTagAndNoDefault_DoesNotReuseATaggedConnection()
+    {
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(Options(), factory, new ControlledTimeProvider());
+
+        await using (await pool.RentAsync("a", None))
+        {
+        }
+
+        await using IConnectionLease untagged = await pool.RentAsync(replicaTag: null, None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(untagged.ReplicaTag, Is.Null);
+            Assert.That(factory.CreatedTags, Is.EqualTo(new[] { "a", null }));
+        });
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    public async Task RentAsync_NoTagWithAClientDefault_UsesTheDefaultTag(string tag)
+    {
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(Options(replicaTag: "dflt"), factory, new ControlledTimeProvider());
+
+        ClickHouseTcpConnection first;
+        await using (IConnectionLease lease = await pool.RentAsync(tag, None))
+        {
+            first = lease.Connection;
+        }
+
+        // Naming the default explicitly is the same tag, so it reuses the connection.
+        await using IConnectionLease named = await pool.RentAsync("dflt", None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(named.Connection, Is.SameAs(first));
+            Assert.That(factory.CreatedTags, Is.EqualTo(new[] { "dflt" }));
+        });
+    }
+
+    [Test]
+    public async Task RentAsync_PoolFullOfIdleConnectionsWithOtherTags_ClosesTheLongestIdleToStayWithinMaxPoolSize()
+    {
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(Options(maxPoolSize: 2), factory, new ControlledTimeProvider());
+
+        IConnectionLease a = await pool.RentAsync("a", None);
+        IConnectionLease b = await pool.RentAsync("b", None);
+        await a.DisposeAsync();
+        await b.DisposeAsync();
+
+        await using IConnectionLease c = await pool.RentAsync("c", None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(factory.CreatedTags, Is.EqualTo(new[] { "a", "b", "c" }));
+            Assert.That(factory.Created[0].State, Is.EqualTo(TcpConnectionState.Terminated), "'a' was idle longest, so it is closed");
+            Assert.That(factory.Created[1].State, Is.EqualTo(TcpConnectionState.Ready), "one closed connection makes room");
+            Assert.That(pool.IdleCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task RentAsync_RoomUnderMaxPoolSize_KeepsIdleConnectionsWithOtherTags()
+    {
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(Options(maxPoolSize: 2), factory, new ControlledTimeProvider());
+
+        await using (await pool.RentAsync("a", None))
+        {
+        }
+
+        await using IConnectionLease b = await pool.RentAsync("b", None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(factory.Created[0].State, Is.EqualTo(TcpConnectionState.Ready));
+            Assert.That(pool.IdleCount, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task RentAsync_EveryConnectionLeasedWithAnotherTag_WaitsForAPermitRatherThanOpeningPastTheCap()
+    {
+        // Eviction only reaches idle connections. A full pool of leased ones still queues the caller.
+        var factory = new FakeConnectionFactory();
+        ClickHouseTcpClientOptions options = Options(maxPoolSize: 1) with { PoolTimeout = TimeSpan.FromMilliseconds(50) };
+        await using var pool = new ConnectionPool(options, factory, new ControlledTimeProvider());
+
+        await using IConnectionLease a = await pool.RentAsync("a", None);
+
+        Assert.ThrowsAsync<TimeoutException>(async () => await pool.RentAsync("b", None));
+        Assert.That(factory.CreateCount, Is.EqualTo(1));
+    }
+
+    [TestCase(ClickHouseTcpPoolReusePolicy.Lifo, 1)]
+    [TestCase(ClickHouseTcpPoolReusePolicy.Fifo, 0)]
+    public async Task RentAsync_SeveralIdleConnectionsWithTheTag_FollowsTheReusePolicyAmongThem(
+        ClickHouseTcpPoolReusePolicy policy,
+        int expected)
+    {
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(Options(reusePolicy: policy), factory, new ControlledTimeProvider());
+
+        // Idle order: a0, b, a1 — a connection with another tag between the two, so the scan has to skip it.
+        IConnectionLease a0 = await pool.RentAsync("a", None);
+        IConnectionLease b = await pool.RentAsync("b", None);
+        IConnectionLease a1 = await pool.RentAsync("a", None);
+        ClickHouseTcpConnection[] tagged = [a0.Connection, a1.Connection];
+        await a0.DisposeAsync();
+        await b.DisposeAsync();
+        await a1.DisposeAsync();
+
+        await using IConnectionLease next = await pool.RentAsync("a", None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(next.Connection, Is.SameAs(tagged[expected]));
+            Assert.That(factory.CreateCount, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public async Task Sweep_TopsUpToTheFloor_WithTheClientDefaultTag()
+    {
+        var factory = new FakeConnectionFactory();
+        ClickHouseTcpClientOptions options = Options(replicaTag: "dflt") with { MinPoolSize = 1 };
+        await using var pool = new ConnectionPool(options, factory, new ControlledTimeProvider());
+
+        pool.Sweep();
+        await (pool.LastRefill ?? Task.CompletedTask);
+
+        await using IConnectionLease lease = await pool.RentAsync(replicaTag: null, None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(factory.CreatedTags, Is.EqualTo(new[] { "dflt" }), "the checkout reuses the top-up's connection");
+            Assert.That(lease.ReplicaTag, Is.EqualTo("dflt"));
+        });
+    }
+
+    [Test]
+    public async Task RentAsync_InvalidTag_ThrowsArgumentExceptionAndKeepsTheSlot()
+    {
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(Options(maxPoolSize: 1), factory, new ControlledTimeProvider());
+
+        var thrown = Assert.ThrowsAsync<ArgumentException>(async () => await pool.RentAsync("not a label", None));
+
+        // Refused before a permit is taken, so the only slot is still free.
+        await using IConnectionLease lease = await pool.RentAsync(replicaTag: null, None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.ParamName, Is.EqualTo(nameof(ClickHouseTcpQueryOptions.ReplicaTag)));
+            Assert.That(factory.CreatedTags, Is.EqualTo(new string[] { null }));
+        });
+    }
+
+    [Test]
+    public async Task RentAsync_TagOnAClientWithoutTls_ThrowsArgumentException()
+    {
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(new ClickHouseTcpClientOptions(), factory, new ControlledTimeProvider());
+
+        var thrown = Assert.ThrowsAsync<ArgumentException>(async () => await pool.RentAsync("a", None));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain(nameof(ClickHouseTcpClientOptions.UseTls)));
+            Assert.That(factory.CreateCount, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task OpenSessionAsync_WithATag_PinsAConnectionOpenedWithThatTag()
+    {
+        var factory = new FakeConnectionFactory();
+        ClickHouseTcpClientOptions options = Options(replicaTag: "dflt");
+        await using var client = new ClickHouseTcpClient(new ConnectionPool(options, factory, new ControlledTimeProvider()), options);
+
+        await using (await client.OpenSessionAsync(new ClickHouseTcpSessionOptions { ReplicaTag = "user-42" }))
+        {
+        }
+
+        await using (await client.OpenSessionAsync())
+        {
+        }
+
+        Assert.That(factory.CreatedTags, Is.EqualTo(new[] { "user-42", "dflt" }), "a session without a tag takes the client default");
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("a")]
+    public async Task PinnedRentAsync_NoTagOrTheSessionsTag_LendsTheConnection(string tag)
+    {
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(Options(), factory, new ControlledTimeProvider());
+        await using var pinned = new PinnedConnectionSource(await pool.RentAsync("a", None));
+
+        await using IConnectionLease lease = await pinned.RentAsync(tag, None);
+
+        Assert.That(lease.ReplicaTag, Is.EqualTo("a"));
+    }
+
+    [TestCase("a", "b")]
+    [TestCase(null, "b")]
+    public async Task PinnedRentAsync_AnotherTag_ThrowsAndTheSessionStaysUsable(string sessionTag, string operationTag)
+    {
+        var factory = new FakeConnectionFactory();
+        await using var pool = new ConnectionPool(Options(), factory, new ControlledTimeProvider());
+        await using var pinned = new PinnedConnectionSource(await pool.RentAsync(sessionTag, None));
+
+        var thrown = Assert.ThrowsAsync<InvalidOperationException>(async () => await pinned.RentAsync(operationTag, None));
+
+        // Refused before the session is marked busy, so the next operation runs.
+        await using IConnectionLease next = await pinned.RentAsync(replicaTag: null, None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown.Message, Does.Contain($"'{operationTag}'"));
+            Assert.That(thrown.Message, Does.Contain(nameof(ClickHouseTcpSessionOptions)));
+            Assert.That(pinned.IsOpen, Is.True);
+            Assert.That(factory.CreateCount, Is.EqualTo(1));
+        });
+    }
+}

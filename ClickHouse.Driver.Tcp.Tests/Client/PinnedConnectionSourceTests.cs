@@ -25,6 +25,8 @@ public class PinnedConnectionSourceTests
 
         public ClickHouseTcpConnection Connection { get; }
 
+        public string ReplicaTag { get; init; }
+
         /// <summary>
         /// Return count, incremented atomically so concurrent duplicate returns cannot go undetected.
         /// </summary>
@@ -304,6 +306,8 @@ public class PinnedConnectionSourceTests
         private TrailingBytesLease(ClickHouseTcpConnection connection) => Connection = connection;
 
         public ClickHouseTcpConnection Connection { get; }
+
+        public string ReplicaTag => null;
 
         internal static async ValueTask<TrailingBytesLease> CreateAsync()
             => new(await FakeConnectionFactory.CreateReadyAsync(trailing: [0x09]).ConfigureAwait(false));

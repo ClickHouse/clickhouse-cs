@@ -22,16 +22,24 @@ internal sealed class PooledConnection
     /// <summary>Wraps a freshly opened connection, starting its age and idle clocks now.</summary>
     /// <param name="connection">The connection, already handshaken and Ready.</param>
     /// <param name="time">The clock the pool measures age and idleness against.</param>
-    internal PooledConnection(ClickHouseTcpConnection connection, TimeProvider time)
+    /// <param name="replicaTag">The replica tag the connection was opened with, or null for none.</param>
+    internal PooledConnection(ClickHouseTcpConnection connection, TimeProvider time, string replicaTag = null)
     {
         Connection = connection;
         this.time = time;
+        ReplicaTag = replicaTag;
         openedAt = time.GetTimestamp();
         idleSince = openedAt;
     }
 
     /// <summary>The wrapped connection.</summary>
     internal ClickHouseTcpConnection Connection { get; }
+
+    /// <summary>
+    /// The replica tag the connection was opened with, or null for none. Fixed by the TLS handshake, so the pool
+    /// hands the connection out only for this tag.
+    /// </summary>
+    internal string ReplicaTag { get; }
 
     /// <summary>
     /// How many times this connection has been handed out. Diagnostic only: the pool never branches on it. Epic P

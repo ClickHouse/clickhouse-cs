@@ -38,6 +38,7 @@ public static class ExampleRunner
         "CreateTableCluster",
         "CreateTableCloud",
         "JwtAuthentication",
+        "TcpReplicaRouting",
     };
 
     private static readonly List<ExampleInfo> _examples = DiscoverExamples();

@@ -48,6 +48,16 @@ public sealed class ClickHouseTcpDataSource : IClickHouseTcpDataSource
     public ValueTask<IClickHouseTcpSession> OpenSessionAsync(CancellationToken cancellationToken = default)
         => client.OpenSessionAsync(cancellationToken);
 
+    /// <summary>
+    /// Opens a caller-owned session pinned to one connection, with the given session options. Set
+    /// <see cref="ClickHouseTcpSessionOptions.ReplicaTag"/> to open the session against one replica.
+    /// </summary>
+    /// <param name="options">The session options, or null for the client defaults.</param>
+    /// <param name="cancellationToken">A token to observe while waiting for and establishing the connection.</param>
+    /// <returns>A session pinned to one connection.</returns>
+    public ValueTask<IClickHouseTcpSession> OpenSessionAsync(ClickHouseTcpSessionOptions options, CancellationToken cancellationToken = default)
+        => client.OpenSessionAsync(options, cancellationToken);
+
     /// <summary>Closes the pool and every connection in it. The client from <see cref="GetClient"/> stops working.</summary>
     /// <returns>A task that completes when the pool is closed.</returns>
     public ValueTask DisposeAsync() => client.DisposeAsync();

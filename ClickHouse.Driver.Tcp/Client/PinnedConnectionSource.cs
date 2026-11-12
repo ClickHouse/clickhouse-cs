@@ -56,11 +56,21 @@ internal sealed class PinnedConnectionSource : IConnectionSource
     }
 
     /// <inheritdoc/>
-    /// <exception cref="InvalidOperationException">An operation is already running on this connection, or the
-    /// connection has been lost.</exception>
-    public ValueTask<IConnectionLease> RentAsync(CancellationToken cancellationToken)
+    /// <exception cref="InvalidOperationException">An operation is already running on this connection, the
+    /// connection has been lost, or <paramref name="replicaTag"/> names a tag other than the session's.</exception>
+    public ValueTask<IConnectionLease> RentAsync(string replicaTag, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
+        // The tag is fixed when the connection opens. An operation that names none, or the session's own, runs here;
+        // any other tag would need another connection, which a session does not have.
+        string tag = ReplicaRouting.Normalize(replicaTag);
+        if (tag is not null && !string.Equals(tag, lease.ReplicaTag, StringComparison.Ordinal))
+        {
+            string sessionTag = lease.ReplicaTag is null ? "no replica tag" : $"replica tag '{lease.ReplicaTag}'";
+            throw new InvalidOperationException(
+                $"The operation asks for replica tag '{tag}', but the session's connection was opened with {sessionTag}, and the tag cannot change on an open connection. Leave ReplicaTag unset in the operation's options, open a session with ClickHouseTcpSessionOptions.ReplicaTag set to '{tag}', or run the operation on the client.");
+        }
 
         lock (gate)
         {
@@ -197,6 +207,8 @@ internal sealed class PinnedConnectionSource : IConnectionSource
         internal PinnedLease(PinnedConnectionSource source) => this.source = source;
 
         public ClickHouseTcpConnection Connection => source.lease.Connection;
+
+        public string ReplicaTag => source.lease.ReplicaTag;
 
         public ValueTask DisposeAsync()
             => Interlocked.Exchange(ref released, 1) == 0 ? source.ReleaseAsync() : default;

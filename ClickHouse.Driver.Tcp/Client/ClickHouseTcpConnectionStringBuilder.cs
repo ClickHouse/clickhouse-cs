@@ -176,6 +176,16 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         }
     }
 
+    /// <summary>
+    /// The default replica tag for ClickHouse Cloud replica-aware routing. Absent, the default, uses normal load
+    /// balancing. Needs <see cref="UseTls"/>. Maps to <see cref="ClickHouseTcpClientOptions.ReplicaTag"/>.
+    /// </summary>
+    public string ReplicaTag
+    {
+        get => GetStringOrDefault("ReplicaTag", null);
+        set => this["ReplicaTag"] = value;
+    }
+
     /// <summary>The connect-plus-handshake timeout, in seconds. Defaults to 30.</summary>
     public TimeSpan DialTimeout
     {
@@ -311,6 +321,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
             TlsServerName = TlsServerName,
             TlsAllowInvalidCertificates = TlsAllowInvalidCertificates,
             TlsCaCertificatePath = TlsCaCertificatePath,
+            ReplicaTag = ReplicaTag,
             DialTimeout = DialTimeout,
             ReadTimeout = ReadTimeout,
             MaxSendBufferBytes = MaxSendBufferBytes,

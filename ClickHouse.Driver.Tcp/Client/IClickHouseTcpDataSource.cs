@@ -26,4 +26,13 @@ public interface IClickHouseTcpDataSource : IAsyncDisposable, IDisposable
     /// <param name="cancellationToken">A token to observe while waiting for and establishing the connection.</param>
     /// <returns>A session pinned to one connection.</returns>
     ValueTask<IClickHouseTcpSession> OpenSessionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Opens a caller-owned session pinned to one connection, with the given session options. Set
+    /// <see cref="ClickHouseTcpSessionOptions.ReplicaTag"/> to open the session against one replica.
+    /// </summary>
+    /// <param name="options">The session options, or null for the client defaults.</param>
+    /// <param name="cancellationToken">A token to observe while waiting for and establishing the connection.</param>
+    /// <returns>A session pinned to one connection.</returns>
+    ValueTask<IClickHouseTcpSession> OpenSessionAsync(ClickHouseTcpSessionOptions options, CancellationToken cancellationToken = default);
 }
