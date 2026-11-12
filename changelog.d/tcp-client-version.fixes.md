@@ -1,0 +1,1 @@
+* Native TCP client: fixed distributed queries (`clusterAllReplicas`, `remote`, a `Distributed` table) failing with "Sending a distributed query with unknown (zero) client version". The client reported version 0.0.0 in the handshake and in every query; it now reports the driver version.

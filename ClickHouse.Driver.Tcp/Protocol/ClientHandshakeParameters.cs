@@ -16,11 +16,17 @@ internal sealed class ClientHandshakeParameters
     /// affect negotiation.</summary>
     public string ClientName => DefaultClientName;
 
-    /// <summary>Informational client major version (ClientHello field 2).</summary>
-    public int VersionMajor { get; init; }
+    /// <summary>Client major version (ClientHello field 2). Defaults to this driver's version.</summary>
+    public int VersionMajor { get; init; } = ClientVersion.Current.Major;
 
-    /// <summary>Informational client minor version (ClientHello field 3).</summary>
-    public int VersionMinor { get; init; }
+    /// <summary>Client minor version (ClientHello field 3). Defaults to this driver's version.</summary>
+    public int VersionMinor { get; init; } = ClientVersion.Current.Minor;
+
+    /// <summary>
+    /// Client patch version. ClientHello has no field for it; every query's ClientInfo carries it. Defaults to this
+    /// driver's version.
+    /// </summary>
+    public int VersionPatch { get; init; } = ClientVersion.Current.Patch;
 
     /// <summary>Default database (ClientHello field 5).</summary>
     public string Database { get; init; } = "default";
@@ -38,5 +44,5 @@ internal sealed class ClientHandshakeParameters
     public override string ToString()
         => string.Create(
             CultureInfo.InvariantCulture,
-            $"{nameof(ClientHandshakeParameters)} {{ ClientName = {ClientName}, Version = {VersionMajor}.{VersionMinor}, Database = {Database}, Username = {Username}, Password = <redacted>, QuotaKey = <redacted> }}");
+            $"{nameof(ClientHandshakeParameters)} {{ ClientName = {ClientName}, Version = {VersionMajor}.{VersionMinor}.{VersionPatch}, Database = {Database}, Username = {Username}, Password = <redacted>, QuotaKey = <redacted> }}");
 }

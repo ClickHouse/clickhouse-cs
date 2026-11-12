@@ -54,7 +54,7 @@ internal static class ClientInfo
 
         if (negotiated.Supports(ProtocolFeature.VersionPatch))
         {
-            writer.WriteVarUInt(0);                 // client_version_patch
+            writer.WriteVarUInt((ulong)client.VersionPatch);
         }
 
         if (negotiated.Supports(ProtocolFeature.OpenTelemetry))
