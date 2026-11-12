@@ -12,7 +12,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 /// Replica-aware routing against the suite's own server, through <see cref="TlsTerminatingProxy"/>. The proxy records
 /// the TLS server name (SNI) of each connection and the plaintext the client sent on it, so each test can tell which
 /// connection a query ran on and which name that connection asked for. The proxy certificate names only the normal
-/// host, as a ClickHouse Cloud certificate does, so every tagged handshake here also proves the certificate check.
+/// host, which does not cover the sticky name, so every tagged handshake here also proves the certificate check.
 /// That Cloud routes by the name is covered by <see cref="ReplicaRoutingCloudIntegrationTests"/>.
 /// </summary>
 [TestFixture]

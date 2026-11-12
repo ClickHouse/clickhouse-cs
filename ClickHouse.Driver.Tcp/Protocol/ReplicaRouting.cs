@@ -9,9 +9,9 @@ namespace ClickHouse.Driver.Tcp.Protocol;
 /// number of replicas does not change. The client still dials the normal host.
 /// </summary>
 /// <remarks>
-/// The tag is fixed by the TLS handshake, so it belongs to a connection, not to a query. Cloud certificates name
-/// <c>&lt;host&gt;</c> and <c>*.&lt;host&gt;</c>, which do not cover the two extra labels, so the certificate is
-/// checked against the normal host name (see <see cref="TlsParameters"/>).
+/// The tag is fixed by the TLS handshake, so it belongs to a connection, not to a query. A certificate for the host,
+/// or a wildcard certificate that covers it, does not cover the sticky name, because a wildcard matches one label
+/// only. So the certificate is checked against the normal host name (see <see cref="TlsParameters"/>).
 /// </remarks>
 internal static class ReplicaRouting
 {

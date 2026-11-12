@@ -27,8 +27,8 @@ namespace ClickHouse.Driver.Tcp.Client;
 /// Each connection keeps the replica tag it was opened with (see <see cref="ClickHouseTcpClientOptions.ReplicaTag"/>),
 /// and a checkout reuses only a connection with the tag it asks for. All tags share the one
 /// <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>. Idle connections hold no permit, so idle connections of other
-/// tags could otherwise push the open sockets past the cap: a checkout that must dial first closes the longest-idle
-/// connections until the new one fits.
+/// tags could otherwise push the open sockets past the cap: a checkout that must dial while the pool is full first
+/// closes the longest-idle connection, and dials only after that connection is closed.
 /// </para>
 /// <para>
 /// Waiting callers are <b>not</b> served in a guaranteed order, because the wait is a
@@ -100,6 +100,11 @@ internal sealed class ConnectionPool : IConnectionSource
     // `idle` by a checkout that has not yet recorded it. Counting these keeps a top-up from opening past
     // MaxPoolSize while they are in the air. Guarded by `gate`.
     private int pending;
+
+    // The checkouts counted in `pending` that have not yet chosen between an idle connection and a dial. Such a
+    // checkout may still take an idle connection, so it does not yet stand for a socket of its own. Excluded from
+    // CommittedConnections, which decides whether a dial must first close an idle connection. Guarded by `gate`.
+    private int undecided;
 
     // Factory use has a lifetime of its own. A dial starts before it has a connection the pool can put in a set,
     // so a drain that times out cannot tell it apart from an established lease by counting permits alone. The
@@ -185,21 +190,27 @@ internal sealed class ConnectionPool : IConnectionSource
         lock (gate)
         {
             pending++;
+            undecided++;
         }
 
         // From here a permit and a slot are both held; every path must either return a lease (which releases the
         // permit on dispose) or give both back before throwing, or the pool loses capacity for good.
         bool reserved = true;
+
+        // Set by TakeReusableIdle under `gate`, in the same lock as the choice it records, so the catch below knows
+        // whether this checkout is still counted in `undecided`.
+        bool decided = false;
         try
         {
             // Disposal may have started while this caller waited for the permit.
             ThrowIfDisposed();
 
-            PooledConnection connection = TakeReusableIdle(tag);
+            PooledConnection connection = TakeReusableIdle(tag, ref decided, out PooledConnection evicted);
             bool reused = connection is not null;
             if (!reused)
             {
-                MakeRoomForDial();
+                // Before the dial, so this checkout never has the old socket and the new one open at the same time.
+                CloseEvicted(evicted);
                 if (logger is not null)
                 {
                     PoolLog.Dialing(logger);
@@ -248,6 +259,10 @@ internal sealed class ConnectionPool : IConnectionSource
                 lock (gate)
                 {
                     pending--;
+                    if (!decided)
+                    {
+                        undecided--;
+                    }
                 }
             }
 
@@ -634,6 +649,16 @@ internal sealed class ConnectionPool : IConnectionSource
     /// </summary>
     private int AccountedConnections => idle.Count + leased.Count + pending;
 
+    /// <summary>
+    /// The connections the pool has open or has committed to open: idle, in use, being dialed, or taken out of the
+    /// idle set by a checkout. Read under <c>gate</c>. Unlike <see cref="AccountedConnections"/> it leaves out the
+    /// checkouts that have not yet chosen between reuse and a dial, because such a checkout may take an idle
+    /// connection that is already counted. It never exceeds <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>:
+    /// reuse moves a connection from idle to a checkout, and a dial first closes an idle connection when the total
+    /// would pass the cap.
+    /// </summary>
+    private int CommittedConnections => idle.Count + leased.Count + pending - undecided;
+
     /// <summary>Whether the pool holds fewer connections than the floor asks for.</summary>
     private bool BelowFloor()
     {
@@ -772,23 +797,56 @@ internal sealed class ConnectionPool : IConnectionSource
     /// neither set.
     /// </summary>
     /// <param name="replicaTag">The resolved tag of the checkout, or null for none.</param>
+    /// <param name="decided">
+    /// The caller's record of whether it has left <c>undecided</c>. Set to true under <c>gate</c>, in the lock that
+    /// first chooses between an idle connection and a dial.
+    /// </param>
+    /// <param name="evicted">
+    /// When this returns null, an idle connection with another tag that the caller must close before it dials, so
+    /// that its new connection fits under <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>; otherwise null.
+    /// Already out of the idle set.
+    /// </param>
     /// <returns>A usable idle connection, or null.</returns>
     /// <remarks>
+    /// <para>
     /// This loop is the pool's whole answer to a connection that died while idle. It counts no retries: it discards
     /// candidates until one passes or the set is empty, and then a fresh connection is opened. A failure to open
     /// <i>that</i> connection is reported to the caller rather than retried, so a server that is down is reported as
     /// down instead of being hidden behind the pool timeout.
+    /// </para>
+    /// <para>
+    /// The choice to dial and the eviction it needs are made in one lock, against
+    /// <see cref="CommittedConnections"/>. That total stays within the cap, and a dial adds one to it, so a checkout
+    /// evicts at most one connection. The checkout's own slot covers the evicted socket until the caller closes it,
+    /// and the new socket only after, so the open sockets stay within the cap too. With one tag in use nothing is ever
+    /// evicted: a checkout dials only when nothing is idle.
+    /// </para>
     /// </remarks>
-    private PooledConnection TakeReusableIdle(string replicaTag)
+    private PooledConnection TakeReusableIdle(string replicaTag, ref bool decided, out PooledConnection evicted)
     {
+        evicted = null;
         while (true)
         {
             PooledConnection candidate;
             lock (gate)
             {
+                if (!decided)
+                {
+                    undecided--;
+                    decided = true;
+                }
+
                 int index = FindIdle(replicaTag);
                 if (index < 0)
                 {
+                    // The caller dials. Its slot already counts in CommittedConnections, so a total past the cap is
+                    // past it by this one connection.
+                    if (idle.Count > 0 && CommittedConnections > options.MaxPoolSize)
+                    {
+                        evicted = idle[0];
+                        idle.RemoveAt(0);
+                    }
+
                     return null;
                 }
 
@@ -840,42 +898,23 @@ internal sealed class ConnectionPool : IConnectionSource
     }
 
     /// <summary>
-    /// Closes the longest-idle connections until the connection a checkout is about to open fits under
-    /// <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>. Only connections with another replica tag can be idle
-    /// here, because the checkout found none with its own.
+    /// Closes the connection <see cref="TakeReusableIdle"/> took out of the idle set to make room for a dial, if any,
+    /// and logs it. Called before the dial.
     /// </summary>
-    /// <remarks>
-    /// The checkout's own slot in <c>pending</c> stands for the new connection, so the pool stays within the cap
-    /// when the accounted total does. With one tag in use this closes nothing: a checkout dials only when nothing is
-    /// idle. The total is an upper bound (see <see cref="AccountedConnections"/>), so concurrent checkouts can close
-    /// one connection more than needed, never one fewer.
-    /// </remarks>
-    private void MakeRoomForDial()
+    /// <param name="evicted">The connection to close, or null.</param>
+    private void CloseEvicted(PooledConnection evicted)
     {
-        List<PooledConnection> evicted = null;
-        lock (gate)
-        {
-            while (idle.Count > 0 && AccountedConnections > options.MaxPoolSize)
-            {
-                (evicted ??= new List<PooledConnection>()).Add(idle[0]);
-                idle.RemoveAt(0);
-            }
-        }
-
         if (evicted is null)
         {
             return;
         }
 
-        // Closed before the lines are written, for the same reason as the drain: these connections are out of the
-        // idle set, and a logger that threw first would leak their sockets.
-        CloseAll(evicted);
+        // Closed before the line is written, for the same reason as the drain: the connection is out of the idle
+        // set, and a logger that threw first would leak its socket.
+        evicted.Close();
         if (logger is not null)
         {
-            foreach (PooledConnection connection in evicted)
-            {
-                PoolLog.EvictedForAnotherTag(logger, connection.ReplicaTag ?? "(none)", options.MaxPoolSize);
-            }
+            PoolLog.EvictedForAnotherTag(logger, evicted.ReplicaTag ?? "(none)", options.MaxPoolSize);
         }
     }
 

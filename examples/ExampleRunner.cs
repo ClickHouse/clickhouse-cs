@@ -29,6 +29,7 @@ public static class ExampleRunner
         "CreateTableCloud",
         "DependencyInjection",
         "JwtAuthentication",
+        "TcpReplicaRouting",
         "TcpTls",
     };
 

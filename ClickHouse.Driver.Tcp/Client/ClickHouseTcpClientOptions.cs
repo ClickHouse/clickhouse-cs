@@ -145,6 +145,12 @@ public sealed record ClickHouseTcpClientOptions
     /// hook receives it and may edit it. In that case .NET ignores <c>CertificateRevocationCheckMode</c>; configure
     /// revocation through the policy's own <c>RevocationMode</c> property instead.
     /// </para>
+    /// <para>
+    /// On a connection with a replica tag (see <see cref="ReplicaTag"/>), <c>TargetHost</c> is already the sticky
+    /// name <c>&lt;tag&gt;.sticky.&lt;host&gt;</c>, and a <c>RemoteCertificateValidationCallback</c> is in place that
+    /// accepts a certificate for the normal host name. Setting <c>TargetHost</c> turns the routing off. Replacing the
+    /// callback replaces that check, so the new callback must check the host name itself.
+    /// </para>
     /// </remarks>
     public Action<SslClientAuthenticationOptions> ConfigureTls { get; init; }
 

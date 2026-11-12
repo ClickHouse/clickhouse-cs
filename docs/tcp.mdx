@@ -795,14 +795,18 @@ result stream can make the session unusable; when `IsOpen` becomes `false`, open
 
 ClickHouse Cloud can send related connections to the same replica. This is
 [replica-aware routing](https://clickhouse.com/docs/products/cloud/features/infrastructure/replica-aware-routing).
-Use it to keep temporary tables or session settings on one replica, to reuse a replica's local
-cache, or to read your own writes before other replicas catch up. The service must have two or more
-replicas, and replica-aware routing for the native protocol must be on in the service settings.
+Use it to read your own writes before the other replicas catch up, to reuse the caches that each
+replica keeps, or to reach data that only one replica has, such as a `Memory` table. The service
+must have two or more replicas, and replica-aware routing for the native protocol must be on in the
+service settings.
 
 Give related work the same replica tag. Connections with the same tag go to the same replica while
 the number of replicas does not change. Routing is best effort: when the service adds or removes
-replicas, a tag can move to another replica, and temporary tables and settings on the old replica
-are not on the new one. To see which replica ran a query, select `hostName()`.
+replicas, a tag can move to another replica. To see which replica ran a query, select `hostName()`.
+
+A tag chooses a replica, not a connection. Temporary tables and `SET` settings belong to one
+connection, so another connection with the same tag reaches the same replica but does not see them.
+Keep them in a [session](#sessions), which you can open with a tag.
 
 You can set the tag for the client, for one operation, or for a session:
 
@@ -830,9 +834,10 @@ An operation or session tag replaces the client tag. A `null` or empty tag uses 
   `clickhouse-client --tls-sni-override` does.
 * TLS is necessary. The client refuses a tag when `UseTls` is `false`, and when `<host>` is an IP
   address (set `TlsServerName` to the service host name).
-* The client checks the server certificate against `<host>`, as it does without a tag. A Cloud
-  certificate names `<host>` and `*.<host>`, which do not include the sticky name. A certificate
-  that names the sticky name is also accepted. The chain is checked as usual.
+* The client checks the server certificate against `<host>`, as it does without a tag. A
+  certificate for `<host>`, or a wildcard certificate that covers it, does not cover the sticky
+  name, because a wildcard matches one label only. A certificate that names the sticky name is also
+  accepted. The chain is checked as usual.
 * A `ConfigureTls` hook sees the sticky name in `TargetHost`, and a validation callback that does the
   check above. A hook that replaces the callback must check the host name itself.
 
@@ -856,7 +861,9 @@ The HTTP client uses the `X-ClickHouse-Replica-Tag` header instead, which you ca
   been idle longest, which has another tag, before it opens a connection for a new tag. Many
   different tags on one client make the pool open and close connections often, and each new
   connection costs a TLS handshake.
-* `MinPoolSize` keeps connections with the client tag.
+* `MinPoolSize` keeps connections with the client tag. If most operations name other tags, set
+  `MinPoolSize` to `0`: otherwise the pool opens connections with the client tag that a full pool
+  then closes to make room for the other tags.
 * A session keeps the tag of its connection. An operation in the session can leave `ReplicaTag`
   unset or set it to the session's tag. A different tag throws `InvalidOperationException`, and the
   session stays usable.

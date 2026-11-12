@@ -364,7 +364,7 @@ public class TlsParametersTests
     [Test]
     public async Task WrapAsync_ReplicaTagAndCertificateNamingOnlyTheServer_SendsTheStickyNameAndCompletesHandshake()
     {
-        // The shape of a ClickHouse Cloud certificate: it names the service host and *.host, neither of which
+        // A certificate for the service host, which also names *.host. A wildcard matches one label, so neither name
         // covers the two extra labels of the sticky name.
         using X509Certificate2 authority = TestCertificates.CreateAuthority();
         using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, ServerName);
@@ -478,6 +478,16 @@ public class TlsParametersTests
             Assert.That(observedHost, Is.EqualTo(StickyServerName));
             Assert.That(observedCallback, Is.Not.Null);
         });
+    }
+
+    [Test]
+    public void BuildAuthenticationOptions_ReplicaTagAndNameMismatchWithoutACertificate_TheCallbackRefuses()
+    {
+        // The name fallback needs a certificate to match against. Without one, the mismatch stands.
+        using var tls = new TlsParameters { TargetHost = ServerName };
+        RemoteCertificateValidationCallback check = tls.BuildAuthenticationOptions("etl").RemoteCertificateValidationCallback;
+
+        Assert.That(check(this, null, null, SslPolicyErrors.RemoteCertificateNameMismatch), Is.False);
     }
 
     [Test]

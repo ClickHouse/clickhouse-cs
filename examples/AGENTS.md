@@ -89,6 +89,9 @@ its own keep a transport run from picking it up.
 
 If you add an example of that kind, leave it out of `RunAllExamples`, add its class name to
 `_optIn`, and list it here. Otherwise the omission is indistinguishable from having forgotten step 4.
+If it connects to its own endpoint instead of the one `ExampleConfig` gives, also add it to
+`_customEndpoint`. Otherwise a filtered run first checks the `ExampleConfig` endpoint and stops when
+no local server answers, before the example starts.
 
 ## Style
 

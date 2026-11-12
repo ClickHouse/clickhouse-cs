@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -137,6 +138,73 @@ public class ConnectionPoolReplicaTagTests
             Assert.That(factory.Created[1].State, Is.EqualTo(TcpConnectionState.Ready), "one closed connection makes room");
             Assert.That(pool.IdleCount, Is.EqualTo(1));
         });
+    }
+
+    [Test]
+    public async Task RentAsync_ConcurrentCheckoutsOnAFullPool_ClosesOnlyTheConnectionTheNewTagNeeds()
+    {
+        // The pool is full of idle connections tagged y0 to y3. Four checkouts start at once: three ask for y1 to y3,
+        // one for the new tag z. Only z needs room, so exactly one connection, the longest idle, is closed and one is
+        // opened, in whatever order the checkouts run. Repeated, because the order differs between rounds.
+        for (int round = 0; round < 300; round++)
+        {
+            var factory = new FakeConnectionFactory();
+            await using var pool = new ConnectionPool(Options(maxPoolSize: 4), factory, new ControlledTimeProvider());
+            IConnectionLease[] warm =
+            [
+                await pool.RentAsync("y0", None),
+                await pool.RentAsync("y1", None),
+                await pool.RentAsync("y2", None),
+                await pool.RentAsync("y3", None),
+            ];
+            foreach (IConnectionLease lease in warm)
+            {
+                await lease.DisposeAsync();
+            }
+
+            var go = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            string[] tags = ["z", "y1", "y2", "y3"];
+            Task<IConnectionLease>[] checkouts = tags
+                .Select(tag => Task.Run(async () =>
+                {
+                    await go.Task;
+                    return await pool.RentAsync(tag, None);
+                }))
+                .ToArray();
+            go.SetResult();
+            IConnectionLease[] leases = await Task.WhenAll(checkouts);
+
+            try
+            {
+                Assert.Multiple(() =>
+                {
+                    Assert.That(factory.CreatedTags, Is.EqualTo(new[] { "y0", "y1", "y2", "y3", "z" }), $"round {round}: only z dials");
+                    Assert.That(factory.Created[0].State, Is.EqualTo(TcpConnectionState.Terminated), $"round {round}: y0 makes room");
+                    Assert.That(factory.Created.Skip(1).Select(c => c.State), Is.All.EqualTo(TcpConnectionState.Ready), $"round {round}");
+                    Assert.That(leases.Select(lease => lease.ReplicaTag), Is.EqualTo(tags));
+                });
+            }
+            finally
+            {
+                foreach (IConnectionLease lease in leases)
+                {
+                    await lease.DisposeAsync();
+                }
+            }
+        }
+    }
+
+    [Test]
+    public async Task RentAsync_ManyConcurrentCheckoutsWithManyTags_NeverHasMoreThanMaxPoolSizeConnectionsOpen()
+    {
+        // More tags than slots, so most checkouts must close a connection of another tag before they dial. A
+        // connection counts as open from the moment its dial starts until its socket is closed, so a checkout that
+        // dialed before the connection it replaced was closed would show here.
+        const int MaxPoolSize = 4;
+        for (int round = 0; round < 20; round++)
+        {
+            await CheckOutConcurrentlyWithManyTagsAsync(MaxPoolSize, round);
+        }
     }
 
     [Test]
@@ -308,6 +376,70 @@ public class ConnectionPoolReplicaTagTests
             Assert.That(thrown.Message, Does.Contain(nameof(ClickHouseTcpSessionOptions)));
             Assert.That(pinned.IsOpen, Is.True);
             Assert.That(factory.CreateCount, Is.EqualTo(1));
+        });
+    }
+
+    private static async Task CheckOutConcurrentlyWithManyTagsAsync(int maxPoolSize, int round)
+    {
+        var factory = new FakeConnectionFactory();
+        int open = 0;
+        int peak = 0;
+        factory.BeforeCreate = _ =>
+        {
+            int now = Interlocked.Increment(ref open);
+            int seen;
+            while (now > (seen = Volatile.Read(ref peak)) && Interlocked.CompareExchange(ref peak, now, seen) != seen)
+            {
+            }
+
+            return Task.CompletedTask;
+        };
+        factory.OnClose = () => Interlocked.Decrement(ref open);
+        await using var pool = new ConnectionPool(Options(maxPoolSize: maxPoolSize), factory, new ControlledTimeProvider());
+
+        var live = new HashSet<ClickHouseTcpConnection>();
+        var failures = new List<string>();
+
+        await Task.WhenAll(Enumerable.Range(0, 32).Select(worker => Task.Run(async () =>
+        {
+            for (int i = 0; i < 25; i++)
+            {
+                string tag = $"t{(worker + i) % 7}";
+                IConnectionLease lease = await pool.RentAsync(tag, None);
+                lock (live)
+                {
+                    if (!live.Add(lease.Connection))
+                    {
+                        failures.Add("two leases held the same connection at once");
+                    }
+
+                    if (lease.ReplicaTag != tag)
+                    {
+                        failures.Add($"asked for {tag}, got {lease.ReplicaTag}");
+                    }
+                }
+
+                try
+                {
+                    await Task.Yield();
+                }
+                finally
+                {
+                    lock (live)
+                    {
+                        live.Remove(lease.Connection);
+                    }
+
+                    await lease.DisposeAsync();
+                }
+            }
+        })));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(failures, Is.Empty, $"round {round}");
+            Assert.That(peak, Is.LessThanOrEqualTo(maxPoolSize), $"round {round}: open connections");
+            Assert.That(factory.CreateCount, Is.GreaterThan(maxPoolSize), "the tags outnumber the slots, so connections were replaced");
         });
     }
 }
