@@ -145,6 +145,59 @@ public class ConnectionPoolReplicaTagTests
     }
 
     [Test]
+    public async Task Return_ConnectionClosingWhileASessionDials_StaysCountedUntilItIsClosed()
+    {
+        // A comes back first and stays idle. B comes back expired, so Return closes it, and a session checkout with
+        // its own tag dials while B's socket is still open. B must still count, so the session closes A first.
+        var factory = new FakeConnectionFactory();
+        var time = new ControlledTimeProvider();
+        ClickHouseTcpClientOptions options = Options(maxPoolSize: 2) with { MaxConnectionLifetime = TimeSpan.FromSeconds(10) };
+        await using var pool = new ConnectionPool(options, factory, time);
+        int open = 0;
+        int peak = 0;
+        factory.BeforeCreate = _ =>
+        {
+            peak = Math.Max(peak, Interlocked.Increment(ref open));
+            return Task.CompletedTask;
+        };
+
+        // A connection takes the hook when it is created, so it is set before A and B and armed later.
+        IConnectionLease session = null;
+        int armed = 0;
+        factory.OnClose = () =>
+        {
+            if (Interlocked.Exchange(ref armed, 0) == 1)
+            {
+                // Blocks until the session has dialed, so its dial happens while B's socket is open.
+                session = pool.RentAsync("a", None).AsTask().GetAwaiter().GetResult();
+            }
+
+            Interlocked.Decrement(ref open);
+        };
+
+        IConnectionLease a = await pool.RentAsync(None);
+        IConnectionLease b = await pool.RentAsync(None);
+        await a.DisposeAsync();
+        time.Advance(TimeSpan.FromSeconds(20));
+
+        Volatile.Write(ref armed, 1);
+        await b.DisposeAsync();
+
+        bool dialed = session is not null;
+        if (dialed)
+        {
+            await session.DisposeAsync();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dialed, Is.True, "closing B started the session checkout");
+            Assert.That(peak, Is.LessThanOrEqualTo(2), "open connections");
+            Assert.That(factory.Created[0].State, Is.EqualTo(TcpConnectionState.Terminated), "A was closed to make room");
+        });
+    }
+
+    [Test]
     public async Task Sweep_TopsUpToTheFloor_WithTheClientTag()
     {
         var factory = new FakeConnectionFactory();
