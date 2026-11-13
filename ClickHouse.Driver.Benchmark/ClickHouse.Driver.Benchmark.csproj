@@ -9,6 +9,10 @@
     <LangVersion>latest</LangVersion>
     <!-- CHTCP0001: the native-TCP client is experimental; the benchmarks opt in to measuring it. -->
     <NoWarn>$(NoWarn);CHTCP0001</NoWarn>
+    <!-- ClickHouse.Driver.Tcp gives this assembly access to its internal types (see its AssemblyInfo.cs). The TCP
+         assembly is strong-named, so this assembly must be strong-named too, with the same key. -->
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)../sgKey.snk</AssemblyOriginatorKeyFile>
   </PropertyGroup>
 
   <ItemGroup>
