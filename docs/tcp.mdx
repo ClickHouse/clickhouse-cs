@@ -1548,6 +1548,30 @@ The log block is borrowed and is released when the callback returns. Process it 
 copy out values that must be retained. Keep callbacks fast and do not throw; a callback exception
 terminates the operation and its connection.
 
+### Client name and version on the server {#logging-client-identity}
+
+The client sends its name and version in the handshake and with every query. ClickHouse shows them
+in `system.query_log` and `system.processes`:
+
+| Column | Value |
+|---|---|
+| `client_name` | `clickhouse-cs-tcp` |
+| `client_version_major`, `client_version_minor`, `client_version_patch` | The version of the `ClickHouse.Driver` package, for example `1.4.0` |
+
+Use these columns to find the queries that this client sent:
+
+```sql
+SELECT event_time, client_version_major, client_version_minor, client_version_patch, query
+FROM system.query_log
+WHERE client_name = 'clickhouse-cs-tcp' AND type = 'QueryFinish'
+ORDER BY event_time DESC
+LIMIT 10
+```
+
+When the build has no usable version (the version is missing, cannot be read, or is 0.0.0), the
+client reports `1.0.0`. ClickHouse 26.8 and later do not send a distributed query (`remote`,
+`clusterAllReplicas`, a `Distributed` table) to other servers when the client version is 0.0.0.
+
 ## OpenTelemetry {#opentelemetry}
 
 The TCP client emits distributed-tracing spans through .NET's `System.Diagnostics.Activity` API.
