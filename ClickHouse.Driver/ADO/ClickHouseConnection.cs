@@ -231,7 +231,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <returns>Task-wrapped HttpResponseMessage object</returns>
     public async Task<HttpResponseMessage> PostStreamAsync(string sql, Stream data, bool isCompressed, CancellationToken token, string queryId = null)
     {
-        var options = GetQueryOptionsWithQueryId(queryId);
+        var options = GetPostStreamOptions(queryId);
         return await ClickHouseClient.PostStreamAsync(sql, data, isCompressed, token, options).ConfigureAwait(false);
     }
 
@@ -247,22 +247,15 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <returns>Task-wrapped HttpResponseMessage object</returns>
     public async Task<HttpResponseMessage> PostStreamAsync(string sql, Func<Stream, CancellationToken, Task> callback, bool isCompressed, CancellationToken token, string queryId = null)
     {
-        var options = GetQueryOptionsWithQueryId(queryId);
+        var options = GetPostStreamOptions(queryId);
         return await ClickHouseClient.PostStreamAsync(sql, callback, isCompressed, token, options).ConfigureAwait(false);
     }
 
-    private static QueryOptions GetQueryOptionsWithQueryId(string queryId)
+    private QueryOptions GetPostStreamOptions(string queryId) => new()
     {
-        QueryOptions options = null;
-        if (queryId != null)
-        {
-            options = new QueryOptions
-            {
-                QueryId = queryId,
-            };
-        }
-        return options;
-    }
+        QueryId = queryId,
+        Database = Database,
+    };
 
 #pragma warning disable CS0109 // Member does not hide an inherited member; new keyword is not required
     public new ClickHouseCommand CreateCommand(string commandText = null) => new (this) { CommandText = commandText };
