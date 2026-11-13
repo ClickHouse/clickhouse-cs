@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 
 namespace ClickHouse.Driver.ADO.Parameters;
@@ -15,14 +14,12 @@ internal static class SqlPlaceholderRewriter
     /// Replaces every <c>@name</c> placeholder found in a code position with its replacement.
     /// </summary>
     /// <param name="sql">The SQL query with @-style placeholders.</param>
-    /// <param name="replacements">Replacement text keyed by placeholder, including the leading <c>@</c>.</param>
+    /// <param name="replacements">Replacement text keyed by placeholder, including the leading <c>@</c>.
+    /// A placeholder's name is the whole run of word characters after the <c>@</c>, see <see cref="IsWordChar"/>.</param>
     public static string ReplacePlaceholders(string sql, Dictionary<string, string> replacements)
     {
         if (string.IsNullOrEmpty(sql) || replacements == null || replacements.Count == 0)
             return sql;
-
-        // Longest first, so that @id does not shadow @id_2
-        var placeholders = replacements.Keys.OrderByDescending(k => k.Length).ToArray();
 
         StringBuilder builder = null;
         var copiedUpTo = 0;
@@ -64,12 +61,12 @@ internal static class SqlPlaceholderRewriter
                 var afterHeredoc = SqlTextScanner.TrySkipHeredoc(sql, i);
                 i = afterHeredoc < 0 ? i + 1 : afterHeredoc;
             }
-            else if (c == '@' && MatchPlaceholder(sql, i, placeholders) is string placeholder)
+            else if (c == '@' && TryMatchPlaceholder(sql, i, replacements, out var replacement, out var placeholderEnd))
             {
                 builder ??= new StringBuilder(sql.Length);
                 builder.Append(sql, copiedUpTo, i - copiedUpTo);
-                builder.Append(replacements[placeholder]);
-                i += placeholder.Length;
+                builder.Append(replacement);
+                i = placeholderEnd;
                 copiedUpTo = i;
             }
             else
@@ -85,28 +82,23 @@ internal static class SqlPlaceholderRewriter
         return builder.ToString();
     }
 
-    private static string MatchPlaceholder(string sql, int startIndex, string[] placeholders)
+    /// <summary>
+    /// Looks up the placeholder that starts with the @ at <paramref name="startIndex"/>. Its name is the
+    /// whole run of word characters after the @, so @id never matches inside @id_2 or @identifier.
+    /// On a miss the caller skips only the @, so a $ right after it can still open a heredoc.
+    /// </summary>
+    private static bool TryMatchPlaceholder(string sql, int startIndex, Dictionary<string, string> replacements, out string replacement, out int endIndex)
     {
-        foreach (var placeholder in placeholders)
-        {
-            if (startIndex + placeholder.Length > sql.Length)
-                continue;
-            if (string.CompareOrdinal(sql, startIndex, placeholder, 0, placeholder.Length) != 0)
-                continue;
+        endIndex = startIndex + 1;
+        while (endIndex < sql.Length && IsWordChar(sql[endIndex]))
+            endIndex++;
 
-            var endIndex = startIndex + placeholder.Length;
-            if (endIndex < sql.Length && IsWordChar(sql[endIndex]))
-                continue; // @id must not match inside @identifier
-
-            return placeholder;
-        }
-
-        return null;
+        return replacements.TryGetValue(sql.Substring(startIndex, endIndex - startIndex), out replacement);
     }
 
     /// <summary>
-    /// Determines whether the character continues a placeholder name, so that a placeholder is not
-    /// recognized inside a longer name. A $ is part of the name: the server lexes a word as a run of
+    /// Determines whether the character is part of a placeholder name. The name is the whole run of
+    /// these characters, so a placeholder is not recognized inside a longer name. A $ is part of the name: the server lexes a word as a run of
     /// word characters and dollar signs and accepts $ in a query parameter name, so @id$x names the
     /// single parameter id$x rather than @id followed by $x.
     /// Non-ASCII letters and digits stay part of the name even though the server's lexer is

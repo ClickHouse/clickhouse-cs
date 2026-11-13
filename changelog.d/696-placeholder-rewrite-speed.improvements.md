@@ -1,0 +1,1 @@
+* Faster rewriting of `@name` parameter placeholders in queries with many parameters, such as large multi-row `INSERT` queries. The rewrite time grew quadratically with the number of parameters; it now grows linearly ([#696](https://github.com/ClickHouse/clickhouse-cs/issues/696)).
