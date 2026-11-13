@@ -7,10 +7,10 @@ using ClickHouse.Driver.Tcp.Types.Codecs;
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
-/// The read-side conversions shared by the date/time codecs' <see cref="IColumnCodec.TryProjectRead"/> and by the
-/// columns' own <c>GetDateTimeOffset</c>/<c>GetTimeSpan</c>, so a raw wire count has one calendar reading whichever
-/// surface asks. Static, taking scale and timezone as plain arguments, so a codec can inline a call with them as
-/// constants instead of paying a delegate hop.
+/// The read-side conversions shared by the leaf readers of the converter layer (<c>LeafReadConversions</c>) and by
+/// the columns' own <c>GetDateTimeOffset</c>/<c>GetTimeSpan</c>, so a raw wire count has one calendar reading whichever
+/// surface asks. Static, taking scale and timezone as plain arguments, so an emitted read calls one method with them
+/// as constants and no delegate.
 /// </summary>
 internal static class ColumnValueProjections
 {
@@ -137,25 +137,6 @@ internal static class ColumnValueProjections
         return TimeOnly.FromTimeSpan(Time64ToTimeSpan(count, scale));
     }
 
-    /// <summary>
-    /// Confirms a codec was handed an expression of its canonical <see cref="IColumnCodec.ElementType"/>. Catches the
-    /// caller's mistake here, instead of as an opaque expression-tree failure much later.
-    /// </summary>
-    /// <param name="value">The expression to check.</param>
-    /// <param name="elementType">The codec's canonical element type.</param>
-    /// <param name="typeName">The codec's type name, for the message.</param>
-    /// <exception cref="ArgumentException"><paramref name="value"/> is not of type <paramref name="elementType"/>.</exception>
-    public static void RequireSourceType(Expression value, Type elementType, string typeName)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-        if (value.Type != elementType)
-        {
-            throw new ArgumentException(
-                $"The '{typeName}' codec projects from its element type {elementType}, but was given an expression of type {value.Type}.",
-                nameof(value));
-        }
-    }
-
     // TimeOnly represents only non-negative durations shorter than one day; do not wrap other values.
     private static TimeOnly AsTimeOfDay(TimeSpan value, string typeName)
     {
@@ -171,55 +152,8 @@ internal static class ColumnValueProjections
         => new($"A {typeName} column value of {value} is not a time of day, so it has no TimeOnly. Read the column as a TimeSpan.");
 
     /// <summary>
-    /// Lifts an inner codec's projection over a source that can be absent: an absent row yields
-    /// <c>default(targetType)</c> — null for both a <see cref="Nullable{T}"/> and a reference type. Shared by the
-    /// transparent wrappers (<c>Nullable</c>, <c>LowCardinality(Nullable(T))</c>), whose surfaces differ but whose
-    /// lifting rule does not.
-    /// <para>
-    /// Source and target shapes are read independently, each from the type in front of it, never one from the other.
-    /// They agree for every pair that exists today, but a reference-typed element with a value-typed reading
-    /// (<c>FixedString(16)</c> as a <see cref="Guid"/>) would otherwise turn a null row into <c>default(Guid)</c>.
-    /// </para>
-    /// </summary>
-    /// <param name="value">An expression of the wrapper's surface element type.</param>
-    /// <param name="inner">The inner codec, asked to project the present value.</param>
-    /// <param name="innerTarget">The inner codec's own spelling of the target type.</param>
-    /// <param name="targetType">The surfaced target type, which must be able to hold an absent row.</param>
-    /// <param name="projected">An expression of type <paramref name="targetType"/>, or null when the inner declines.</param>
-    /// <returns>Whether the inner offered the projection.</returns>
-    public static bool TryLiftOverAbsent(Expression value, IColumnCodec inner, Type innerTarget, Type targetType, out Expression projected)
-    {
-        // Spliced in twice (the presence test and the value), and may be a span access or a call, so bind it once.
-        ParameterExpression source = Expression.Variable(value.Type, "surfaceValue");
-
-        // A value-typed surface arrives as Nullable<U>; a reference-typed one is its own inner type already.
-        // ReferenceNotEqual, not NotEqual: the latter binds a user-defined op_Inequality where the type declares one
-        // (String does), costing a call per row and breaking on an operator that dereferences its arguments.
-        bool wrapped = Nullable.GetUnderlyingType(value.Type) is not null;
-        Expression isPresent = wrapped
-            ? Expression.Property(source, "HasValue")
-            : Expression.ReferenceNotEqual(source, Expression.Constant(null, value.Type));
-        Expression present = wrapped ? Expression.Property(source, "Value") : source;
-
-        if (!inner.TryProjectRead(present, innerTarget, out Expression innerProjection))
-        {
-            projected = null;
-            return false;
-        }
-
-        projected = Expression.Block(
-            new[] { source },
-            Expression.Assign(source, value),
-            Expression.Condition(
-                isPresent,
-                innerProjection.Type == targetType ? innerProjection : Expression.Convert(innerProjection, targetType),
-                Expression.Default(targetType)));
-        return true;
-    }
-
-    /// <summary>
     /// Builds a call to one of this class's projection methods, with the per-column state (scale, timezone) as
-    /// constants — the shape every codec's <see cref="IColumnCodec.TryProjectRead"/> returns.
+    /// constants: the expression that the <c>Emit</c> of a leaf read conversion gives.
     /// </summary>
     /// <param name="method">The projection method name on this class.</param>
     /// <param name="value">The expression yielding the raw value; becomes the first argument.</param>

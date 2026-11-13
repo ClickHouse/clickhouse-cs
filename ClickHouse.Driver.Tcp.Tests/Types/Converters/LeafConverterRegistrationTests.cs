@@ -9,9 +9,9 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
 /// Pins what the differential tests compare for the leaf converters (<see cref="LeafConverterRegistration"/>): every
-/// pair of the leaf table is compared there with values or bytes of the old path, except the pairs of
+/// pair of the leaf table is compared there with values or bytes of the client's entry point, except the pairs of
 /// <see cref="NotInTheCaseList"/>, which no case of the case list reaches. <see cref="LeafReaderTests"/> and
-/// <see cref="LeafWriterTests"/> compare those pairs with the old path themselves.
+/// <see cref="LeafWriterTests"/> test those pairs themselves.
 /// </summary>
 [TestFixture]
 public class LeafConverterRegistrationTests
@@ -35,15 +35,14 @@ public class LeafConverterRegistrationTests
             foreach (FacetResult result in DifferentialEngine.ForCurrentRegistry(testCase).Facets)
             {
                 Facet facet = result.Facet;
-                bool declared = DifferentialRegistry.Current.ChangeFor(facet) is not null;
-                if (facet.Tier == Tier.ReadAs && result.Reference.All.Kind == OutcomeKind.Values)
+                if (facet.Tier == Tier.ReadAs && result.Baseline.All.Kind == OutcomeKind.Values)
                 {
                     compared.Add(new LeafPairKey(leaf, facet.Target, ConversionDirection.Read));
                 }
 
                 if (facet.Tier == Tier.Write
                     && facet.Input.Kind != WriteInputKind.Decoded
-                    && (result.Reference.All.Kind == OutcomeKind.Bytes || declared))
+                    && result.Baseline.All.Kind == OutcomeKind.Bytes)
                 {
                     compared.Add(new LeafPairKey(leaf, facet.Input.ElementType, ConversionDirection.Write));
                 }

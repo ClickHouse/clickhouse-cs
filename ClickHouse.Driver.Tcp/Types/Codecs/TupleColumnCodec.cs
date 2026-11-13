@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Globalization;
-using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -35,9 +33,6 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 internal sealed class TupleColumnCodec : IColumnCodec
 {
     private const int MaxArity = 7;
-
-    private static readonly MethodInfo ProjectTupleMethod =
-        typeof(TupleColumnCodec).GetMethod(nameof(ProjectTuple), BindingFlags.NonPublic | BindingFlags.Static);
 
     // The open generic ValueTuple / TupleColumn definitions indexed by arity (index 0 unused). MakeGenericType
     // closes them over the child element types once, at resolution time.
@@ -214,147 +209,6 @@ internal sealed class TupleColumnCodec : IColumnCodec
 
             throw;
         }
-    }
-
-    /// <inheritdoc/>
-    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
-    {
-        ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
-
-        if (targetType == ElementType)
-        {
-            projected = value;
-            return true;
-        }
-
-        projected = null;
-
-        // Tuple arity must match before fields can be projected.
-        int arity = children.Length;
-        if (!targetType.IsGenericType || targetType.GetGenericTypeDefinition() != ValueTupleDefinitions[arity])
-        {
-            return false;
-        }
-
-        // Evaluate the source once for all field projections.
-        ParameterExpression source = Expression.Variable(ElementType, "tuple");
-        Type[] targetArguments = targetType.GetGenericArguments();
-        var fieldProjections = new Expression[arity];
-        for (int i = 0; i < arity; i++)
-        {
-            // Each child projects its field independently.
-            if (!children[i].TryProjectRead(Expression.Field(source, "Item" + (i + 1).ToString(CultureInfo.InvariantCulture)), targetArguments[i], out fieldProjections[i]))
-            {
-                return false;
-            }
-        }
-
-        projected = Expression.Block(
-            new[] { source },
-            Expression.Assign(source, value),
-            Expression.New(
-                targetType.GetConstructor(targetArguments) ?? throw new InvalidOperationException($"The tuple type '{targetType}' is missing its all-element constructor."),
-                fieldProjections));
-        return true;
-    }
-
-    /// <summary>
-    /// Projects child columns once, then rebuilds each tuple row. Used only when a child conversion needs column
-    /// state.
-    /// </summary>
-    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
-    {
-        projection = null;
-
-        int arity = children.Length;
-        if (targetType == ElementType || !targetType.IsGenericType || targetType.GetGenericTypeDefinition() != ValueTupleDefinitions[arity])
-        {
-            return false;
-        }
-
-        Type[] targetArguments = targetType.GetGenericArguments();
-        var fieldProjections = new ColumnReadProjection[arity];
-        bool anyChildNeedsColumn = false;
-        for (int i = 0; i < arity; i++)
-        {
-            if (children[i].TryProjectColumnRead(targetArguments[i], out fieldProjections[i]))
-            {
-                anyChildNeedsColumn = true;
-                continue;
-            }
-
-            // The other children may still read as their own type or convert elementwise.
-            fieldProjections[i] = LegacyColumnProjection.For(children[i], targetArguments[i]);
-            if (fieldProjections[i] is null)
-            {
-                return false;
-            }
-        }
-
-        if (!anyChildNeedsColumn)
-        {
-            return false;
-        }
-
-        projection = LegacyColumnProjection.Close(ProjectTupleMethod, (fieldProjections, CompileRowReader(targetType, targetArguments)), targetType);
-        return true;
-    }
-
-    /// <summary>
-    /// Compiles a typed tuple constructor over the projected child columns.
-    /// </summary>
-    /// <param name="targetType">The <c>ValueTuple</c> type to build.</param>
-    /// <param name="targetArguments">Its type arguments, one per child.</param>
-    /// <returns>A <c>Func&lt;IColumn[], int, targetType&gt;</c>.</returns>
-    private static Delegate CompileRowReader(Type targetType, Type[] targetArguments)
-    {
-        ParameterExpression columns = Expression.Parameter(typeof(IColumn[]), "columns");
-        ParameterExpression row = Expression.Parameter(typeof(int), "row");
-
-        var fields = new Expression[targetArguments.Length];
-        for (int i = 0; i < fields.Length; i++)
-        {
-            Type typedColumn = typeof(IColumn<>).MakeGenericType(targetArguments[i]);
-            fields[i] = Expression.MakeIndex(
-                Expression.Convert(Expression.ArrayIndex(columns, Expression.Constant(i)), typedColumn),
-                typedColumn.GetProperty("Item"),
-                new Expression[] { row });
-        }
-
-        Expression build = Expression.New(
-            targetType.GetConstructor(targetArguments) ?? throw new InvalidOperationException($"The tuple type '{targetType}' is missing its all-element constructor."),
-            fields);
-
-        return Expression
-            .Lambda(typeof(Func<,,>).MakeGenericType(typeof(IColumn[]), typeof(int), targetType), build, columns, row)
-            .Compile();
-    }
-
-    /// <summary>
-    /// Builds a row view over the projected child columns.
-    /// </summary>
-    /// <typeparam name="T">The <c>ValueTuple</c> type the view surfaces.</typeparam>
-    /// <param name="source">The decoded <c>Tuple(...)</c> column.</param>
-    /// <param name="state">The children's projections and the compiled row reader over them.</param>
-    /// <returns>The view.</returns>
-    private static IColumn ProjectTuple<T>(IColumn source, (ColumnReadProjection[] Fields, Delegate Reader) state)
-    {
-        ITupleColumn tuple = LegacyColumnProjection.Surface<ITupleColumn>(source);
-        if (tuple.Children.Count != state.Fields.Length)
-        {
-            throw new InvalidOperationException(
-                $"Column '{source.Name}' ({source.TypeName}) was read as a tuple of {tuple.Children.Count} children, " +
-                $"but its type resolved to {state.Fields.Length}, so a projected reading cannot pair them.");
-        }
-
-        var read = (Func<IColumn[], int, T>)state.Reader;
-        var projected = new IColumn[state.Fields.Length];
-        for (int i = 0; i < projected.Length; i++)
-        {
-            projected[i] = state.Fields[i](tuple.Children[i]);
-        }
-
-        return new ProjectedReadColumn<T>(source, (column, row) => read(projected, row));
     }
 
     /// <inheritdoc/>

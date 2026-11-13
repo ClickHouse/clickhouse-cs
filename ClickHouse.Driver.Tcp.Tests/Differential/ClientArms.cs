@@ -7,44 +7,9 @@ using ClickHouse.Driver.Tcp.Types;
 namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
 /// <summary>
-/// The old path: the arm of each tier that the candidates are compared with. <see cref="ReadAs"/> and
-/// <see cref="CanRead"/> run the old dispatch of the columnar read tier (<see cref="LegacyColumnarRead"/>),
-/// <see cref="Poco"/> runs the old POCO read plan (<see cref="LegacyPocoRead"/>), <see cref="Write"/> and
-/// <see cref="CanWrite"/> run the old dispatch of the columnar write tier (<see cref="LegacyColumnarWrite"/>), and the
-/// row insert tiers run the old POCO write plan and the old untyped write type choice (<see cref="LegacyRowWrite"/>),
-/// because the client's entry points read and write through the converter derivation.
+/// The client's entry points, one arm for each tier. <see cref="DifferentialRegistry.WithClientArms"/> makes them the
+/// first candidates, so they are the baseline of every facet.
 /// </summary>
-/// <remarks>
-/// The old members that the converter layer replaces stay in production until the old path is removed. When a tier
-/// of the client moves onto the derivation, copy the old dispatch of that tier (the lines that call the old members,
-/// for example the hook order of <c>ColumnProjection.For</c>) into an arm in this test project, and point the tier's
-/// member here at it. If the old tier has more than about 100 lines, keep it in production as an internal member
-/// whose name marks it as the reference path (for example <c>LegacyColumnProjection</c>), and call that member from
-/// the arm. Then register the client's entry point (<see cref="ClientArms"/>) as a candidate. The reference outcome
-/// counts in <c>DifferentialTests</c> must stay the same.
-/// </remarks>
-internal static class ReferenceArms
-{
-    public static ReadArm ReadAs { get; } = new LegacyColumnarRead.ReadAsArm("Old path: ReadAs");
-
-    public static ReadArm Poco { get; } = new LegacyPocoRead.PocoArm("Old path: Poco");
-
-    public static AnswerArm CanRead { get; } = new ClientArms.FunctionAnswerArm("Old path: CanRead", Tier.CanRead, LegacyColumnarRead.CanRead);
-
-    public static WriteArm Write { get; } = new LegacyColumnarWrite.WriteArm("Old path: Write");
-
-    public static AnswerArm CanWrite { get; } = new ClientArms.FunctionAnswerArm("Old path: CanWrite", Tier.CanWrite, LegacyColumnarWrite.CanWrite);
-
-    public static WriteArm PocoWrite { get; } = new LegacyRowWrite.PocoArm("Old path: PocoWrite");
-
-    public static AnswerArm PocoCanWrite { get; } = new ClientArms.FunctionAnswerArm("Old path: PocoCanWrite", Tier.PocoCanWrite, LegacyRowWrite.PocoAnswer.Answer);
-
-    public static WriteArm UntypedWrite { get; } = new LegacyRowWrite.UntypedArm("Old path: UntypedWrite");
-
-    public static AnswerArm UntypedCanWrite { get; } = new ClientArms.FunctionAnswerArm("Old path: UntypedCanWrite", Tier.UntypedCanWrite, LegacyRowWrite.UntypedAnswer.Answer);
-}
-
-/// <summary>The client's entry points, one arm for each tier.</summary>
 internal static class ClientArms
 {
     /// <summary><c>Block.ReadAs&lt;T&gt;</c>, read through <c>Values</c>. The indexer must give the same values.</summary>

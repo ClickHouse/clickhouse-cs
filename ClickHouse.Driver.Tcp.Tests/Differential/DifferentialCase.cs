@@ -12,7 +12,7 @@ public enum CaseSource
     /// <summary>A case of <c>CompositeLiftMatrixTests.Cases()</c>.</summary>
     CompositeLiftMatrix,
 
-    /// <summary>A column type that <c>ColumnReadProjectionTests</c> reads, with each CLR type it reads that type as.</summary>
+    /// <summary>A column type of the read targets table of <c>DifferentialCases</c>, with the CLR types to read it as.</summary>
     ColumnReadProjection,
 
     /// <summary>A value or error scenario of <c>ColumnReadProjectionTests</c>: its own values, read as its target.</summary>
@@ -28,12 +28,12 @@ public enum WriteInputKind
     /// <summary>The decoded column, written again (the dense write path).</summary>
     Decoded,
 
-    /// <summary>The values that the reference read gives for one read target, in an array column.</summary>
+    /// <summary>The values that the baseline read gives for one read target, in an array column.</summary>
     ReadBack,
 }
 
 /// <summary>
-/// One case of the differential tests: a column type, the column that the reference writes and decodes, the CLR
+/// One case of the differential tests: a column type, the column that the baseline writes and decodes, the CLR
 /// types to read the decoded column as, and the columns to write.
 /// </summary>
 public sealed class DifferentialCase
@@ -61,7 +61,7 @@ public sealed class DifferentialCase
         Stated = stated ?? Array.Empty<StatedOutcome>();
     }
 
-    /// <summary>The unique name of the case. A deliberate change names the case by this value.</summary>
+    /// <summary>The unique name of the case. A declared outcome names the case by this value.</summary>
     public string Id { get; }
 
     /// <summary>The test class that the case comes from.</summary>
@@ -77,12 +77,12 @@ public sealed class DifferentialCase
     public IReadOnlyList<Type> ReadTargets { get; }
 
     /// <summary>
-    /// The columns that the write facets write. The first is the source: the reference writes it, and the read
+    /// The columns that the write facets write. The first is the source: the baseline writes it, and the read
     /// facets decode those bytes.
     /// </summary>
     public IReadOnlyList<WriteInput> WriteInputs { get; }
 
-    /// <summary>The outcomes that the source test of the case states. The reference must give each of them.</summary>
+    /// <summary>The outcomes that the source test of the case states. The baseline must give each of them.</summary>
     internal IReadOnlyList<StatedOutcome> Stated { get; }
 
     /// <summary>The facets of the case: each read target in each read tier, then each write input in each write tier.</summary>
@@ -147,7 +147,7 @@ public sealed class WriteInput
     /// <returns>The input.</returns>
     internal static WriteInput Decoded(Type elementType) => new("decoded", WriteInputKind.Decoded, elementType, build: null);
 
-    /// <summary>The values that the reference read gives for <paramref name="target"/>.</summary>
+    /// <summary>The values that the baseline read gives for <paramref name="target"/>.</summary>
     /// <param name="target">The read target whose values to write.</param>
     /// <returns>The input.</returns>
     internal static WriteInput ReadBack(Type target) => new($"read back as {TypeNames.Of(target)}", WriteInputKind.ReadBack, target, build: null);
@@ -158,7 +158,7 @@ public sealed class WriteInput
 
 /// <summary>
 /// An outcome that the source test of a case states for one read facet, for example the values or the exception of a
-/// <c>ColumnReadScenario</c>. The reference must give it, for all rows and for the tail.
+/// <c>ColumnReadScenario</c>. The baseline must give it, for all rows and for the tail.
 /// </summary>
 internal sealed class StatedOutcome
 {
@@ -175,7 +175,7 @@ internal sealed class StatedOutcome
     /// <summary>The read target of the facet.</summary>
     public Type Target { get; }
 
-    /// <summary>The outcome that the reference must give.</summary>
+    /// <summary>The outcome that the baseline must give.</summary>
     public Expectation Expected { get; }
 }
 

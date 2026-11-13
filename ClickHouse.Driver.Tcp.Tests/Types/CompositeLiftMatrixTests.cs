@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq.Expressions;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
 
@@ -68,70 +67,14 @@ public class CompositeLiftMatrixTests
     private static IColumnCodec Codec(string type)
         => ColumnCodecRegistry.Default.Resolve(type, new ResolveContext { ServerTimezone = "UTC" });
 
-    /// <summary>Creates a minimal value used to compile and invoke a projection.</summary>
-    private static object Sample(Type type)
-    {
-        if (type == typeof(string))
-        {
-            return string.Empty;
-        }
-
-        if (type.IsArray)
-        {
-            return Array.CreateInstance(type.GetElementType(), 0);
-        }
-
-        if (Nullable.GetUnderlyingType(type) is not null)
-        {
-            return null;
-        }
-
-        if (type.IsGenericType && type.GetGenericTypeDefinition().FullName!.StartsWith("System.ValueTuple", StringComparison.Ordinal))
-        {
-            Type[] arguments = type.GetGenericArguments();
-            var fields = new object[arguments.Length];
-            for (int i = 0; i < arguments.Length; i++)
-            {
-                fields[i] = Sample(arguments[i]);
-            }
-
-            return Activator.CreateInstance(type, fields);
-        }
-
-        return Activator.CreateInstance(type);
-    }
-
     [TestCaseSource(nameof(Cases))]
     public void ElementType_NestedComposite_IsTheCanonicalShapeTheCaseDeclares(Case testCase)
         => Assert.That(Codec(testCase.ColumnType).ElementType, Is.EqualTo(testCase.Canonical));
 
+    // The differential tests read the values of each case as its lifted type.
     [TestCaseSource(nameof(Cases))]
-    public void TryProjectRead_NestedComposite_OffersTheLiftedReadingAndRuns(Case testCase)
-    {
-        IColumnCodec codec = Codec(testCase.ColumnType);
-        ParameterExpression source = Expression.Parameter(testCase.Canonical, "v");
-
-        Assert.That(codec.TryProjectRead(source, testCase.Lifted, out Expression body), Is.True,
-            $"{testCase.ColumnType} does not offer {testCase.Lifted}");
-        Assert.That(body.Type, Is.EqualTo(testCase.Lifted));
-
-        Delegate compiled = Expression.Lambda(body, source).Compile();
-
-        Assert.That(() => compiled.DynamicInvoke(Sample(testCase.Canonical)), Throws.Nothing);
-    }
-
-    [TestCaseSource(nameof(Cases))]
-    public void TryProjectRead_NestedCompositeAskedForItsOwnElementType_IsTheIdentity(Case testCase)
-    {
-        IColumnCodec codec = Codec(testCase.ColumnType);
-        ParameterExpression source = Expression.Parameter(testCase.Canonical, "v");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.TryProjectRead(source, testCase.Canonical, out Expression projected), Is.True);
-            Assert.That(projected, Is.SameAs(source));
-        });
-    }
+    public void CanRead_NestedComposite_IsTrueForTheLiftedType(Case testCase)
+        => Assert.That(ClickHouseTcpTypes.CanRead(testCase.ColumnType, testCase.Lifted), Is.True, $"{testCase.ColumnType} does not read as {testCase.Lifted}");
 
     [TestCaseSource(nameof(Cases))]
     public void CanWriteElementType_NestedComposite_AcceptsBothTheCanonicalAndTheLiftedShape(Case testCase)
@@ -149,7 +92,6 @@ public class CompositeLiftMatrixTests
     public void CanWriteElementType_WhateverItAccepts_TheReadSideAlsoOffers(Case testCase)
     {
         IColumnCodec codec = Codec(testCase.ColumnType);
-        ParameterExpression source = Expression.Parameter(codec.ElementType, "v");
 
         Type[] candidates =
         {
@@ -172,7 +114,7 @@ public class CompositeLiftMatrixTests
                     continue;
                 }
 
-                Assert.That(codec.TryProjectRead(source, candidate, out _), Is.True,
+                Assert.That(ClickHouseTcpTypes.CanRead(testCase.ColumnType, candidate), Is.True,
                     $"{testCase.ColumnType} can be written from {candidate} but cannot be read into it");
             }
         });

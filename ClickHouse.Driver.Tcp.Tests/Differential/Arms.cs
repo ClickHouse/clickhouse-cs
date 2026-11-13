@@ -29,7 +29,7 @@ internal abstract class Arm
     /// <summary>The name of the implementation, unique in a registry. Failure messages use it.</summary>
     public string Name { get; }
 
-    /// <summary>The tier whose facets the implementation runs, and whose reference it is compared with.</summary>
+    /// <summary>The tier whose facets the implementation runs, and whose baseline it is compared with.</summary>
     public Tier Tier { get; }
 
     /// <summary>Whether the implementation runs a facet of its tier. The default runs every facet.</summary>
@@ -97,16 +97,10 @@ internal abstract class AnswerArm : Arm
     public abstract bool Answer(string columnType, Type elementType);
 }
 
-/// <summary>
-/// An arm that runs another arm under a different name, for example to register the reference as a candidate.
-/// </summary>
+/// <summary>A read arm that runs another read arm under a different name.</summary>
 internal static class RenamedArm
 {
     public static ReadArm Of(string name, ReadArm arm) => new Read(name, arm);
-
-    public static WriteArm Of(string name, WriteArm arm) => new Write(name, arm);
-
-    public static AnswerArm Of(string name, AnswerArm arm) => new Answering(name, arm);
 
     private sealed class Read : ReadArm
     {
@@ -118,30 +112,5 @@ internal static class RenamedArm
         public override bool Covers(Facet facet) => arm.Covers(facet);
 
         public override RowReader<T> Bind<T>(Block block) => arm.Bind<T>(block);
-    }
-
-    private sealed class Write : WriteArm
-    {
-        private readonly WriteArm arm;
-
-        public Write(string name, WriteArm arm)
-            : base(name, arm.Tier) => this.arm = arm;
-
-        public override bool Covers(Facet facet) => arm.Covers(facet);
-
-        public override SliceWriter Bind<T>(IColumn<T> column, string columnType, ResolveContext context)
-            => arm.Bind(column, columnType, context);
-    }
-
-    private sealed class Answering : AnswerArm
-    {
-        private readonly AnswerArm arm;
-
-        public Answering(string name, AnswerArm arm)
-            : base(name, arm.Tier) => this.arm = arm;
-
-        public override bool Covers(Facet facet) => arm.Covers(facet);
-
-        public override bool Answer(string columnType, Type elementType) => arm.Answer(columnType, elementType);
     }
 }

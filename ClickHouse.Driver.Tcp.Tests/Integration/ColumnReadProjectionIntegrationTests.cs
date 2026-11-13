@@ -1,16 +1,16 @@
 using System;
 using System.Collections.Generic;
-using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Types;
-using ClickHouse.Driver.Tcp.Types.Codecs;
+using ClickHouse.Driver.Tcp.Tests.Types.Converters;
+using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
 /// <summary>
-/// Checks <see cref="IColumnCodec.TryProjectRead"/> against a real server: a projection must agree with the instant
+/// Checks the calendar readings of the converter layer against a real server: a reading must agree with the instant
 /// the server itself means by that value. The unit tests pin the arithmetic against hand-computed constants; these
 /// pin it against the server's own timezone and scale handling, which a constant could match only by luck.
 /// <para>
@@ -25,25 +25,16 @@ public class ColumnReadProjectionIntegrationTests
     private static readonly CancellationToken None = CancellationToken.None;
 
     /// <summary>
-    /// Projects one row of a decoded column to <typeparamref name="T"/> through the column's own codec, the way a
-    /// compiled POCO scatter will. The value is taken boxed and unboxed inside the expression, so the projection
-    /// under test is the same expression tree a plan would inline.
+    /// Reads one row of a decoded column as <typeparamref name="T"/> through the derived reader's compiled
+    /// <see cref="ColumnReader.Emit"/>, the expression that a POCO scatter inlines, and checks that
+    /// <see cref="BoundReader{T}.Fill"/> gives the same value.
     /// </summary>
     private static T ProjectRow<T>(IColumn column, int row)
     {
-        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(
-            column.TypeName,
-            new ResolveContext { ServerTimezone = "UTC" });
-
-        ParameterExpression boxed = Expression.Parameter(typeof(object), "boxed");
-        Assert.That(
-            codec.TryProjectRead(Expression.Convert(boxed, codec.ElementType), typeof(T), out Expression projected),
-            Is.True,
-            $"the '{column.TypeName}' codec does not project to {typeof(T)}");
-
-        var project = Expression.Lambda<Func<object, T>>(projected, boxed).Compile();
-
-        return project(column.GetValue(row));
+        ColumnReader<T> reader = ConverterDerivation.Default.Reader<T>(column.TypeName, new ResolveContext { ServerTimezone = "UTC" });
+        T emitted = ConverterHarness.ReadEmit(reader, column, row, 1)[0];
+        Assert.That(ConverterHarness.ReadFill(reader, column, row, 1)[0], Is.EqualTo(emitted), "Fill and Emit");
+        return emitted;
     }
 
     [Test]

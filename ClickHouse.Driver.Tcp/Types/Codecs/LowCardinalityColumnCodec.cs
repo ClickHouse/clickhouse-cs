@@ -1,8 +1,5 @@
 using System;
 using System.Buffers;
-using System.Collections.Generic;
-using System.Linq.Expressions;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -113,12 +110,6 @@ internal static class LowCardinalityWire
 /// </summary>
 internal sealed class LowCardinalityColumnCodec : IColumnCodec
 {
-    private static readonly MethodInfo ProjectMethod =
-        typeof(LowCardinalityColumnCodec).GetMethod(nameof(Project), BindingFlags.NonPublic | BindingFlags.Static);
-
-    private static readonly MethodInfo ProjectLiftedMethod =
-        typeof(LowCardinalityColumnCodec).GetMethod(nameof(ProjectLifted), BindingFlags.NonPublic | BindingFlags.Static);
-
     private readonly IColumnCodec inner;
     private readonly ILowCardinalityShape shape;
     private readonly bool nullable;
@@ -138,30 +129,6 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public Type ElementType => shape.SurfaceElementType;
-
-    /// <summary>
-    /// The inner codec's readings on this codec's surface — so <c>LowCardinality(Nullable(DateTime))</c> reports
-    /// <c>uint?</c>, <c>DateTimeOffset?</c> and <c>DateTime?</c>. Diagnostics only, and only ever read on a failure
-    /// path, so it is built per call rather than cached.
-    /// </summary>
-    public IReadOnlyList<Type> ReadableElementTypes
-    {
-        get
-        {
-            IReadOnlyList<Type> innerTypes = inner.ReadableElementTypes;
-            var surfaced = new List<Type>(innerTypes.Count);
-            for (int i = 0; i < innerTypes.Count; i++)
-            {
-                Type innerType = innerTypes[i];
-                if (LegacyColumnProjection.Offers(inner, innerType))
-                {
-                    surfaced.Add(LowCardinalityShapes.For(innerType, nullable).SurfaceElementType);
-                }
-            }
-
-            return surfaced;
-        }
-    }
 
     /// <summary>
     /// The placeholder for an absent value: for a nullable inner it is <see langword="null"/> itself (the reserved
@@ -388,130 +355,6 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
         }
 
         return (int)key;
-    }
-
-    /// <inheritdoc/>
-    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
-    {
-        ColumnValueProjections.RequireSourceType(value, ElementType, TypeName);
-
-        if (targetType == ElementType)
-        {
-            projected = value;
-            return true;
-        }
-
-        // A non-nullable LowCardinality is fully transparent on reads: its surface is the inner element type
-        // unchanged, so the target is already the inner's own spelling and there is nothing to lift.
-        if (!nullable)
-        {
-            return inner.TryProjectRead(value, targetType, out projected);
-        }
-
-        projected = null;
-
-        // Nullable LowCardinality uses the same CLR surface as Nullable(T).
-        Type innerTarget = Nullable.GetUnderlyingType(targetType);
-        if (innerTarget is null)
-        {
-            if (targetType.IsValueType)
-            {
-                return false;
-            }
-
-            innerTarget = targetType;
-        }
-
-        return ColumnValueProjections.TryLiftOverAbsent(value, inner, innerTarget, targetType, out projected);
-    }
-
-    /// <summary>
-    /// Projects each dictionary entry once, then reads rows by key.
-    /// </summary>
-    public bool TryProjectColumnRead(Type targetType, out ColumnReadProjection projection)
-    {
-        projection = null;
-
-        if (targetType == ElementType)
-        {
-            return false;
-        }
-
-        // Undo this surface's wrap to recover the dictionary's own spelling of the target; a non-nullable
-        // LowCardinality is transparent, so its surface is the inner spelling already.
-        Type innerTarget = targetType;
-        if (nullable)
-        {
-            innerTarget = Nullable.GetUnderlyingType(targetType);
-            if (innerTarget is null)
-            {
-                // A bare value-typed target has nowhere to put a NULL row.
-                if (targetType.IsValueType)
-                {
-                    return false;
-                }
-
-                innerTarget = targetType;
-            }
-        }
-
-        ColumnReadProjection dictionaryProjection = LegacyColumnProjection.For(inner, innerTarget);
-        if (dictionaryProjection is null)
-        {
-            return false;
-        }
-
-        // A value-typed dictionary reading under a nullable surface has to be lifted into Nullable<T>; every other
-        // pairing surfaces the dictionary's own type, absent rows included.
-        projection = nullable && innerTarget.IsValueType
-            ? LegacyColumnProjection.Close(ProjectLiftedMethod, dictionaryProjection, innerTarget)
-            : LegacyColumnProjection.Close(ProjectMethod, dictionaryProjection, innerTarget);
-        return true;
-    }
-
-    /// <summary>
-    /// Builds a row view over a projected dictionary. Nullable value types use <see cref="ProjectLifted{T}"/>.
-    /// </summary>
-    /// <typeparam name="T">The projected dictionary type, which is also this view's element type.</typeparam>
-    /// <param name="source">The decoded <c>LowCardinality(...)</c> column.</param>
-    /// <param name="dictionaryProjection">The inner codec's projection of the dictionary column.</param>
-    /// <returns>The view.</returns>
-    private static IColumn Project<T>(IColumn source, ColumnReadProjection dictionaryProjection)
-    {
-        ILowCardinalityColumn lowCardinality = LegacyColumnProjection.Surface<ILowCardinalityColumn>(source);
-        var entries = (IColumn<T>)dictionaryProjection(lowCardinality.Dictionary);
-        bool nullMarker = lowCardinality.ReservedSlotCount == 2;
-
-        // The projected dictionary's Values, not its indexer: Values converts the entries once, and every row
-        // holding a key then reads that one conversion — the indexer would convert per access instead.
-        return new ProjectedReadColumn<T>(
-            source,
-            (column, row) =>
-            {
-                int key = ((ILowCardinalityColumn)column).Keys[row];
-                return nullMarker && key == 0 ? default : entries.Values[key];
-            });
-    }
-
-    /// <summary><see cref="Project{T}"/> for a value-typed dictionary reading under a nullable surface.</summary>
-    /// <typeparam name="T">The projected dictionary type; the view's element type is <c>T?</c>.</typeparam>
-    /// <param name="source">The decoded <c>LowCardinality(Nullable(...))</c> column.</param>
-    /// <param name="dictionaryProjection">The inner codec's projection of the dictionary column.</param>
-    /// <returns>The view.</returns>
-    private static IColumn ProjectLifted<T>(IColumn source, ColumnReadProjection dictionaryProjection)
-        where T : struct
-    {
-        ILowCardinalityColumn lowCardinality = LegacyColumnProjection.Surface<ILowCardinalityColumn>(source);
-        var entries = (IColumn<T>)dictionaryProjection(lowCardinality.Dictionary);
-        bool nullMarker = lowCardinality.ReservedSlotCount == 2;
-
-        return new ProjectedReadColumn<T?>(
-            source,
-            (column, row) =>
-            {
-                int key = ((ILowCardinalityColumn)column).Keys[row];
-                return nullMarker && key == 0 ? null : entries.Values[key];
-            });
     }
 
     /// <inheritdoc/>

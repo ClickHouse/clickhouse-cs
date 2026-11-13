@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -128,22 +129,16 @@ public class NullableColumnCodecTests
         });
     }
 
-    [Test]
-    public void WritableElementTypes_ListWhatCanWriteAccepts_CanonicalFirst()
+    [TestCase("Nullable(DateTime('UTC'))", new[] { typeof(uint?), typeof(DateTimeOffset?), typeof(DateTime?) })]
+    [TestCase("Nullable(Int32)", new[] { typeof(int?) })]
+    [TestCase("Nullable(String)", new[] { typeof(string), typeof(byte[]) })]
+    public void CanWriteElementType_EveryInnerWriteTypeMadeNullable_IsTrue(string type, Type[] writeTypes)
     {
-        // The list has to agree with CanWrite: a caller choosing a write type from it — a POCO insert picking the
-        // spelling to gather a property into — never gets to probe with a column first.
-        Assert.Multiple(() =>
-        {
-            Assert.That(
-                Resolve("Nullable(DateTime('UTC'))").WritableElementTypes,
-                Is.EqualTo(new[] { typeof(uint?), typeof(DateTimeOffset?), typeof(DateTime?) }));
-            Assert.That(Resolve("Nullable(Int32)").WritableElementTypes, Is.EqualTo(new[] { typeof(int?) }));
+        // A reference type is already nullable, so the wrapper takes the inner spellings unchanged: String takes text or
+        // the bytes themselves.
+        IColumnCodec codec = Resolve(type);
 
-            // A reference type is already nullable, so the wrapper lists the inner spellings unchanged: String
-            // takes text or the bytes themselves.
-            Assert.That(Resolve("Nullable(String)").WritableElementTypes, Is.EqualTo(new[] { typeof(string), typeof(byte[]) }));
-        });
+        Assert.That(writeTypes.Where(writeType => !codec.CanWriteElementType(writeType)), Is.Empty);
     }
 
     [Test]

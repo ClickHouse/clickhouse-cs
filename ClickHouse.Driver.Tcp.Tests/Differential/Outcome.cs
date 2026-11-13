@@ -26,7 +26,7 @@ internal enum OutcomeKind
     /// <summary>The implementation accepted the facet, then threw on a value.</summary>
     Failed,
 
-    /// <summary>The facet has no input, for example a read back whose reference read was refused.</summary>
+    /// <summary>The facet has no input, for example a read back whose baseline read was refused.</summary>
     Unavailable,
 }
 

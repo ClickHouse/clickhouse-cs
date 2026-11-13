@@ -9,12 +9,11 @@ using ClickHouse.Driver.Tcp.Tests.Utilities;
 namespace ClickHouse.Driver.Tcp.Tests.Poco;
 
 /// <summary>
-/// The POCO read plan against the reference plan of the differential tests (<see cref="PocoReadPlan{T}.BuildLegacy"/>),
-/// for the matrix of column types and CLR targets of
+/// The two scatter tiers of the POCO read plan against each other, for the matrix of column types and CLR targets of
 /// <see cref="ReadRulesTests"/> (enums, casts, nullable targets, tuples, maps, the array casts), which the differential
-/// case list does not have. Each scatter tier must give the outcome of the old plan: the same refusal, the same values,
-/// or the same failure, for all the rows and for a window that starts past the first row of the block and past the
-/// first row of the result.
+/// case list does not have. The <see cref="PocoScatterTier.Fill"/> tier must give the outcome of the
+/// <see cref="PocoScatterTier.Emit"/> tier: the same refusal, the same values, or the same failure, for all the rows and
+/// for a window that starts past the first row of the block and past the first row of the result.
 /// </summary>
 [TestFixture]
 public class PocoReadRulesTests
@@ -24,7 +23,7 @@ public class PocoReadRulesTests
     private static IEnumerable<string> Types() => ReadRulesTests.ColumnTypes;
 
     [TestCaseSource(nameof(Types))]
-    public void Materialize_EachTarget_GivesTheOutcomeOfTheOldPlan(string columnType)
+    public void Materialize_EachTarget_GivesTheSameOutcomeInBothTiers(string columnType)
     {
         var differences = new List<string>();
         foreach (Type target in ReadRulesTests.Targets)
@@ -39,21 +38,18 @@ public class PocoReadRulesTests
         Assert.That(differences, Is.Empty, string.Join(Environment.NewLine, differences));
     }
 
-    // The first difference between the old plan and a tier of the plan for one target, or null. Each read gets a block
-    // decoded for it alone, so a column cache that one plan fills does not serve another.
+    // The first difference between the Emit tier and the Fill tier of the plan for one target, or null. Each read gets
+    // a block decoded for it alone, so a column cache that one plan fills does not serve another.
     private static string Compare<T>(string columnType)
     {
         foreach ((int start, int count, long rowOffset) in Windows)
         {
-            (T[] Values, string Failure) expected = Read<T>(columnType, block => PocoReadPlan<Row<T>>.BuildLegacy(PocoTypeDescriptor<Row<T>>.Build(), block), start, count, rowOffset);
-            foreach (PocoScatterTier tier in Enum.GetValues<PocoScatterTier>())
+            (T[] Values, string Failure) emit = Read<T>(columnType, PocoScatterTier.Emit, start, count, rowOffset);
+            (T[] Values, string Failure) fill = Read<T>(columnType, PocoScatterTier.Fill, start, count, rowOffset);
+            string difference = Difference(emit, fill);
+            if (difference is not null)
             {
-                (T[] Values, string Failure) actual = Read<T>(columnType, block => PocoReadPlan<Row<T>>.Build(PocoTypeDescriptor<Row<T>>.Build(), block, tier), start, count, rowOffset);
-                string difference = Difference(expected, actual);
-                if (difference is not null)
-                {
-                    return $"{tier}, rows [{start}, {start + count}) as rows from {rowOffset}: {difference}";
-                }
+                return $"rows [{start}, {start + count}) as rows from {rowOffset}: {difference}";
             }
         }
 
@@ -61,13 +57,13 @@ public class PocoReadRulesTests
     }
 
     // The outcome of one read: the values, or the refusal of the plan or the failure of the read as text.
-    private static (T[] Values, string Failure) Read<T>(string columnType, Func<Block, PocoReadPlan<Row<T>>> build, int start, int count, long rowOffset)
+    private static (T[] Values, string Failure) Read<T>(string columnType, PocoScatterTier tier, int start, int count, long rowOffset)
     {
         using Block block = ReadRulesTests.DecodeSample(columnType);
         PocoReadPlan<Row<T>> plan;
         try
         {
-            plan = build(block);
+            plan = PocoReadPlan<Row<T>>.Build(PocoTypeDescriptor<Row<T>>.Build(), block, tier);
         }
         catch (InvalidOperationException e)
         {
@@ -93,7 +89,7 @@ public class PocoReadRulesTests
         {
             return expected.Failure == actual.Failure
                 ? null
-                : $"the old plan gives {expected.Failure ?? "values"}, and the plan gives {actual.Failure ?? "values"}.";
+                : $"the Emit tier gives {expected.Failure ?? "values"}, and the Fill tier gives {actual.Failure ?? "values"}.";
         }
 
         for (int i = 0; i < expected.Values.Length; i++)
