@@ -47,6 +47,11 @@ internal sealed class ValueSlot<T> : ColumnSlot
 
     public ValueSlot(ITypedReader<T> typedReader) => this.typedReader = typedReader;
 
+    /// <summary>The reader this slot decodes through, for callers that need more than the decoded value —
+    /// a date/time column decodes through an <see cref="InstantCapturingReader"/>, which also keeps the
+    /// instant the value was stored as.</summary>
+    public ITypedReader<T> Reader => typedReader;
+
     public override void Read(ExtendedBinaryReader reader) => Value = typedReader.ReadValue(reader);
 
     public override object GetBoxed() => Value;
@@ -69,6 +74,10 @@ internal sealed class NullableSlot<T> : ColumnSlot
     public bool HasValue;
 
     public NullableSlot(ITypedReader<T> typedReader) => this.typedReader = typedReader;
+
+    /// <summary>See <see cref="ValueSlot{T}.Reader"/>. Only meaningful while <see cref="HasValue"/> is
+    /// true: a NULL cell decodes nothing, so anything the reader kept is the previous row's.</summary>
+    public ITypedReader<T> Reader => typedReader;
 
     public override void Read(ExtendedBinaryReader reader)
     {

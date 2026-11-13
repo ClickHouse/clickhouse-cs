@@ -89,6 +89,14 @@ internal static class ColumnSlotFactory
         if (type is not ITypedReader)
             return null;
 
+        // A DateTime/DateTime64 column decodes an absolute instant that its DateTime value cannot represent:
+        // inside a DST fall-back hour one wall clock occurs at two offsets. Decoding through the capturing
+        // reader keeps that instant for GetDateTimeOffset, at no cost to any other column — Date/Date32 and
+        // every non-date/time type get null here and keep their own typed reader.
+        var capturingReader = InstantCapturingReader.TryCreate(type);
+        if (capturingReader != null)
+            return nullable ? new NullableSlot<DateTime>(capturingReader) : new ValueSlot<DateTime>(capturingReader);
+
         return Binders.TryGetValue(type.FrameworkType, out var bind) ? bind(type, nullable) : null;
     }
 
