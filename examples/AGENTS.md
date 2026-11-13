@@ -62,12 +62,12 @@ Take the server from `ExampleConfig`, which resolves environment variables over 
   those would produce a duplicate.
 - `ExampleConfig.HttpBuilder()` to *change* one of those five. It returns a fresh builder each call.
 
-Seven examples are exempt, because configuration is their subject, they use a separate endpoint, or
+Eight examples are exempt, because configuration is their subject, they use a separate endpoint, or
 they start their own server:
 `Core_002_ConnectionStringConfiguration`, `Core_003_DependencyInjection`,
 `Auth_001_JwtAuthentication`, `Tables_003_CreateTableCloud`, `Testing_001_Testcontainers`,
-`Tcp_003_Tls`, `Tcp_005_Testcontainers`. A literal connection string inside a comment,
-shown to teach the reader what one looks like, is also fine.
+`Tcp_003_Tls`, `Tcp_005_Testcontainers`, `Tcp_005_ReplicaRouting`. A literal connection string
+inside a comment, shown to teach the reader what one looks like, is also fine.
 
 Ask `ExampleConfig` for the endpoint with `HttpEndpoint` or `TcpEndpoint` when an example has to name
 or dial it itself. There are no `Host`/`Port` properties: a whole-string override would not reach
@@ -75,12 +75,13 @@ them, so an example reading one could print an endpoint it did not connect to.
 
 ## Examples deliberately left out of `RunAllExamples`
 
-Three need infrastructure the CI server does not have, so they are registered nowhere and run only
+Four need infrastructure the CI server does not have, so they are registered nowhere and run only
 by explicit filter:
 
 - `Tables_002_CreateTableCluster` — needs a ClickHouse cluster.
 - `Tables_003_CreateTableCloud` — needs ClickHouse Cloud credentials.
 - `Auth_001_JwtAuthentication` — needs a JWT.
+- `Tcp_005_ReplicaRouting` — needs a ClickHouse Cloud service with replica-aware routing turned on.
 
 Their class names are also in `ExampleRunner._optIn`, which is what keeps `--http` and `--tcp` from
 running them: those select by reflection, so leaving an example out of `RunAllExamples` does not on
@@ -88,6 +89,9 @@ its own keep a transport run from picking it up.
 
 If you add an example of that kind, leave it out of `RunAllExamples`, add its class name to
 `_optIn`, and list it here. Otherwise the omission is indistinguishable from having forgotten step 4.
+If it connects to its own endpoint instead of the one `ExampleConfig` gives, also add it to
+`_customEndpoint`. Otherwise a filtered run first checks the `ExampleConfig` endpoint and stops when
+no local server answers, before the example starts.
 
 ## Style
 

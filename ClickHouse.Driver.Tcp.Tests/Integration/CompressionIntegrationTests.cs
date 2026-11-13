@@ -354,10 +354,10 @@ public class CompressionIntegrationTests
         /// <summary>How many connections the pool has opened through this factory.</summary>
         public int Dials => Volatile.Read(ref dials);
 
-        public ValueTask<ClickHouseTcpConnection> CreateAsync(CancellationToken cancellationToken)
+        public ValueTask<ClickHouseTcpConnection> CreateAsync(string replicaTag, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref dials);
-            return inner.CreateAsync(cancellationToken);
+            return inner.CreateAsync(replicaTag, cancellationToken);
         }
 
         public void Dispose() => inner.Dispose();

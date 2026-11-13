@@ -22,9 +22,10 @@ namespace ClickHouse.Driver.Tcp.Client;
 internal interface IConnectionFactory : IDisposable
 {
     /// <summary>Opens a connection and returns it Ready. On failure nothing is left open.</summary>
+    /// <param name="replicaTag">The validated replica tag to send in the TLS server name, or null for none.</param>
     /// <param name="cancellationToken">A token to observe while connecting.</param>
     /// <returns>A connected, handshaken connection.</returns>
-    ValueTask<ClickHouseTcpConnection> CreateAsync(CancellationToken cancellationToken);
+    ValueTask<ClickHouseTcpConnection> CreateAsync(string replicaTag, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -51,7 +52,7 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
     }
 
     /// <inheritdoc/>
-    public async ValueTask<ClickHouseTcpConnection> CreateAsync(CancellationToken cancellationToken)
+    public async ValueTask<ClickHouseTcpConnection> CreateAsync(string replicaTag, CancellationToken cancellationToken)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linked.CancelAfter(options.DialTimeout);
@@ -62,13 +63,20 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
         long startedAt = Stopwatch.GetTimestamp();
         if (logger is not null)
         {
-            ConnectionLog.Opening(logger, options.Host, options.ResolvedPort, options.Username, options.UseTls);
+            if (replicaTag is null)
+            {
+                ConnectionLog.Opening(logger, options.Host, options.ResolvedPort, options.Username, options.UseTls);
+            }
+            else
+            {
+                ConnectionLog.OpeningWithReplicaTag(logger, options.Host, options.ResolvedPort, options.Username, replicaTag);
+            }
         }
 
         try
         {
             ClickHouseTcpConnection connection = await ClickHouseTcpConnection.ConnectAsync(
-                options.Host, options.ResolvedPort, options.ToHandshakeParameters(), tls, linked.Token, options.Compressor, options.ReadTimeout).ConfigureAwait(false);
+                options.Host, options.ResolvedPort, options.ToHandshakeParameters(), tls, linked.Token, options.Compressor, options.ReadTimeout, replicaTag).ConfigureAwait(false);
 
             activity?.SetSuccess();
             if (logger is not null)
@@ -144,7 +152,7 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
             {
                 // The certificate names the server, which is Host unless the caller says the certificate
                 // names something else (an internal alias, or a Host given as an address).
-                TargetHost = string.IsNullOrEmpty(options.TlsServerName) ? options.Host : options.TlsServerName,
+                TargetHost = ReplicaRouting.ServerName(options),
                 AllowInvalidCertificates = options.TlsAllowInvalidCertificates,
                 CaCertificates = options.TlsCaCertificatePath is null
                     ? null

@@ -220,6 +220,12 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     /// <param name="handshake">The client-supplied handshake values (identity and credentials).</param>
     /// <param name="tls">How to negotiate TLS before the handshake, or null to run in the clear.</param>
     /// <param name="cancellationToken">A token to observe for cancellation (and to bound the connect).</param>
+    /// <param name="compressor">The codec for blocks sent on this connection, or null for none.</param>
+    /// <param name="readTimeout">The idle read deadline, or zero for none.</param>
+    /// <param name="replicaTag">
+    /// The replica tag sent in the TLS server name, already validated, or null for none. Ignored without
+    /// <paramref name="tls"/>.
+    /// </param>
     /// <returns>A connected, handshaken connection ready to accept a request.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="host"/> or <paramref name="handshake"/> is null.</exception>
     /// <exception cref="ClickHouseTcpConnectionException">The socket could not connect, or the TLS handshake failed (certificate rejected, or the port is not a TLS port). The cause is the inner exception.</exception>
@@ -233,7 +239,8 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
         TlsParameters tls,
         CancellationToken cancellationToken,
         IClickHouseCompressor compressor = null,
-        TimeSpan readTimeout = default)
+        TimeSpan readTimeout = default,
+        string replicaTag = null)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(handshake);
@@ -249,7 +256,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
         // Before the socket exists, and outside the try below: this runs the caller's ConfigureTls hook, whose
         // failures are its own rather than the transport's, and it fails fast without spending a connection.
-        SslClientAuthenticationOptions tlsOptions = tls?.BuildAuthenticationOptions();
+        SslClientAuthenticationOptions tlsOptions = tls?.BuildAuthenticationOptions(replicaTag);
 
         var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
         Stream transport;

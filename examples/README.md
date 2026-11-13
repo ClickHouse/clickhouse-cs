@@ -133,6 +133,7 @@ These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/READ
 - [Tcp_002_PoolTuning.cs](Tcp/Connection/Tcp_002_PoolTuning.cs) - Configure pool size, reuse, and checkout timeouts
 - [Tcp_003_Tls.cs](Tcp/Connection/Tcp_003_Tls.cs) - Configure TLS and certificate validation
 - [Tcp_004_Timeouts.cs](Tcp/Connection/Tcp_004_Timeouts.cs) - Set connection and read timeouts, then cancel a query
+- [Tcp_005_ReplicaRouting.cs](Tcp/Connection/Tcp_005_ReplicaRouting.cs) - Send related work to one ClickHouse Cloud replica with a replica tag (needs Cloud; run by `--filter`)
 
 ### Native Protocol: Advanced
 
