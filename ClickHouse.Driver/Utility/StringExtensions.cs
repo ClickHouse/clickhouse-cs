@@ -45,6 +45,76 @@ internal static class StringExtensions
     }
 
     /// <summary>
+    /// Encloses a possibly database-qualified name (<c>database.table</c>) in backticks, one part at a
+    /// time, so that a part which is not a legal unquoted identifier still reaches the server as a
+    /// single identifier. Parts that are already enclosed are left as they are, which keeps a name
+    /// that a caller pre-quoted from being quoted twice.
+    /// </summary>
+    /// <param name="str">Possibly qualified, possibly already enclosed name</param>
+    /// <returns>Name with every part enclosed</returns>
+    public static string EncloseQualifiedName(this string str)
+    {
+        if (string.IsNullOrEmpty(str) || str.IndexOf('.') < 0)
+            return EnclosePart(str);
+
+        var builder = new StringBuilder(str.Length + 4);
+        var position = 0;
+        while (true)
+        {
+            var end = FindPartEnd(str, position);
+            if (builder.Length > 0)
+                builder.Append('.');
+            builder.Append(EnclosePart(str[position..end]));
+            if (end >= str.Length)
+                return builder.ToString();
+            position = end + 1; // Skip the separator
+        }
+    }
+
+    /// <summary>
+    /// Encloses one part of a qualified name. A part the caller already enclosed is left as it is —
+    /// in backticks, or in the double quotes ClickHouse equally accepts around an identifier, which
+    /// is how a caller can have worked around the name not being enclosed at all.
+    /// </summary>
+    private static string EnclosePart(string part) =>
+        part != null && part.Length >= 2 && part[0] == '"' && part[part.Length - 1] == '"'
+            ? part
+            : part.EncloseColumnName();
+
+    /// <summary>
+    /// Returns the index of the separator that ends the part starting at <paramref name="start"/>, or
+    /// the length of <paramref name="str"/> for the last part. A separator inside an enclosed part
+    /// belongs to the name, so it does not end the part.
+    /// </summary>
+    private static int FindPartEnd(string str, int start)
+    {
+        var i = start;
+        if (i < str.Length && (str[i] == '`' || str[i] == '"'))
+        {
+            var quote = str[i];
+            for (i++; i < str.Length; i++)
+            {
+                if (str[i] == '\\')
+                {
+                    i++; // The escaped character cannot close the part
+                    continue;
+                }
+
+                if (str[i] == quote)
+                {
+                    i++;
+                    break;
+                }
+            }
+        }
+
+        while (i < str.Length && str[i] != '.')
+            i++;
+
+        return i;
+    }
+
+    /// <summary>
     /// Removes the enclosing backticks (`) from an identifier and unescapes the escape sequences
     /// ClickHouse uses inside a quoted identifier. Does nothing if the identifier is not enclosed.
     /// </summary>
