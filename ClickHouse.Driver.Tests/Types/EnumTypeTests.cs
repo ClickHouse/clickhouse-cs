@@ -163,6 +163,22 @@ public class EnumTypeTests
             Throws.TypeOf<FormatException>().With.Message.Contains("range ["));
     }
 
+    // The server rejects these with "Duplicate values in enum" or "Duplicate names in enum" (checked against 26.3
+    // and 26.9): two members share an ordinal or a label, so one member would be lost.
+    [TestCase("Enum8('a', 'b' = 1)", "The ordinal 1 of 'b' is also the ordinal of 'a'.")]
+    [TestCase("Enum8('a', 'b' = 3, 'c' = 3)", "The ordinal 3 of 'c' is also the ordinal of 'b'.")]
+    [TestCase("Enum16('a', 'b' = 1)", "The ordinal 1 of 'b' is also the ordinal of 'a'.")]
+    [TestCase("Enum('a', 'b' = 1)", "The ordinal 1 of 'b' is also the ordinal of 'a'.")]
+    [TestCase("Enum8('a', 'a')", "The label 'a' is declared more than once.")]
+    [TestCase("Enum8('a' = 5, 'a')", "The label 'a' is declared more than once.")]
+    [TestCase("Enum8('a', 'a' = 1)", "The label 'a' is declared more than once.")]
+    public void ParseClickHouseType_EnumMembersWithoutOrdinalsSharingAMember_ThrowsFormatException(string typeString, string expectedMessageEnd)
+    {
+        Assert.That(
+            () => TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default),
+            Throws.TypeOf<FormatException>().With.Message.EndsWith(expectedMessageEnd));
+    }
+
     [Test]
     public void ToString_WithEscapedEnumLabels_ReturnsParseableTypeDeclaration()
     {

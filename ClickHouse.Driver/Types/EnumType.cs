@@ -83,9 +83,10 @@ internal class EnumType : ParameterizedType
 
     // A member may omit its ordinal. The server then numbers it like this: the first member's ordinal (1 when the
     // first member has none) plus the member's position, counted from 0. After the first member, either every
-    // member declares an ordinal or none does. When a member omits its ordinal, the server also rejects every
-    // ordinal outside the range of the type. A definition in which every member declares its ordinal is not
-    // range-checked here: 26.3 accepts an ordinal outside the range and wraps it, as the writers do.
+    // member declares an ordinal or none does. The server rejects a label or an ordinal that two members share in
+    // every definition, and, when a member omits its ordinal, an ordinal outside the range of the type. These checks
+    // run here only when a member omits its ordinal. A definition in which every member declares its ordinal is
+    // parsed as before: 26.3 accepts an ordinal outside the range there and wraps it, as the writers do.
     private static Dictionary<string, int> ParseEnumMembers(SyntaxTreeNode node, string rangeName, int min, int max)
     {
         var members = node.ChildNodes.Select(cn => ParseEnumMember(cn.Value)).ToList();
@@ -97,14 +98,28 @@ internal class EnumType : ParameterizedType
         var numbered = members.Exists(member => member.Ordinal is null);
         long first = members.Count > 0 ? members[0].Ordinal ?? 1 : 1;
         var values = new Dictionary<string, int>(members.Count);
+        var labelsByOrdinal = numbered ? new Dictionary<long, string>(members.Count) : null;
         for (var i = 0; i < members.Count; i++)
         {
             var ordinal = members[i].Ordinal ?? first + i;
-            if (numbered && (ordinal < min || ordinal > max))
+            if (labelsByOrdinal != null)
             {
-                throw new FormatException(
-                    $"Invalid enum definition: {node}. The ordinal {ordinal.ToString(CultureInfo.InvariantCulture)} of '{members[i].Label}' is out of the {rangeName} " +
-                    $"range [{min.ToString(CultureInfo.InvariantCulture)}, {max.ToString(CultureInfo.InvariantCulture)}].");
+                if (values.ContainsKey(members[i].Label))
+                    throw new FormatException($"Invalid enum definition: {node}. The label '{members[i].Label}' is declared more than once.");
+
+                if (ordinal < min || ordinal > max)
+                {
+                    throw new FormatException(
+                        $"Invalid enum definition: {node}. The ordinal {ordinal.ToString(CultureInfo.InvariantCulture)} of '{members[i].Label}' is out of the {rangeName} " +
+                        $"range [{min.ToString(CultureInfo.InvariantCulture)}, {max.ToString(CultureInfo.InvariantCulture)}].");
+                }
+
+                if (!labelsByOrdinal.TryAdd(ordinal, members[i].Label))
+                {
+                    throw new FormatException(
+                        $"Invalid enum definition: {node}. The ordinal {ordinal.ToString(CultureInfo.InvariantCulture)} of '{members[i].Label}' " +
+                        $"is also the ordinal of '{labelsByOrdinal[ordinal]}'.");
+                }
             }
 
             values.Add(members[i].Label, (int)ordinal);
