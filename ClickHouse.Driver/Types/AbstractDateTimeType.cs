@@ -72,8 +72,26 @@ internal abstract class AbstractDateTimeType : ParameterizedType,
             OffsetDateTime o => o.ToDateTimeOffset(),
             ZonedDateTime z => z.ToDateTimeOffset(),
             Instant i => ToDateTimeOffset(i),
-            _ => throw new NotSupportedException()
+            string s => CoerceToDateTimeOffset(s),
+            _ => throw new NotSupportedException($"Cannot convert {value?.GetType().Name ?? "null"} to {this}")
         };
+    }
+
+    /// <summary>
+    /// Coerces a date/time string culture-invariantly, as the other scalar types do for a string value.
+    /// </summary>
+    private DateTimeOffset CoerceToDateTimeOffset(string value)
+    {
+        if (!DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
+            throw new FormatException($"Cannot parse '{value}' as {this}");
+
+        // RoundtripKind leaves the kind Unspecified only for a string carrying neither an offset nor 'Z'.
+        // Such a string is wall-clock time, which the DateTime overload resolves in the column timezone.
+        // A string that does carry an offset denotes an instant, so read it as a DateTimeOffset to keep
+        // that offset rather than the machine-local one DateTime.Parse converts it to.
+        return parsed.Kind == DateTimeKind.Unspecified
+            ? CoerceToDateTimeOffset(parsed)
+            : DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
     }
 
     /// <summary>
