@@ -107,6 +107,46 @@ public class EnumTypeTests
         Assert.That(type.Lookup(1), Is.EqualTo("a=b"));
     }
 
+    // The server numbers a member declared without an ordinal: the first member's ordinal (1 when the first
+    // member has none) plus the member's position, counted from 0. Each expected type is the server's
+    // toTypeName() of the input (checked against 26.3 and 26.10).
+    [TestCase("Enum8('a', 'b')", "Enum8('a' = 1, 'b' = 2)")]
+    [TestCase("Enum('a', 'b')", "Enum8('a' = 1, 'b' = 2)")]
+    [TestCase("Enum16('a', 'b')", "Enum16('a' = 1, 'b' = 2)")]
+    [TestCase("Enum8('a')", "Enum8('a' = 1)")]
+    [TestCase("Enum8('a' = 5, 'b', 'c')", "Enum8('a' = 5, 'b' = 6, 'c' = 7)")]
+    [TestCase("Enum8('a' = -128, 'b')", "Enum8('a' = -128, 'b' = -127)")]
+    [TestCase("Enum8('a', 'b' = 3)", "Enum8('a' = 1, 'b' = 3)")]
+    [TestCase("Enum8('x=y', 'b')", "Enum8('x=y' = 1, 'b' = 2)")]
+    [TestCase("Enum8('it\\'s', 'b')", "Enum8('it\\'s' = 1, 'b' = 2)")]
+    [TestCase("Nullable(Enum8('a', 'b'))", "Nullable(Enum8('a' = 1, 'b' = 2))")]
+    [TestCase("Array(Enum8('a', 'b'))", "Array(Enum8('a' = 1, 'b' = 2))")]
+    [TestCase("Map(String, Enum16('a', 'b'))", "Map(String, Enum16('a' = 1, 'b' = 2))")]
+    public void ParseClickHouseType_EnumMembersWithoutOrdinals_NumbersThemLikeTheServer(string typeString, string expected)
+    {
+        var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        Assert.That(type.ToString(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void ParseClickHouseType_NamedTupleElementEnumWithoutOrdinals_NumbersItsMembers()
+    {
+        var tuple = (TupleType)TypeConverter.ParseClickHouseType("Tuple(e Enum8('a', 'b'), s String)", TypeSettings.Default);
+
+        Assert.That(tuple.UnderlyingTypes[0].ToString(), Is.EqualTo("Enum8('a' = 1, 'b' = 2)"));
+    }
+
+    // The server rejects these with UNEXPECTED_AST_STRUCTURE: after the first member, either every member
+    // declares an ordinal or none does.
+    [TestCase("Enum8('a', 'b' = 3, 'c')")]
+    [TestCase("Enum8('a' = 5, 'b' = 7, 'c')")]
+    [TestCase("Enum8('a' = 5, 'b', 'c' = 10, 'd')")]
+    public void ParseClickHouseType_EnumMembersMixingBothForms_ThrowsFormatException(string typeString)
+    {
+        Assert.Throws<FormatException>(() => TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default));
+    }
+
     [Test]
     public void ToString_WithEscapedEnumLabels_ReturnsParseableTypeDeclaration()
     {

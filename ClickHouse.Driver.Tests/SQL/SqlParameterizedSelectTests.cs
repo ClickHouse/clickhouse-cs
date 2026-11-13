@@ -262,6 +262,19 @@ public class SqlParameterizedSelectTests : IDisposable
     }
 
     [Test]
+    [TestCase("Enum8('a', 'b')", "b")]
+    [TestCase("Enum8('it''s', 'b')", "it's")]
+    public async Task AddParameter_EnumTypeHintWithoutOrdinals_UsesTypeHint(string typeHint, string label)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {{val:{typeHint}}} AS res";
+        command.AddParameter("val", label);
+
+        var result = (await command.ExecuteReaderAsync()).GetEnsureSingleRow().Single();
+        Assert.That(result, Is.EqualTo(label));
+    }
+
+    [Test]
     [TestCase("String")]
     [TestCase("Int32")]
     [TestCase("Int64")]

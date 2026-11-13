@@ -36,10 +36,7 @@ internal class EnumType : ParameterizedType
 
     public override ParameterizedType Parse(SyntaxTreeNode node, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings)
     {
-        var parameters = node.ChildNodes
-            .Select(cn => cn.Value)
-            .Select(ParseEnumMember)
-            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+        var parameters = ParseEnumMembers(node);
 
         string typeName = TypeConverter.ExtractTypeName(node);
 
@@ -83,10 +80,36 @@ internal class EnumType : ParameterizedType
 
     public override void Write(ExtendedBinaryWriter writer, object value) => throw new NotImplementedException();
 
-    private static KeyValuePair<string, int> ParseEnumMember(string value)
+    // A member may omit its ordinal. The server then numbers it like this: the first member's ordinal (1 when the
+    // first member has none) plus the member's position, counted from 0. After the first member, either every
+    // member declares an ordinal or none does.
+    private static Dictionary<string, int> ParseEnumMembers(SyntaxTreeNode node)
     {
+        var members = node.ChildNodes.Select(cn => ParseEnumMember(cn.Value)).ToList();
+
+        var omittedAfterFirst = members.Skip(1).Count(member => member.Ordinal is null);
+        if (omittedAfterFirst != 0 && omittedAfterFirst != members.Count - 1)
+            throw new FormatException($"Invalid enum definition: {node}. After the first member, either every member declares an ordinal or none does.");
+
+        var first = members.Count > 0 ? members[0].Ordinal ?? 1 : 1;
+        var values = new Dictionary<string, int>(members.Count);
+        for (var i = 0; i < members.Count; i++)
+        {
+            values.Add(members[i].Label, members[i].Ordinal ?? checked(first + i));
+        }
+
+        return values;
+    }
+
+    private static (string Label, int? Ordinal) ParseEnumMember(string value)
+    {
+        // The '=' that separates the ordinal is outside the quoted label, which can contain '=' itself.
+        var labelEnd = value.Length > 0 && value[0] == '\'' ? ClosingQuoteIndex(value) : -1;
+        if (labelEnd > 0 && labelEnd == value.Length - 1)
+            return (Regex.Unescape(value[1..^1]), null);
+
         var separatorIndex = value.LastIndexOf('=');
-        if (separatorIndex < 0)
+        if (separatorIndex <= labelEnd)
             throw new FormatException($"Invalid enum member definition: {value}");
 
         var rawLabel = value[..separatorIndex].Trim();
@@ -97,8 +120,21 @@ internal class EnumType : ParameterizedType
             rawLabel = rawLabel[1..^1];
         }
 
-        return new KeyValuePair<string, int>(
-            Regex.Unescape(rawLabel),
-            Convert.ToInt32(rawValue, CultureInfo.InvariantCulture));
+        return (Regex.Unescape(rawLabel), Convert.ToInt32(rawValue, CultureInfo.InvariantCulture));
+    }
+
+    // Skips a backslash escape and a doubled quote, both of which the server accepts inside a label.
+    // Returns -1 when the label is not closed.
+    private static int ClosingQuoteIndex(string value)
+    {
+        for (var i = 1; i < value.Length; i++)
+        {
+            if (value[i] == '\\' || (value[i] == '\'' && i + 1 < value.Length && value[i + 1] == '\''))
+                i++;
+            else if (value[i] == '\'')
+                return i;
+        }
+
+        return -1;
     }
 }
