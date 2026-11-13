@@ -41,6 +41,9 @@ internal sealed class EnumColumn<T> : IColumn<T>, ISpanColumn<T>, IStoredValuesC
     /// <inheritdoc/>
     public IReadOnlyList<KeyValuePair<string, long>> Members => members.Members;
 
+    /// <summary>The declared members of the enum type that the column was read as.</summary>
+    internal EnumMemberTable MemberTable => members;
+
     /// <inheritdoc/>
     public T this[int row] => ordinals[row];
 

@@ -62,11 +62,7 @@ public class BlockWriterTests
         // Two columns of five rows; write the middle three [1, 4) straight from their spans (no slicing).
         var id = PrimitiveColumn<int>.FromValues("id", "Int32", new[] { 10, 20, 30, 40, 50 });
         var name = new ArrayColumn<string>("name", "String", new[] { "a", "bb", "ccc", "dddd", "eeeee" });
-        InsertColumn[] columns =
-        {
-            new("id", "Int32", ColumnCodecRegistry.Default.Resolve("Int32", ResolveContext.ForWrite), id),
-            new("name", "String", ColumnCodecRegistry.Default.Resolve("String", ResolveContext.ForWrite), name),
-        };
+        InsertColumn[] columns = { Planned("Int32", id), Planned("String", name) };
 
         byte[] bytes = await WriteAsync(w => BlockWriter.WriteDataBlockAsync(
             w, Negotiated, columns, start: 1, rowCount: 3, BlockWriter.DefaultFlushThresholdBytes, None));
@@ -187,6 +183,30 @@ public class BlockWriterTests
             writer, Negotiated, columns, rowCount: 2, ColumnCodecRegistry.Default, BlockWriter.DefaultFlushThresholdBytes, None));
     }
 
+    /// <summary>
+    /// A column that implements <see cref="IColumn{T}"/> twice, with no CLR type that its type is written from, gives the
+    /// argument error that names the column and its type, not the error of <see cref="IColumn.ElementType"/>.
+    /// </summary>
+    [Test]
+    public void WriteDataBlockAsync_ColumnOfNoSingleClrTypeThatCannotBeWritten_ThrowsArgumentException()
+    {
+        IColumn[] columns = { new TwoTypedColumn() };
+
+        using var stream = new MemoryStream();
+        using var writer = new ClickHouseBinaryWriter(stream);
+
+        ArgumentException ex = Assert.ThrowsAsync<ArgumentException>(async () => await BlockWriter.WriteDataBlockAsync(
+            writer, Negotiated, columns, rowCount: 1, ColumnCodecRegistry.Default, BlockWriter.DefaultFlushThresholdBytes, None));
+        Assert.That(ex.Message, Does.StartWith($"Column 'c' cannot be written as UInt8: 'UInt8' cannot be written from a column of {typeof(TwoTypedColumn)}, which has no single CLR type."));
+    }
+
+    // A column of the insert plan: the codec of the type, and the write that an insert plans for the column.
+    private static InsertColumn Planned(string type, IColumn column)
+    {
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(type, ResolveContext.ForWrite);
+        return new InsertColumn(column.Name, type, codec, column, Utilities.CodecTestHarness.InsertWrite(codec, column, type, ResolveContext.ForWrite));
+    }
+
     private static async Task<byte[]> WriteAsync(Func<ClickHouseBinaryWriter, ValueTask> write)
     {
         using var ms = new MemoryStream();
@@ -205,4 +225,28 @@ public class BlockWriterTests
             write(w);
             return default;
         });
+
+    // A UInt8 column that implements IColumn<> twice, so it has no single element type. UInt8 is written from neither.
+    private sealed class TwoTypedColumn : IColumn<string>, IColumn<int>
+    {
+        public string Name => "c";
+
+        public string TypeName => "UInt8";
+
+        public int RowCount => 1;
+
+        ReadOnlySpan<string> IColumn<string>.Values => new[] { "a" };
+
+        ReadOnlySpan<int> IColumn<int>.Values => new[] { 1 };
+
+        string IColumn<string>.this[int row] => "a";
+
+        int IColumn<int>.this[int row] => 1;
+
+        public object GetValue(int row) => "a";
+
+        public void Dispose()
+        {
+        }
+    }
 }

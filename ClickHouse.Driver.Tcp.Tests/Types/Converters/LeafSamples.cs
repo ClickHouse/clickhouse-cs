@@ -43,7 +43,7 @@ internal static class LeafSamples
     public static Task<IColumn> DecodedAsync(string type, Type target)
         => type == "Nothing" ? ConverterHarness.DecodeNothingAsync(4) : ConverterHarness.DecodeAsync(type, Source(type, target));
 
-    /// <summary>Values of <paramref name="clrType"/> that the current write of <paramref name="type"/> accepts.</summary>
+    /// <summary>Values of <paramref name="clrType"/> that the write of <paramref name="type"/> accepts.</summary>
     public static Array Writable(string type, Type clrType)
     {
         if (clrType == ConverterHarness.Codec(type).ElementType)

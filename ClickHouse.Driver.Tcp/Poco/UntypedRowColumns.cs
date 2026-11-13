@@ -46,7 +46,7 @@ internal static class UntypedRowColumns
 
             builders[i] = (PocoColumnBuilder<object[]>)CreateBuilderMethod
                 .MakeGenericMethod(writeType)
-                .Invoke(null, new object[] { target.Name, target.TypeName, i, PocoWriteConversion.TakesNull(codec) });
+                .Invoke(null, new object[] { target.Name, target.TypeName, i, derivation.HoldsNull(target.TypeName) });
         }
 
         return new UntypedInsertSource(builders, rows, blockRows, columnCount, rows.ParameterName);
@@ -110,7 +110,7 @@ internal static class UntypedRowColumns
 
         return derived.Converter is ICastWriter cast
             ? cast.TargetType
-            : present.IsValueType && PocoWriteConversion.TakesNull(codec) ? typeof(Nullable<>).MakeGenericType(present) : present;
+            : present.IsValueType && derivation.HoldsNull(target.TypeName) ? typeof(Nullable<>).MakeGenericType(present) : present;
     }
 
     // A type that is not written from its canonical CLR type is written only from a column shape of its own.

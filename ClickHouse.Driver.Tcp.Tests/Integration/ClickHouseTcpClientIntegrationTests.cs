@@ -547,8 +547,8 @@ public class ClickHouseTcpClientIntegrationTests
 
     // Registering the JSON codec also makes it reachable as a Dynamic runtime type, where the JSON version word is
     // nested inside the Dynamic state prefix (after the type-name list) rather than heading the column. Only the
-    // read direction can be exercised: DynamicTypeInference maps a CLR string to String, not JSON, so a JSON value
-    // cannot be written into a Dynamic ergonomically.
+    // read direction can be exercised: DynamicTypeInference maps a CLR string to String, not JSON, so an insert cannot
+    // write a caller's string into a Dynamic as JSON.
     [Test]
     public async Task QueryAsync_DynamicColumnHoldingJson_DecodesTheNestedJsonText()
     {

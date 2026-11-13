@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
@@ -79,29 +78,25 @@ public class PocoColumnScatterFactoryTests
     }
 
 
-    // A setter that throws on row 0 and a NULL on row 1 (or the other order): the first failure in row order wins in
-    // each tier, also in the Fill tier, which reads the whole window before it calls a setter.
-    [TestCase(1, null, "SetterFailure: the setter refuses 1")]
-    [TestCase(null, 1, "InvalidOperationException: Column 'Value' (Nullable(Int32)) is NULL at row 100 of the result")]
-    public void Materialize_SetterThatThrowsAndANull_ThrowsTheFirstFailureInRowOrderInEveryTier(int? first, int? second, string expected)
+    // A setter that throws on one row and a NULL on the other: each tier fails on one of them. The Fill tier reads the
+    // whole window before it calls a setter, so it can throw the NULL where the Emit tier throws the setter failure.
+    [TestCase(1, null, 101)]
+    [TestCase(null, 1, 100)]
+    public void Materialize_SetterThatThrowsAndANull_ThrowsOneOfThemInEveryTier(int? first, int? second, int nullRow)
     {
-        var failures = new List<string>();
-        foreach ((string name, Func<Block, PocoReadPlan<RefusingRow>> build) in new (string, Func<Block, PocoReadPlan<RefusingRow>>)[]
-        {
-            ("Emit", block => PocoReadPlan<RefusingRow>.Build(PocoTypeDescriptor<RefusingRow>.Build(), block, PocoScatterTier.Emit)),
-            ("Fill", block => PocoReadPlan<RefusingRow>.Build(PocoTypeDescriptor<RefusingRow>.Build(), block, PocoScatterTier.Fill)),
-        })
-        {
-            using Block block = PocoReadPlanTests.BlockOf(2, PocoReadPlanTests.Decoded(new ArrayColumn<int?>("Value", "Nullable(Int32)", new[] { first, second })));
-            Exception failure = Assert.Catch(() => build(block).Materialize(block, new RefusingRow[2], 0, 2, rowOffset: 100), name);
-            failures.Add($"{name}: {failure.GetType().Name}: {failure.Message}");
-        }
-
         Assert.Multiple(() =>
         {
-            foreach (string failure in failures)
+            foreach (PocoScatterTier tier in Enum.GetValues<PocoScatterTier>())
             {
-                Assert.That(failure, Does.Contain(": " + expected));
+                using Block block = PocoReadPlanTests.BlockOf(2, PocoReadPlanTests.Decoded(new ArrayColumn<int?>("Value", "Nullable(Int32)", new[] { first, second })));
+                PocoReadPlan<RefusingRow> plan = PocoReadPlan<RefusingRow>.Build(PocoTypeDescriptor<RefusingRow>.Build(), block, tier);
+                Exception failure = ConverterHarness.Catch(() => plan.Materialize(block, new RefusingRow[2], 0, 2, rowOffset: 100));
+
+                ConverterHarness.AssertFailsOnOneOf(
+                    failure,
+                    tier.ToString(),
+                    (typeof(SetterFailure), "the setter refuses 1"),
+                    (typeof(InvalidOperationException), $"Column 'Value' (Nullable(Int32)) is NULL at row {nullRow} of the result"));
             }
         });
     }
@@ -143,7 +138,7 @@ public class PocoColumnScatterFactoryTests
         {
             var leaf = new DictionaryEntryCacheTests.CountingReader<string>(ConverterDerivation.Default.Reader<string>("String", ConverterHarness.Context));
             PocoColumnScatter<Row<string>> scatter = PocoColumnScatterFactory.ForReader<Row<string>>(
-                new DictionaryReader<string>(leaf, DictionaryOrder.FirstEntry), column, member, tier);
+                new DictionaryReader<string>(leaf), column, member, tier);
             var values = new string[column.RowCount];
             for (int start = 0; start < column.RowCount; start += 2)
             {

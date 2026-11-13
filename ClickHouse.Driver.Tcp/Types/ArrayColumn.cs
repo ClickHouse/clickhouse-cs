@@ -57,19 +57,6 @@ internal sealed class ArrayColumn<T> : IColumn<T>, ISpanColumn<T>, IStoredValues
         this.pooled = pooled;
     }
 
-    /// <summary>
-    /// Wraps the first <paramref name="length"/> elements of a caller-managed buffer (which may be longer, e.g.
-    /// rented from <see cref="ArrayPool{T}"/>) as a non-owning column. The buffer is not returned on
-    /// <see cref="Dispose"/>; the caller owns its lifetime.
-    /// </summary>
-    /// <param name="name">The column name.</param>
-    /// <param name="typeName">The ClickHouse type string.</param>
-    /// <param name="buffer">The backing buffer; only <paramref name="length"/> elements are exposed.</param>
-    /// <param name="length">The logical row count.</param>
-    /// <returns>A non-owning column view over the buffer.</returns>
-    internal static ArrayColumn<T> OverBuffer(string name, string typeName, T[] buffer, int length)
-        => new(name, typeName, buffer, offset: 0, length, pooled: false);
-
     /// <inheritdoc/>
     public string Name { get; }
 

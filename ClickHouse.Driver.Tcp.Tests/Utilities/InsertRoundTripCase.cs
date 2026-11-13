@@ -109,7 +109,8 @@ public sealed class InsertRoundTripCase
         yield return Primitive("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 });
         yield return Primitive("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 });
 
-        // A column of labels is the other write shape: it converts to the declared ordinals, which is what reads back.
+        // A column of labels is the other CLR type that an Enum is written from: it converts to the declared ordinals,
+        // which is what reads back.
         yield return EnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte[] { -1, 127 }, "a", "b");
         yield return EnumLabels("Enum16('x' = -32768, 'y' = 32767)", new short[] { -32768, 32767 }, "x", "y");
 
@@ -119,8 +120,8 @@ public sealed class InsertRoundTripCase
         // Separators inside quoted labels must not split the enum declaration.
         yield return EnumLabels(@"Enum8('a,b' = 1, 'c\'d' = 2, 'e = f' = 3)", new sbyte[] { 1, 2, 3 }, "a,b", "c'd", "e = f");
 
-        // And through the wrappers, where the shape has to survive composition: the nullable substitute needs a
-        // placeholder label for its null rows, and the array path flattens the labels before the enum sees them.
+        // And through the wrappers: a NULL row of the Nullable takes the placeholder of the enum (its first declared
+        // member), and the Array writes the labels of all its rows.
         yield return NullableEnumLabels("Enum8('a' = -1, 'b' = 127)", new sbyte?[] { -1, null, 127 }, "a", null, "b");
         yield return ArrayEnumLabels("Enum8('a' = -1, 'b' = 127)", new[] { new sbyte[] { -1, 127 }, Array.Empty<sbyte>() }, new[] { "a", "b" }, Array.Empty<string>());
 
@@ -131,8 +132,9 @@ public sealed class InsertRoundTripCase
 
         yield return Strings("String", string.Empty, "hello", "héllo✓", "a\0b", new string('x', 500));
 
-        // A String is a byte string, so a byte[] per row is the other write shape; it reads back as the text those
-        // bytes spell. The non-UTF-8 case is in StringBytesIntegrationTests, where the point is that it survives.
+        // A String is a byte string, so a byte[] per row is the other CLR type that it is written from; it reads back
+        // as the text those bytes spell. The non-UTF-8 case is in StringBytesIntegrationTests, where the point is that
+        // it survives.
         yield return StringBytes(new[] { new byte[] { 0x61 }, Array.Empty<byte>(), new byte[] { 0x62, 0x63 } }, "a", string.Empty, "bc");
         yield return NullableStringBytes(new[] { new byte[] { 0x61 }, null, Array.Empty<byte>() }, "a", null, string.Empty);
 
@@ -170,6 +172,15 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<uint>(name, "DateTime", Array.ConvertAll(dateTimeOffsets, o => (uint)o.ToUnixTimeSeconds())),
             settings: null);
 
+        // A Kind=Local DateTime names an instant through the timezone of the host, and the column timezone takes no
+        // part. The expected seconds use the same host conversion, so the case holds on every host. Pacific/Kiritimati
+        // is UTC+14 all year, so a write that read the value as a wall clock in the column timezone gives another instant
+        // on every host but one in that zone. January and July give two offsets on a host with daylight saving time.
+        yield return DateTimes(
+            "DateTime('Pacific/Kiritimati')",
+            new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Local),
+            new DateTime(2024, 7, 15, 14, 30, 0, DateTimeKind.Local));
+
         // DateTime64 surfaces as the raw Int64 count at the column's scale, so it retains the exact wire value at
         // any scale. Scale 9 (nanoseconds) is finer than a .NET tick, proving precision no DateTimeOffset can hold.
         yield return DateTime64s("DateTime64(3)", 0L, 1_700_000_000_123L, -6_000_000_000_000L);
@@ -203,6 +214,36 @@ public sealed class InsertRoundTripCase
             name => new ArrayColumn<long>(name, "DateTime64(9)", new[] { 9_223_372_036_854_775_800L }),
             settings: null);
 
+        // DateTime64 from a DateTimeOffset at the scales that the cases above do not have. Scale 6 is coarser than a
+        // .NET tick, scale 7 is equal to it, and scale 8 is finer. The read-back is the raw count at the scale.
+        var wholeSeconds = new[] { DateTimeOffset.UnixEpoch, DateTimeOffset.FromUnixTimeSeconds(1_700_000_000), DateTimeOffset.FromUnixTimeSeconds(-1_000_000) };
+        var microseconds = new[] { DateTimeOffset.UnixEpoch, DateTimeOffset.FromUnixTimeSeconds(-1_000_000), DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_123).AddTicks(4_560) };
+        foreach ((string type, DateTimeOffset[] instants, long[] counts) in new[]
+        {
+            ("DateTime64(0)", wholeSeconds, new[] { 0L, 1_700_000_000L, -1_000_000L }),
+            ("DateTime64(6)", microseconds, new[] { 0L, -1_000_000_000_000L, 1_700_000_000_123_456L }),
+            ("DateTime64(7)", microseconds, new[] { 0L, -10_000_000_000_000L, 17_000_000_001_234_560L }),
+            ("DateTime64(8)", microseconds, new[] { 0L, -100_000_000_000_000L, 170_000_000_012_345_600L }),
+        })
+        {
+            yield return new InsertRoundTripCase(
+                $"{type} <- DateTimeOffset",
+                type,
+                name => new ArrayColumn<DateTimeOffset>(name, type, instants),
+                name => new ArrayColumn<long>(name, type, counts),
+                settings: null);
+        }
+
+        // A Kind=Unspecified wall clock in an hour that occurs twice is the earlier instant: 2024-11-03 01:30 in New
+        // York is 01:30 EDT, which is 05:30 UTC.
+        var repeatedWallClock = new[] { new DateTime(2024, 11, 3, 1, 30, 0, DateTimeKind.Unspecified) };
+        yield return new InsertRoundTripCase(
+            "DateTime64(3, 'America/New_York') <- DateTime [hour that occurs twice]",
+            "DateTime64(3, 'America/New_York')",
+            name => new ArrayColumn<DateTime>(name, "DateTime64(3, 'America/New_York')", repeatedWallClock),
+            name => new ArrayColumn<long>(name, "DateTime64(3, 'America/New_York')", new[] { new DateTimeOffset(2024, 11, 3, 5, 30, 0, TimeSpan.Zero).ToUnixTimeMilliseconds() }),
+            settings: null);
+
         yield return Uuids("UUID", Guid.Empty, new Guid("00112233-4455-6677-8899-aabbccddeeff"), new Guid("ffffffff-ffff-ffff-ffff-ffffffffffff"));
 
         yield return IpAddresses("IPv4", "0.0.0.0", "127.0.0.1", "192.168.1.1", "255.255.255.255");
@@ -232,12 +273,30 @@ public sealed class InsertRoundTripCase
         // round-trips the alias type name as declared.
         yield return Decimals("Decimal64(4)", 0m, 12345.6789m, -12345.6789m);
 
+        // The values at the declared precision, positive and negative: a precision below the largest of the width
+        // (Decimal(1, 0) in 32 bits, Decimal(19, 2) in 128 bits), and the alias spellings at the largest. The last
+        // Decimal(19, 2) value has scale 3; the column holds it as the mantissa 10^19 - 1.
+        yield return Decimals("Decimal(1, 0)", 9m, -9m, 0m);
+        yield return Decimals("Decimal32(0)", 999_999_999m, -999_999_999m);
+        yield return Decimals("Decimal64(0)", 999_999_999_999_999_999m, -999_999_999_999_999_999m);
+        yield return WideDecimals("Decimal(19, 2)", "99999999999999999.99", "-99999999999999999.99", "99999999999999999.990");
+        yield return WideDecimals("Decimal128(0)", "99999999999999999999999999999999999999", "-99999999999999999999999999999999999999");
+
         // Interval<Unit> surfaces its underlying Int64 count; the unit is kept in the type name.
         yield return Primitive("IntervalSecond", new[] { 0L, 1L, -5L, long.MaxValue });
         yield return Primitive("IntervalDay", new[] { 0L, 7L, -30L });
 
         // Newer/experimental server types: enable their flag on the round-trip
         yield return BFloat16s("BFloat16", BFloat16Settings, 0f, -0f, 1f, -2f, 0.5f, 100f, float.NaN, float.PositiveInfinity, float.NegativeInfinity);
+
+        // A float that BFloat16 cannot hold keeps its 16 high bits: 1.1f is 0x3F8CCCCD, so 0x3F8C0000 (1.09375f) reads
+        // back. Rounding to the nearest value gives 0x3F8D0000.
+        yield return new InsertRoundTripCase(
+            "BFloat16 <- float [narrowing]",
+            "BFloat16",
+            name => new ArrayColumn<float>(name, "BFloat16", new[] { 1.1f, -1.1f }),
+            name => new ArrayColumn<float>(name, "BFloat16", new[] { BitConverter.UInt32BitsToSingle(0x3F8C_0000), BitConverter.UInt32BitsToSingle(0xBF8C_0000) }),
+            BFloat16Settings);
         // Time surfaces as the raw Int32 seconds; Time64 as the raw Int64 count at the column's scale. The
         // inserted values are the exact wire values, returned verbatim.
         yield return TimeSeconds("Time", TimeSettings, 0, (12 * 3600) + (34 * 60) + 56, -((1 * 3600) + (2 * 60) + 3));
@@ -337,10 +396,9 @@ public sealed class InsertRoundTripCase
         yield return NullableDateTime64s(3, 0L, null, 1_700_000_000_123L, null);
         yield return NullableDateTime64s(9, 1_700_000_000_123_456_789L, null, -1_000_000_001L, long.MaxValue);
 
-        // Nullable re-offers every CLR write spelling the bare inner accepts, each with its own-typed null
-        // placeholder — so Nullable(DateTime) takes DateTimeOffset? or DateTime?, and Nullable(DateTime64) takes
-        // long?, DateTimeOffset? or DateTime?. The cases above only cover the first spelling of each, which left
-        // the alternates proven by unit tests alone; these send them to a server.
+        // Nullable takes every CLR type that the bare inner is written from, made nullable, so Nullable(DateTime)
+        // takes DateTimeOffset? or DateTime?, and Nullable(DateTime64) takes long?, DateTimeOffset? or DateTime?. The
+        // cases above cover the first type of each; these send the others to a server.
         var nullableDateTimes = new DateTime?[] { DateTime.UnixEpoch.AddSeconds(1_700_000_000), null, DateTime.UnixEpoch };
         yield return new InsertRoundTripCase(
             "Nullable(DateTime) <- DateTime?",
@@ -494,9 +552,8 @@ public sealed class InsertRoundTripCase
             "Tuple(Int32)",
             name => new TupleColumn<int>(name, "Tuple(Int32)", new[] { new ValueTuple<int>(1), new ValueTuple<int>(int.MinValue), new ValueTuple<int>(int.MaxValue) }));
 
-        // FixedString(N) as a tuple element: the write path reaches the FixedString codec through a
-        // TupleFieldColumn projection rather than a dense blob, so it takes the strict per-value branch instead of
-        // the bulk blit — the one entrance the bare, Nullable and Array cases all miss.
+        // FixedString(N) as a tuple element: the field writer of the Tuple writes each byte[] value and checks its
+        // width, and the dense read-back writes the field from its storage.
         yield return Same(
             "Tuple(FixedString(4), String)",
             "Tuple(FixedString(4), String)",
@@ -516,10 +573,8 @@ public sealed class InsertRoundTripCase
                 (-2, string.Empty, -1.5e100),
             }));
 
-        // A flat ArrayColumn<ValueTuple> is not an ITupleColumn, so a top-level Tuple supplied that way takes the
-        // ergonomic boxed per-element projection instead of the dense child-column path. Every other Tuple case
-        // builds the dense TupleColumn, so the projection was only reachable at top level from a unit test; the
-        // read still comes back dense, hence the differing expected builder.
+        // A flat ArrayColumn<ValueTuple> is not an ITupleColumn: the Tuple writer writes it from its ValueTuple values.
+        // The read gives a TupleColumn, hence the expected builder.
         var flatTupleRows = new (int, string)[] { (1, "a"), (2, "bb"), (3, "ccc") };
         yield return new InsertRoundTripCase(
             "Tuple(Int32, String) <- flat ArrayColumn",
@@ -721,10 +776,10 @@ public sealed class InsertRoundTripCase
                 new[] { (3, "c") },
             }));
 
-        // Map(K, V): byte-identical to Array(Tuple(K, V)) — offsets + a keys stream + a values stream. Each row
+        // Map(K, V): byte-identical to Array(Tuple(K, V)): offsets, a keys stream and a values stream. Each row
         // surfaces as a KeyValuePair<K, V>[] (not a Dictionary), so pair order round-trips; empty-map rows and an
         // all-empty column ride along. Keys within a row are kept unique here because the server rejects duplicate
-        // keys on insert — duplicate-key preservation is a wire property proven by the codec unit test instead.
+        // keys on insert; WireBytePinTests pins the bytes of duplicate keys in a row.
         // Map is, like Array/Tuple, an exception to the "wrap every type in Nullable" rule (the server rejects
         // Nullable(Map(...))), so nullability is composed inside the value as Map(K, Nullable(V)); Map keys are
         // themselves non-nullable in ClickHouse.
@@ -781,8 +836,8 @@ public sealed class InsertRoundTripCase
                 new[] { "a", "b" },
                 new IColumn[]
                 {
-                    new ArrayColumn<byte>(name, "UInt8", new byte[] { 1, 2, 3 }),
-                    new ArrayColumn<string>(name, "String", new[] { "a", "b", "c" }),
+                    DecodedColumns.Of(name, "UInt8", new byte[] { 1, 2, 3 }),
+                    DecodedColumns.Of(name, "String", "a", "b", "c"),
                 },
                 new[] { 0, 2, 2, 3 },
                 rowCount: 3,
@@ -798,7 +853,7 @@ public sealed class InsertRoundTripCase
                 name,
                 "Nested(`a b` UInt8)",
                 new[] { "a b" },
-                new IColumn[] { new ArrayColumn<byte>(name, "UInt8", new byte[] { 1, 2, 3 }) },
+                new IColumn[] { DecodedColumns.Of(name, "UInt8", new byte[] { 1, 2, 3 }) },
                 new[] { 0, 2, 2, 3 },
                 rowCount: 3,
                 pooledOffsets: false,
@@ -816,8 +871,8 @@ public sealed class InsertRoundTripCase
                 new[] { "a", "b" },
                 new IColumn[]
                 {
-                    new ArrayColumn<int?>(name, "Nullable(Int32)", new int?[] { 1, null, -5 }),
-                    new ArrayColumn<string[]>(name, "Array(String)", new[] { new[] { "x" }, new[] { "y", "z" }, Array.Empty<string>() }),
+                    DecodedColumns.Of(name, "Nullable(Int32)", new int?[] { 1, null, -5 }),
+                    DecodedColumns.Of(name, "Array(String)", new[] { new[] { "x" }, new[] { "y", "z" }, Array.Empty<string>() }),
                 },
                 new[] { 0, 2, 2, 3 },
                 rowCount: 3,
@@ -837,8 +892,8 @@ public sealed class InsertRoundTripCase
                 new[] { "a", "b" },
                 new IColumn[]
                 {
-                    new ArrayColumn<(byte, string)>(name, "Tuple(UInt8, String)", new[] { ((byte)1, "p"), ((byte)2, "q"), ((byte)3, "r") }),
-                    new ArrayColumn<KeyValuePair<string, uint>[]>(name, "Map(String, UInt32)", new[]
+                    DecodedColumns.Of(name, "Tuple(UInt8, String)", new[] { ((byte)1, "p"), ((byte)2, "q"), ((byte)3, "r") }),
+                    DecodedColumns.Of(name, "Map(String, UInt32)", new[]
                     {
                         Pairs<string, uint>(("x", 1)),
                         Pairs<string, uint>(("y", 2), ("z", uint.MaxValue)),
@@ -891,7 +946,7 @@ public sealed class InsertRoundTripCase
                 new IColumn[]
                 {
                     ByteNested(name, "a", new byte[] { 1, 2, 3, 4, 5 }, new[] { 0, 2, 2, 5 }),
-                    new ArrayColumn<string>(name, "String", new[] { "first", "empty", "last" }),
+                    DecodedColumns.Of(name, "String", "first", "empty", "last"),
                 },
                 fieldNames: null,
                 ownsChildren: false),
@@ -903,7 +958,7 @@ public sealed class InsertRoundTripCase
             name => new MapColumn<string, object[][]>(
                 name,
                 "Map(String, Nested(a UInt8))",
-                new ArrayColumn<string>(name, "String", new[] { "w", "x", "y", "z" }),
+                (IColumn<string>)DecodedColumns.Of(name, "String", "w", "x", "y", "z"),
                 ByteNested(name, "a", new byte[] { 1, 2, 3, 4, 5, 6 }, new[] { 0, 1, 3, 3, 6 }),
                 new[] { 0, 2, 2, 4 },
                 rowCount: 3,
@@ -919,7 +974,7 @@ public sealed class InsertRoundTripCase
                 name,
                 "Map(Nested(a UInt8), UInt32)",
                 ByteNested(name, "a", new byte[] { 1, 2, 3, 4, 5 }, new[] { 0, 2, 2, 5 }),
-                new ArrayColumn<uint>(name, "UInt32", new uint[] { 7, 8, uint.MaxValue }),
+                (IColumn<uint>)DecodedColumns.Of(name, "UInt32", new uint[] { 7, 8, uint.MaxValue }),
                 new[] { 0, 1, 3, 3 },
                 rowCount: 3,
                 pooledOffsets: false),
@@ -935,7 +990,7 @@ public sealed class InsertRoundTripCase
                 var fields = new IColumn[8];
                 for (int i = 0; i < 8; i++)
                 {
-                    fields[i] = new ArrayColumn<byte>(name, "UInt8", new byte[] { (byte)i, (byte)(i + 10), (byte)(i + 20) });
+                    fields[i] = DecodedColumns.Of(name, "UInt8", new byte[] { (byte)i, (byte)(i + 10), (byte)(i + 20) });
                 }
 
                 return new NestedColumn(
@@ -1075,11 +1130,10 @@ public sealed class InsertRoundTripCase
                 new byte[] { 0xFF, 0, 0xFF, 0 },
             }));
 
-        // The nullable counterpart of the DateTime case above, and the one that actually needs the codec's
-        // NullPlaceholderAs override: the reserved default in slot 1 is asked for as the shape's element type
-        // (uint), and DateTime answers with its wire zero — the epoch — where the CLR default would be
-        // DateTime.MinValue, which the type cannot even represent. The epoch is *also* present as a real value
-        // (row 2) next to NULLs, so the reserved NULL slot and the reserved default slot must stay distinct.
+        // The nullable counterpart of the DateTime case above: the reserved default in slot 1 is the placeholder of
+        // DateTime, its wire zero (the epoch); the CLR default DateTime.MinValue is outside the range of the type. The
+        // epoch is also present as a real value (row 2) next to NULLs, so the reserved NULL slot and the reserved
+        // default slot must stay distinct.
         yield return Same(
             "LowCardinality(Nullable(DateTime))",
             "LowCardinality(Nullable(DateTime))",
@@ -1373,8 +1427,8 @@ public sealed class InsertRoundTripCase
                 new[] { "a", "b" },
                 new IColumn[]
                 {
-                    new ArrayColumn<object>(name, "Dynamic", new object[] { 1UL, "x", 3UL }),
-                    new ArrayColumn<string>(name, "String", new[] { "a", "b", "c" }),
+                    DecodedColumns.Of(name, "Dynamic", new object[] { 1UL, "x", 3UL }),
+                    DecodedColumns.Of(name, "String", "a", "b", "c"),
                 },
                 new[] { 0, 2, 2, 3 },
                 rowCount: 3,
@@ -1506,12 +1560,12 @@ public sealed class InsertRoundTripCase
             Array.Empty<KeyValuePair<string, string>>(),
             Pairs<string, string>(("c", "{\"b\":\"hi\"}")));
 
-        // Variant(JSON, UInt64): JSON as a variant alternative. Variant is the trickiest prefix carrier — it writes
-        // every alternative's prefix from that alternative's own row slice, zero-length ones included — so this is
+        // Variant(JSON, UInt64): JSON as a variant alternative. Variant is the trickiest prefix carrier: it writes
+        // every alternative's prefix from that alternative's own row slice, zero-length ones included, so this is
         // where a JSON version word is most easily lost or duplicated. The alternatives arrive canonicalized and
         // "JSON" sorts before "UInt64", so JSON is discriminator 0. UInt64 is chosen as the second alternative on
-        // purpose: pairing JSON with String would make the two indistinguishable to the ergonomic write path, which
-        // picks an alternative by runtime CLR type and would send every string to the JSON arm.
+        // purpose: pairing JSON with String would make the two indistinguishable to the write of a caller's column,
+        // which places each value by its runtime CLR type, and both alternatives store a string.
         yield return Same(
             "Variant(JSON, UInt64)",
             "Variant(JSON, UInt64)",
@@ -1531,8 +1585,8 @@ public sealed class InsertRoundTripCase
                 new[] { "a", "b" },
                 new IColumn[]
                 {
-                    new ArrayColumn<string>(name, "JSON", new[] { "{\"a\":1}", "{}", "{\"b\":\"hi\"}" }),
-                    new ArrayColumn<string>(name, "String", new[] { "a", "b", "c" }),
+                    DecodedColumns.Of(name, "JSON", "{\"a\":1}", "{}", "{\"b\":\"hi\"}"),
+                    DecodedColumns.Of(name, "String", "a", "b", "c"),
                 },
                 new[] { 0, 2, 2, 3 },
                 rowCount: 3,
@@ -1802,18 +1856,19 @@ public sealed class InsertRoundTripCase
     }
 
     // One row per Geometry alternative, in declared discriminator order, plus a NULL. Each alternative column holds
-    // only the rows that selected it — one each here — so every child is a single-row column.
+    // only the rows that selected it (one each here), so every child is a single-row column, in the form that a query
+    // reads it.
     private static IColumn BuildGeometryColumn(string name)
     {
         var square = new[] { (0d, 0d), (2d, 0d), (2d, 2d), (0d, 0d) };
         IColumn[] alternatives =
         {
-            new ArrayColumn<(double, double)[]>(name, "LineString", new[] { new[] { (0d, 0d), (1d, 1d) } }),
-            new ArrayColumn<(double, double)[][]>(name, "MultiLineString", new[] { new[] { new[] { (2d, 2d), (3d, 3d) } } }),
-            new ArrayColumn<(double, double)[][][]>(name, "MultiPolygon", new[] { new[] { new[] { square } } }),
-            new ArrayColumn<(double, double)>(name, "Point", new[] { (1.5d, -2.5d) }),
-            new ArrayColumn<(double, double)[][]>(name, "Polygon", new[] { new[] { square } }),
-            new ArrayColumn<(double, double)[]>(name, "Ring", new[] { square }),
+            DecodedColumns.Of(name, "LineString", new[] { new[] { (0d, 0d), (1d, 1d) } }),
+            DecodedColumns.Of(name, "MultiLineString", new[] { new[] { new[] { (2d, 2d), (3d, 3d) } } }),
+            DecodedColumns.Of(name, "MultiPolygon", new[] { new[] { new[] { square } } }),
+            DecodedColumns.Of(name, "Point", new[] { (1.5d, -2.5d) }),
+            DecodedColumns.Of(name, "Polygon", new[] { new[] { square } }),
+            DecodedColumns.Of(name, "Ring", new[] { square }),
         };
 
         var discriminators = new byte[] { 0, 1, 2, 3, 4, 5, IVariantColumn.NullDiscriminator };
@@ -1862,7 +1917,7 @@ public sealed class InsertRoundTripCase
             name,
             type,
             new[] { fieldName },
-            new IColumn[] { new ArrayColumn<byte>(name, "UInt8", values) },
+            new IColumn[] { DecodedColumns.Of(name, "UInt8", values) },
             offsets,
             rowCount: offsets.Length - 1,
             pooledOffsets: false,
@@ -1977,8 +2032,8 @@ public sealed class InsertRoundTripCase
         => Same($"{clickHouseType} [{values.Length} rows]", clickHouseType, name => new ArrayColumn<string>(name, clickHouseType, values));
 
     // FixedString(N) inserts and reads back a per-row byte[]. Every value must be exactly N bytes: the write path
-    // rejects any other width rather than padding or truncating, so a wrong-width case belongs in the codec's unit
-    // tests (it never reaches the server), not here.
+    // rejects any other width rather than padding or truncating, so a wrong-width case belongs in the refusal tests of
+    // the leaf writers (it never reaches the server), not here.
     private static InsertRoundTripCase FixedStrings(int size, params byte[][] values)
     {
         string type = $"FixedString({size})";

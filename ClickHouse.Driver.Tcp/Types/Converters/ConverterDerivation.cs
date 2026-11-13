@@ -90,6 +90,10 @@ internal sealed partial class ConverterDerivation
 
     private readonly ConcurrentDictionary<(string Type, string Timezone, Type ClrType, ConversionDirection Direction), Derivation> cache = new();
 
+    // The answers of HoldsNull by type string, because each row insert asks for each target column. The session timezone
+    // does not change an answer. The cache has the limit and the count check of the cache of the trees.
+    private readonly ConcurrentDictionary<string, bool> holdsNullCache = new(StringComparer.Ordinal);
+
     /// <summary>Initializes a derivation over the codecs of one registry.</summary>
     /// <param name="registry">The registry that validates the type strings and resolves the leaf codecs.</param>
     public ConverterDerivation(ColumnCodecRegistry registry) => this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
@@ -166,18 +170,13 @@ internal sealed partial class ConverterDerivation
     /// <returns>The tree, or the reason that there is none.</returns>
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     internal Derivation DeriveNode(TypeNode node, TypeNode root, in ResolveContext context, Type clrType, ConversionDirection direction)
-        => DeriveNode(node, root, in context, clrType, direction, DictionaryOrder.FirstEntry);
-
-    // order: the dictionary order of the reads in the tree (see DictionaryOrder).
-    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    private Derivation DeriveNode(TypeNode node, TypeNode root, in ResolveContext context, Type clrType, ConversionDirection direction, DictionaryOrder order)
     {
         string name = registry.TryCanonicalName(node.Name, out string canonical) ? canonical : node.Name;
         switch (name)
         {
             // The function name is only in the type string: the column is its value type.
             case "SimpleAggregateFunction":
-                return DeriveNode(node.Arguments[1], root, in context, clrType, direction, order);
+                return DeriveNode(node.Arguments[1], root, in context, clrType, direction);
 
             default:
                 if (LeafTable.TryGet(name, out Leaf leaf))
@@ -186,7 +185,7 @@ internal sealed partial class ConverterDerivation
                 }
 
                 return direction == ConversionDirection.Read
-                    ? DeriveCompositeRead(name, node, root, in context, clrType, order)
+                    ? DeriveCompositeRead(name, node, root, in context, clrType)
                     : DeriveCompositeWrite(name, node, root, in context, clrType);
         }
     }

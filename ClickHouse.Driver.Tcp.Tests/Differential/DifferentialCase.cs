@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using ClickHouse.Driver.Tcp.Tests.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Differential;
 
@@ -15,8 +16,11 @@ public enum CaseSource
     /// <summary>A column type of the read targets table of <c>DifferentialCases</c>, with the CLR types to read it as.</summary>
     ColumnReadProjection,
 
-    /// <summary>A value or error scenario of <c>ColumnReadProjectionTests</c>: its own values, read as its target.</summary>
+    /// <summary>A value or error scenario of <c>DifferentialCases</c>: its own values, read as its target.</summary>
     ColumnReadScenario,
+
+    /// <summary>A scenario of <c>DifferentialCases</c> with values that fail some rows of every insert, or of every read.</summary>
+    FailureScenario,
 }
 
 /// <summary>What a <see cref="WriteInput"/> writes.</summary>
@@ -25,31 +29,24 @@ public enum WriteInputKind
     /// <summary>A column that the case builds.</summary>
     Built,
 
-    /// <summary>The decoded column, written again (the dense write path).</summary>
+    /// <summary>The decoded column, written again (the write from storage).</summary>
     Decoded,
 
-    /// <summary>The values that the baseline read gives for one read target, in an array column.</summary>
+    /// <summary>The values that <c>Block.ReadAs</c> gives for one read target, in an array column.</summary>
     ReadBack,
 }
 
 /// <summary>
-/// One case of the differential tests: a column type, the column that the baseline writes and decodes, the CLR
-/// types to read the decoded column as, and the columns to write.
+/// One case of the differential tests: a column type, the column whose insert write gives the bytes that the reads
+/// decode, the CLR types to read the decoded column as, and the columns to write.
 /// </summary>
 public sealed class DifferentialCase
 {
-    internal DifferentialCase(
-        string id,
-        CaseSource source,
-        string columnType,
-        int rowCount,
-        IReadOnlyList<Type> readTargets,
-        IReadOnlyList<WriteInput> writeInputs,
-        IReadOnlyList<StatedOutcome> stated = null)
+    internal DifferentialCase(string id, CaseSource source, string columnType, int rowCount, IReadOnlyList<Type> readTargets, IReadOnlyList<WriteInput> writeInputs, ColumnReadScenario scenario = null)
     {
         if (writeInputs.Count == 0 || writeInputs[0].Kind != WriteInputKind.Built)
         {
-            throw new ArgumentException($"Case '{id}': the first write input must be a built column, because its bytes are the bytes that the read facets decode.", nameof(writeInputs));
+            throw new ArgumentException($"Case '{id}': the first write input must be a built column, because its bytes are the bytes that the reads decode.", nameof(writeInputs));
         }
 
         Id = id;
@@ -58,10 +55,10 @@ public sealed class DifferentialCase
         RowCount = rowCount;
         ReadTargets = readTargets;
         WriteInputs = writeInputs;
-        Stated = stated ?? Array.Empty<StatedOutcome>();
+        Scenario = scenario;
     }
 
-    /// <summary>The unique name of the case. A declared outcome names the case by this value.</summary>
+    /// <summary>The unique name of the case.</summary>
     public string Id { get; }
 
     /// <summary>The test class that the case comes from.</summary>
@@ -73,45 +70,20 @@ public sealed class DifferentialCase
     /// <summary>The number of rows of every column of the case.</summary>
     public int RowCount { get; }
 
-    /// <summary>The CLR types that the read facets read the decoded column as.</summary>
+    /// <summary>The CLR types that the reads read the decoded column as.</summary>
     public IReadOnlyList<Type> ReadTargets { get; }
 
-    /// <summary>
-    /// The columns that the write facets write. The first is the source: the baseline writes it, and the read
-    /// facets decode those bytes.
-    /// </summary>
+    /// <summary>The columns that the writes write. The first is the source: its insert write gives the bytes that the reads decode.</summary>
     public IReadOnlyList<WriteInput> WriteInputs { get; }
 
-    /// <summary>The outcomes that the source test of the case states. The baseline must give each of them.</summary>
-    internal IReadOnlyList<StatedOutcome> Stated { get; }
-
-    /// <summary>The facets of the case: each read target in each read tier, then each write input in each write tier.</summary>
-    /// <returns>The facets, in a fixed order.</returns>
-    internal IEnumerable<Facet> Facets()
-    {
-        foreach (Type target in ReadTargets)
-        {
-            yield return Facet.Read(this, Tier.ReadAs, target);
-            yield return Facet.Read(this, Tier.Poco, target);
-            yield return Facet.Read(this, Tier.CanRead, target);
-        }
-
-        foreach (WriteInput input in WriteInputs)
-        {
-            yield return Facet.Write(this, Tier.Write, input);
-            yield return Facet.Write(this, Tier.CanWrite, input);
-            yield return Facet.Write(this, Tier.PocoWrite, input);
-            yield return Facet.Write(this, Tier.PocoCanWrite, input);
-            yield return Facet.Write(this, Tier.UntypedWrite, input);
-            yield return Facet.Write(this, Tier.UntypedCanWrite, input);
-        }
-    }
+    /// <summary>The scenario of a <see cref="CaseSource.ColumnReadScenario"/> case, which states the outcome of <c>Block.ReadAs</c> of its target.</summary>
+    internal ColumnReadScenario Scenario { get; }
 
     /// <inheritdoc/>
     public override string ToString() => Id;
 }
 
-/// <summary>One column that the write facets of a case write.</summary>
+/// <summary>One column that the writes of a case write.</summary>
 public sealed class WriteInput
 {
     private WriteInput(string label, WriteInputKind kind, Type elementType, Func<string, IColumn> build)
@@ -134,144 +106,12 @@ public sealed class WriteInput
     /// <summary>Builds the column with a given name. Set only for <see cref="WriteInputKind.Built"/>.</summary>
     internal Func<string, IColumn> Build { get; }
 
-    /// <summary>A column that the case builds.</summary>
-    /// <param name="label">The name of the input in its case.</param>
-    /// <param name="elementType">The CLR element type of the column.</param>
-    /// <param name="build">Builds the column with a given name.</param>
-    /// <returns>The input.</returns>
-    internal static WriteInput Built(string label, Type elementType, Func<string, IColumn> build)
-        => new(label, WriteInputKind.Built, elementType, build);
+    internal static WriteInput Built(string label, Type elementType, Func<string, IColumn> build) => new(label, WriteInputKind.Built, elementType, build);
 
-    /// <summary>The decoded column, written again.</summary>
-    /// <param name="elementType">The CLR element type of the decoded column.</param>
-    /// <returns>The input.</returns>
     internal static WriteInput Decoded(Type elementType) => new("decoded", WriteInputKind.Decoded, elementType, build: null);
 
-    /// <summary>The values that the baseline read gives for <paramref name="target"/>.</summary>
-    /// <param name="target">The read target whose values to write.</param>
-    /// <returns>The input.</returns>
     internal static WriteInput ReadBack(Type target) => new($"read back as {TypeNames.Of(target)}", WriteInputKind.ReadBack, target, build: null);
 
     /// <inheritdoc/>
     public override string ToString() => Label;
-}
-
-/// <summary>
-/// An outcome that the source test of a case states for one read facet, for example the values or the exception of a
-/// <c>ColumnReadScenario</c>. The baseline must give it, for all rows and for the tail.
-/// </summary>
-internal sealed class StatedOutcome
-{
-    public StatedOutcome(Tier tier, Type target, Expectation expected)
-    {
-        Tier = tier;
-        Target = target;
-        Expected = expected;
-    }
-
-    /// <summary>The tier of the facet: <see cref="Tier.ReadAs"/>, <see cref="Tier.Poco"/> or <see cref="Tier.CanRead"/>.</summary>
-    public Tier Tier { get; }
-
-    /// <summary>The read target of the facet.</summary>
-    public Type Target { get; }
-
-    /// <summary>The outcome that the baseline must give.</summary>
-    public Expectation Expected { get; }
-}
-
-/// <summary>An entry point of the client that the differential tests compare.</summary>
-internal enum Tier
-{
-    /// <summary><c>Block.ReadAs&lt;T&gt;</c>: the values of a column as <c>T</c>.</summary>
-    ReadAs,
-
-    /// <summary>The POCO read plan: the values of a column in the <c>Value</c> property of <c>Row&lt;T&gt;</c>.</summary>
-    Poco,
-
-    /// <summary><c>ClickHouseTcpTypes.CanRead</c>.</summary>
-    CanRead,
-
-    /// <summary>The write of a column: <c>BeginWrite</c>, the state prefix and the body.</summary>
-    Write,
-
-    /// <summary><c>ClickHouseTcpTypes.CanWrite</c>.</summary>
-    CanWrite,
-
-    /// <summary>
-    /// The POCO write plan of <c>InsertRowsAsync&lt;T&gt;</c>: the values of the column in the <c>Value</c> property of
-    /// <c>Row&lt;T&gt;</c>, gathered for a block and written as the insert writes the block.
-    /// </summary>
-    PocoWrite,
-
-    /// <summary>Whether the POCO write plan of <c>InsertRowsAsync&lt;T&gt;</c> builds for a <c>Value</c> property of the type.</summary>
-    PocoCanWrite,
-
-    /// <summary>
-    /// The untyped row insert of <c>InsertRowsAsync(object[])</c>: the values of the column, boxed, one in each row,
-    /// gathered for a block and written as the insert writes the block.
-    /// </summary>
-    UntypedWrite,
-
-    /// <summary>
-    /// Whether the untyped row insert of <c>InsertRowsAsync(object[])</c> takes values whose CLR type is the type, or the
-    /// value type under it (a boxed nullable value is its value type).
-    /// </summary>
-    UntypedCanWrite,
-}
-
-/// <summary>One thing that a case checks: a read target in a read tier, or a write input in a write tier.</summary>
-internal sealed class Facet
-{
-    private Facet(DifferentialCase testCase, Tier tier, Type target, WriteInput input, string name)
-    {
-        Case = testCase;
-        Tier = tier;
-        Target = target;
-        Input = input;
-        Name = name;
-    }
-
-    /// <summary>The case of the facet.</summary>
-    public DifferentialCase Case { get; }
-
-    /// <summary>The entry point that the facet checks.</summary>
-    public Tier Tier { get; }
-
-    /// <summary>The read target, for <see cref="Tier.ReadAs"/>, <see cref="Tier.Poco"/> and <see cref="Tier.CanRead"/>.</summary>
-    public Type Target { get; }
-
-    /// <summary>The write input, for the write tiers (<see cref="IsWrite"/>).</summary>
-    public WriteInput Input { get; }
-
-    /// <summary>The name of the facet in its case, for example <c>ReadAs&lt;DateTime&gt;</c> or <c>Write[insert]</c>.</summary>
-    public string Name { get; }
-
-    /// <summary>Whether the facet reads values (<see cref="Tier.ReadAs"/> or <see cref="Tier.Poco"/>).</summary>
-    public bool ReadsValues => Tier is Tier.ReadAs or Tier.Poco;
-
-    /// <summary>Whether the facet gives a yes-or-no answer (<see cref="Tier.CanRead"/> or a write answer tier).</summary>
-    public bool IsAnswer => Tier is Tier.CanRead or Tier.CanWrite or Tier.PocoCanWrite or Tier.UntypedCanWrite;
-
-    /// <summary>Whether the facet is one of a write tier, which has a write input.</summary>
-    public bool IsWrite => IsWriteTier(Tier);
-
-    /// <summary>Whether a tier is a write tier, whose facets have a write input.</summary>
-    /// <param name="tier">The tier.</param>
-    /// <returns>Whether it is a write tier.</returns>
-    public static bool IsWriteTier(Tier tier)
-        => tier is Tier.Write or Tier.CanWrite or Tier.PocoWrite or Tier.PocoCanWrite or Tier.UntypedWrite or Tier.UntypedCanWrite;
-
-    /// <summary>Whether a tier writes bytes (<see cref="Tier.Write"/>, <see cref="Tier.PocoWrite"/>, <see cref="Tier.UntypedWrite"/>).</summary>
-    /// <param name="tier">The tier.</param>
-    /// <returns>Whether it writes bytes.</returns>
-    public static bool WritesBytes(Tier tier) => tier is Tier.Write or Tier.PocoWrite or Tier.UntypedWrite;
-
-    public static Facet Read(DifferentialCase testCase, Tier tier, Type target)
-        => new(testCase, tier, target, input: null, $"{tier}<{TypeNames.Of(target)}>");
-
-    public static Facet Write(DifferentialCase testCase, Tier tier, WriteInput input)
-        => new(testCase, tier, target: null, input, $"{tier}[{input.Label}]");
-
-    /// <inheritdoc/>
-    public override string ToString() => $"{Case.Id} {Name}";
 }

@@ -43,6 +43,35 @@ internal sealed class EnumMemberTable
     /// <summary>The declared members, in declaration order.</summary>
     public IReadOnlyList<KeyValuePair<string, long>> Members { get; }
 
+    /// <summary>
+    /// Whether <paramref name="other"/> declares the same members: each label with the same ordinal, in any order. An
+    /// ordinal of one type then means the same label in the other.
+    /// </summary>
+    /// <param name="other">The members of another enum type.</param>
+    /// <returns>Whether the two types declare the same members.</returns>
+    public bool HasTheSameMembers(EnumMemberTable other)
+    {
+        if (ReferenceEquals(this, other))
+        {
+            return true;
+        }
+
+        if (other is null || other.Members.Count != Members.Count)
+        {
+            return false;
+        }
+
+        foreach (KeyValuePair<string, long> member in Members)
+        {
+            if (!other.ordinalByLabel.TryGetValue(member.Key, out long ordinal) || ordinal != member.Value)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>The label declared for <paramref name="ordinal"/>, if any.</summary>
     public bool TryGetLabel(long ordinal, out string label) => labelByOrdinal.TryGetValue(ordinal, out label);
 

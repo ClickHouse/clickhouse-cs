@@ -22,24 +22,7 @@ public class JsonStringColumnCodecTests
         0x69, 0x22, 0x7D,
     };
 
-    private static readonly string[] DocumentedValues = { "{\"a\":1}", "{}", "{\"b\":\"hi\"}" };
-
     private static IColumnCodec Resolve(string type) => ColumnCodecRegistry.Default.Resolve(type, default);
-
-    [Test]
-    public async Task WriteStatePrefixAndColumn_DocumentedExample_ProducesTheDocumentedBytes()
-    {
-        IColumnCodec codec = Resolve(Json);
-        var column = new ArrayColumn<string>("j", Json, DocumentedValues);
-
-        byte[] bytes = await CodecTestHarness.WriteAsync(w =>
-        {
-            codec.WriteStatePrefix(w, column);
-            codec.WriteColumn(w, column);
-        });
-
-        CollectionAssert.AreEqual(DocumentedBytes, bytes);
-    }
 
     [Test]
     public async Task ReadColumn_DocumentedBytes_ReconstructsTheJsonText()
@@ -96,146 +79,8 @@ public class JsonStringColumnCodecTests
         Assert.That(codec.TypeName, Is.EqualTo(type));
     }
 
-    [Test]
-    [TestCase("Text", true)]
-    [TestCase("UInt32", false)]
-    [TestCase("Bytes", false)]
-    public void CanWrite_ColumnCandidate_ReturnsExpected(string kind, bool expected)
-    {
-        IColumnCodec codec = Resolve(Json);
-        using IColumn column = kind switch
-        {
-            "Text" => new ArrayColumn<string>("j", Json, DocumentedValues),
-            "UInt32" => PrimitiveColumn<uint>.FromValues("j", Json, new uint[] { 1 }),
-            "Bytes" => new ArrayColumn<byte[]>("j", Json, new[] { new byte[] { (byte)'{', (byte)'}' } }),
-            _ => throw new ArgumentOutOfRangeException(nameof(kind)),
-        };
-
-        Assert.That(codec.CanWrite(column), Is.EqualTo(expected));
-    }
-
-    /// <summary>
-    /// Verifies that JSON does not inherit String's raw-byte write shape.
-    /// </summary>
-    [Test]
-    public void CanWriteElementType_ByteArray_IsRefusedWhileStringIsAccepted()
-    {
-        IColumnCodec codec = Resolve(Json);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWriteElementType(typeof(byte[])), Is.False);
-            Assert.That(ClickHouseTcpTypes.CanWrite("JSON", typeof(byte[])), Is.False);
-            Assert.That(ClickHouseTcpTypes.CanWrite("JSON", typeof(string)), Is.True);
-        });
-    }
-
-    // Unlike every other codec's placeholder, this one is real input: see the Nullable(JSON) test below.
-    [Test]
-    public void NullPlaceholder_IsTheEmptyJsonObject()
-    {
-        IColumnCodec codec = Resolve(Json);
-
-        Assert.That(codec.NullPlaceholder, Is.EqualTo("{}"));
-        Assert.That(codec.NullPlaceholderAs(typeof(string)), Is.EqualTo("{}"));
-    }
-
-    [Test]
-    public void NullPlaceholderAs_UnsupportedWriteType_Throws()
-    {
-        IColumnCodec codec = Resolve(Json);
-
-        Assert.Throws<NotSupportedException>(() => codec.NullPlaceholderAs(typeof(int)));
-    }
-
-    // A JSON value is parsed by the server rather than stored verbatim, and a Nullable column's values stream is
-    // parsed at every position — the null ones included. So the placeholder standing in for a NULL row has to be
-    // parseable JSON: the empty string a String column would write is rejected as INCORRECT_DATA. Verified against
-    // a ClickHouse 26.6 SELECT ... FORMAT Native, which writes "{}" in that position too.
-    [Test]
-    public async Task WriteStatePrefixAndColumn_NullableJson_WritesAnEmptyObjectWhereTheRowIsNull()
-    {
-        IColumnCodec codec = Resolve("Nullable(JSON)");
-        var column = new ArrayColumn<string>("j", "Nullable(JSON)", new[] { "{\"a\":1}", null });
-
-        byte[] bytes = await CodecTestHarness.WriteAsync(w =>
-        {
-            codec.WriteStatePrefix(w, column);
-            codec.WriteColumn(w, column);
-        });
-
-        CollectionAssert.AreEqual(
-            new byte[]
-            {
-                0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // the JSON version, ahead of the null map
-                0x00, 0x01,                                     // null map: row 0 present, row 1 NULL
-                0x07, 0x7B, 0x22, 0x61, 0x22, 0x3A, 0x31, 0x7D, // row 0: {"a":1}
-                0x02, 0x7B, 0x7D,                               // row 1: the "{}" placeholder
-            },
-            bytes);
-    }
-
-    // JSON carries a state prefix, so it must not be treated as a flat leaf inner (ISpanWritableCodec) by a
-    // concatenating composite: the version belongs on the wire once, ahead of the array's own offsets. Writing it
-    // per row — or not at all — desynchronizes the block instead of failing cleanly. Verified against a
-    // ClickHouse 26.6 SELECT ... FORMAT Native.
-    [Test]
-    public async Task WriteStatePrefixAndColumn_ArrayOfJson_WritesTheVersionOnceAheadOfTheOffsets()
-    {
-        IColumnCodec codec = Resolve("Array(JSON)");
-        var column = new ArrayColumn<string[]>("j", "Array(JSON)", new[]
-        {
-            new[] { "{\"a\":1}", "{\"b\":\"hi\"}" },
-            Array.Empty<string>(),
-        });
-
-        byte[] bytes = await CodecTestHarness.WriteAsync(w =>
-        {
-            codec.WriteStatePrefix(w, column);
-            codec.WriteColumn(w, column);
-        });
-
-        CollectionAssert.AreEqual(
-            new byte[]
-            {
-                0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // the JSON version, once, before the offsets
-                0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // offsets[0] = 2
-                0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // offsets[1] = 2 (second row empty)
-                0x07, 0x7B, 0x22, 0x61, 0x22, 0x3A, 0x31, 0x7D, // {"a":1}
-                0x0A, 0x7B, 0x22, 0x62, 0x22, 0x3A, 0x22, 0x68, // {"b":"hi"}
-                0x69, 0x22, 0x7D,
-            },
-            bytes);
-    }
-
-    // A slice starting past row 0 is what every insert above DefaultMaxRowsPerBlock writes, and a start of 0 proves
-    // nothing about it — see AGENTS.local.md. The version is written once for the slice, not once per row, and only
-    // the slice's own rows follow it. Covers the ergonomic column; the dense read-back is the next test.
-    [Test]
-    public async Task WriteStatePrefixAndColumn_SliceAfterEarlierRows_WritesTheVersionOnceAndOnlyTheSliceRows()
-    {
-        IColumnCodec codec = Resolve(Json);
-        var column = new ArrayColumn<string>("j", Json, new[] { "{}", "{\"a\":1}", "{\"b\":\"hi\"}", "{\"c\":2}" });
-
-        byte[] bytes = await CodecTestHarness.WriteAsync(w =>
-        {
-            codec.WriteStatePrefix(w, column, 1, 2);
-            codec.WriteColumn(w, column, 1, 2);
-        });
-
-        CollectionAssert.AreEqual(
-            new byte[]
-            {
-                0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // the version, once for the slice
-                0x07, 0x7B, 0x22, 0x61, 0x22, 0x3A, 0x31, 0x7D, // row 1: {"a":1}
-                0x0A, 0x7B, 0x22, 0x62, 0x22, 0x3A, 0x22, 0x68, // row 2: {"b":"hi"}
-                0x69, 0x22, 0x7D,                               // rows 0 and 3 are outside the slice
-            },
-            bytes);
-    }
-
-    // The same slice taken from the dense read-back column, which is a different write source (a StringColumn's
-    // blob plus offsets) from the ergonomic string[] above and computes the slice its own way.
+    // A slice that starts after row 0 of the column that a query reads (a StringColumn: one blob and its offsets). The
+    // codec writes the version once, then only the rows of the slice.
     [Test]
     public async Task WriteStatePrefixAndColumn_DenseColumnSliceAfterEarlierRows_WritesOnlyTheSliceRows()
     {
@@ -245,11 +90,7 @@ public class JsonStringColumnCodecTests
         await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
         using IColumn dense = await codec.ReadColumnAsync(reader, "j", Json, 3, CodecTestHarness.None);
 
-        byte[] bytes = await CodecTestHarness.WriteAsync(w =>
-        {
-            codec.WriteStatePrefix(w, dense, 1, 2);
-            codec.WriteColumn(w, dense, 1, 2);
-        });
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(codec, dense, 1, 2, prefix: true);
 
         CollectionAssert.AreEqual(
             new byte[]
@@ -258,39 +99,6 @@ public class JsonStringColumnCodecTests
                 0x02, 0x7B, 0x7D,                               // row 1: {}
                 0x0A, 0x7B, 0x22, 0x62, 0x22, 0x3A, 0x22, 0x68, // row 2: {"b":"hi"}
                 0x69, 0x22, 0x7D,                               // row 0 is outside the slice
-            },
-            bytes);
-    }
-
-    // Slicing an Array(JSON) is where a dropped rebase shows: the wire offsets are cumulative from the start of the
-    // block, so a slice must restart them at 0 rather than carry the whole column's running total. Row 0 holds one
-    // element, so an unrebased write would emit 3 and 3 here instead of 2 and 2 and mis-frame every row.
-    [Test]
-    public async Task WriteStatePrefixAndColumn_ArrayOfJsonSlice_RebasesTheOffsetsToTheSliceStart()
-    {
-        IColumnCodec codec = Resolve("Array(JSON)");
-        var column = new ArrayColumn<string[]>("j", "Array(JSON)", new[]
-        {
-            new[] { "{\"a\":1}" },
-            new[] { "{\"b\":\"hi\"}", "{\"c\":2}" },
-            Array.Empty<string>(),
-        });
-
-        byte[] bytes = await CodecTestHarness.WriteAsync(w =>
-        {
-            codec.WriteStatePrefix(w, column, 1, 2);
-            codec.WriteColumn(w, column, 1, 2);
-        });
-
-        CollectionAssert.AreEqual(
-            new byte[]
-            {
-                0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // the JSON version, once, before the offsets
-                0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // offsets[0] = 2, rebased (not 3)
-                0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // offsets[1] = 2 (third row empty)
-                0x0A, 0x7B, 0x22, 0x62, 0x22, 0x3A, 0x22, 0x68, // {"b":"hi"}
-                0x69, 0x22, 0x7D,
-                0x07, 0x7B, 0x22, 0x63, 0x22, 0x3A, 0x32, 0x7D, // {"c":2}
             },
             bytes);
     }

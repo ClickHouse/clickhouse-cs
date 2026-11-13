@@ -29,9 +29,6 @@ internal sealed class NothingColumnCodec : IColumnCodec
     public Type ElementType => typeof(object);
 
     /// <inheritdoc/>
-    public object NullPlaceholder => throw new NotSupportedException("Values cannot be written to a ClickHouse Nothing column.");
-
-    /// <inheritdoc/>
     public async ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
     {
         // One placeholder byte per row must be consumed to keep the stream aligned, even though it carries no
@@ -53,13 +50,6 @@ internal sealed class NothingColumnCodec : IColumnCodec
     }
 
     /// <inheritdoc/>
-    public bool CanWrite(IColumn column) => false;
-
-    /// <inheritdoc/>
-    // Nothing accepts no row value type.
-    public bool CanWriteElementType(Type elementType) => false;
-
-    /// <inheritdoc/>
-    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
+    public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
         => throw new NotSupportedException("Values cannot be written to a ClickHouse Nothing column.");
 }

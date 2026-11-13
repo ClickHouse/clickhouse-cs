@@ -7,8 +7,8 @@ using ClickHouse.Driver.Tcp.Types.Converters;
 namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
-/// The read tests of the leaves that the differential tests (<see cref="LeafConverterRegistration"/>) do not run: the
-/// pairs that no differential case reaches, through <see cref="BoundReader{T}.Fill"/> and a compiled
+/// The read tests of the leaves that the differential tests (<see cref="LeafConverterRegistrationTests"/>) do not
+/// reach: the pairs that no differential case reaches, through <see cref="BoundReader{T}.Fill"/> and a compiled
 /// <see cref="ColumnReader.Emit"/> against <see cref="Block.ReadAs{T}(string)"/>, which gives the column itself for an
 /// identity pair; zero rows; columns that a caller built; the surface messages.
 /// </summary>
