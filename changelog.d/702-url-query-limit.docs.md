@@ -1,0 +1,1 @@
+* Corrected the documented limit for `InsertQueryPlacement.Url`: the URL-encoded statement is subject to ClickHouse's 128 KiB default per-parameter limit, in addition to the 1 MiB default whole-URI limit. (#702)
