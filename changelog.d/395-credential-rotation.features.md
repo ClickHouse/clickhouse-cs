@@ -1,0 +1,1 @@
+* **Dynamic credential rotation** (issue #395): add `ClickHouseClientSettings.CredentialsProvider` (`Func<ClickHouseCredentials>`) evaluated per HTTP request so rotated Basic/Bearer credentials can be picked up without recreating the client/connection. Empty per-query/command `BearerToken` is now treated as unset (falls back to client settings).
