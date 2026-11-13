@@ -250,6 +250,11 @@ ClickHouse.Driver.ADO.ClickHouseClientSettings.AcceptEncoding.init -> void
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.AcceptEncoding.get -> string
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.AcceptEncoding.set -> void
 ClickHouse.Driver.ADO.ClickHouseRawResult.ReadDecompressedStreamAsync() -> System.Threading.Tasks.Task<System.IO.Stream>
+ClickHouse.Driver.ADO.ClickHouseRawResult.ReadDecompressedStreamAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.IO.Stream>
+ClickHouse.Driver.ADO.ClickHouseRawResult.ReadAsStreamAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<System.IO.Stream>
+ClickHouse.Driver.ADO.ClickHouseRawResult.ReadAsByteArrayAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<byte[]>
+ClickHouse.Driver.ADO.ClickHouseRawResult.ReadAsStringAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<string>
+ClickHouse.Driver.ADO.ClickHouseRawResult.CopyToAsync(System.IO.Stream stream, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task
 ClickHouse.Driver.MapReadMode
 ClickHouse.Driver.MapReadMode.Dictionary = 0 -> ClickHouse.Driver.MapReadMode
 ClickHouse.Driver.MapReadMode.KeyValuePairs = 1 -> ClickHouse.Driver.MapReadMode
