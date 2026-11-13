@@ -36,20 +36,28 @@ public class InsertBinarySchemaTests : AbstractConnectionTestFixture
     }
 
     /// <summary>
-    /// Counts the schema-probe queries (<c>WHERE 1=0</c>) logged under <paramref name="queryIdPrefix"/>.
+    /// Counts the schema-probe queries (<c>WHERE 1=0</c>) sent for <paramref name="table"/>.
     /// </summary>
-    /// <param name="queryIdPrefix">Query-id prefix the insert under test was given.</param>
+    /// <remarks>
+    /// The probe is matched on the table it reads rather than on the insert's query id, because the
+    /// probe is the driver's own metadata query and carries an id of its own. The table name goes
+    /// into a LIKE pattern, where its underscores are single-character wildcards — harmless here,
+    /// since the random suffix every table name carries keeps it from matching another test's
+    /// table. This lookup's own text mentions the table too, so it is excluded from the match.
+    /// </remarks>
+    /// <param name="table">Table the insert under test writes to.</param>
     /// <param name="expectedCount">
     /// How many probe queries the caller expects, so the lookup keeps waiting until they are all
     /// visible. A caller expecting none still gets the full wait before the count is reported.
     /// </param>
     /// <returns>The number of probe queries visible in <c>system.query_log</c>.</returns>
-    private Task<ulong> CountSchemaProbeQueriesAsync(string queryIdPrefix, ulong expectedCount = 1) =>
+    private Task<ulong> CountSchemaProbeQueriesAsync(string table, ulong expectedCount = 1) =>
         QueryLog.CountAsync(
             client,
             $"SELECT count() FROM system.query_log " +
-            $"WHERE query_id LIKE '{queryIdPrefix}%' " +
+            $"WHERE query LIKE '%{table}%' " +
             $"AND query LIKE '%WHERE 1=0%' " +
+            $"AND query NOT LIKE '%system.query_log%' " +
             $"AND type = 'QueryFinish'",
             minimumCount: expectedCount);
 
@@ -76,7 +84,7 @@ public class InsertBinarySchemaTests : AbstractConnectionTestFixture
             GenerateTestRows(5).ToList(),
             options);
 
-        var probeCount = await CountSchemaProbeQueriesAsync(queryId);
+        var probeCount = await CountSchemaProbeQueriesAsync(bareTableName);
         Assert.That(probeCount, Is.EqualTo(0UL),
             "No schema probe query should be sent when ColumnTypes is provided");
     }
@@ -207,7 +215,7 @@ public class InsertBinarySchemaTests : AbstractConnectionTestFixture
             GenerateTestRows(3, startId: 100).ToList(),
             options);
 
-        var probeCount = await CountSchemaProbeQueriesAsync(queryId, expectedCount: 1);
+        var probeCount = await CountSchemaProbeQueriesAsync(bareTableName, expectedCount: 1);
         Assert.That(probeCount, Is.EqualTo(1UL),
             "Only one schema probe query should be sent when UseSchemaCache is true");
     }
@@ -244,7 +252,7 @@ public class InsertBinarySchemaTests : AbstractConnectionTestFixture
             new List<object[]> { new object[] { 2UL, "b" } },
             options);
 
-        var probeCount = await CountSchemaProbeQueriesAsync(queryId, expectedCount: 1);
+        var probeCount = await CountSchemaProbeQueriesAsync(bareTableName, expectedCount: 1);
         Assert.That(probeCount, Is.EqualTo(1UL),
             "Cache is per-table — different column subsets should share the same cached schema");
     }
@@ -273,7 +281,7 @@ public class InsertBinarySchemaTests : AbstractConnectionTestFixture
             GenerateTestRows(3).ToList(),
             options);
 
-        var probeCount = await CountSchemaProbeQueriesAsync(queryId);
+        var probeCount = await CountSchemaProbeQueriesAsync(bareTableName);
         Assert.That(probeCount, Is.EqualTo(0UL),
             "ColumnTypes should take priority over UseSchemaCache — no schema query expected");
     }
@@ -487,7 +495,7 @@ public class InsertBinarySchemaTests : AbstractConnectionTestFixture
             GenerateTestRows(3, startId: 100).ToList(),
             new InsertOptions { Database = "test", QueryId = queryId });
 
-        var probeCount = await CountSchemaProbeQueriesAsync(queryId, expectedCount: 2);
+        var probeCount = await CountSchemaProbeQueriesAsync(bareTableName, expectedCount: 2);
         Assert.That(probeCount, Is.EqualTo(2UL),
             "Default behavior should query schema on every insert");
     }
