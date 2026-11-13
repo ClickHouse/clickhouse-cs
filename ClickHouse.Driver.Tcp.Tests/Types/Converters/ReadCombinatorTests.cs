@@ -257,6 +257,10 @@ public class ReadCombinatorTests
         yield return new TestCaseData("Tuple(DateTime('UTC'), String)", typeof(ValueTuple<DateTime>)).SetName("{m}(Tuple, another arity)");
         yield return new TestCaseData("Tuple(DateTime('UTC'), String)", typeof(Tuple<DateTime, string>)).SetName("{m}(Tuple, a reference tuple)");
         yield return new TestCaseData("Tuple(DateTime('UTC'), String)", typeof((Guid, string))).SetName("{m}(Tuple, a field the child refuses)");
+        yield return new TestCaseData("Tuple(DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'))", typeof((DateTime, DateTime, DateTime, DateTime, DateTime, DateTime, DateTime, DateTime))).SetName("{m}(Tuple of 9, a ValueTuple of 8)");
+        yield return new TestCaseData("Tuple(DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'))", typeof((DateTime, DateTime, DateTime, DateTime, DateTime, DateTime, DateTime, DateTime, DateTime, DateTime))).SetName("{m}(Tuple of 9, a ValueTuple of 10)");
+        yield return new TestCaseData("Tuple(DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'))", typeof((DateTime, DateTime, DateTime, DateTime, DateTime, DateTime, DateTime, DateTime, Guid))).SetName("{m}(Tuple of 9, a field after the seventh that the child refuses)");
+        yield return new TestCaseData("Tuple(DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'), DateTime('UTC'))", typeof(ValueTuple<DateTime, DateTime, DateTime, DateTime, DateTime, DateTime, DateTime, DateTime>)).SetName("{m}(Tuple of 8, an eighth type argument that is no ValueTuple)");
         yield return new TestCaseData("Variant(String, UInt64)", typeof(DateTime[])).SetName("{m}(Variant)");
         yield return new TestCaseData("Dynamic", typeof(DateTime[])).SetName("{m}(Dynamic)");
         yield return new TestCaseData("Nested(a DateTime('UTC'))", typeof(DateTime[])).SetName("{m}(Nested)");
@@ -280,6 +284,9 @@ public class ReadCombinatorTests
     [TestCase("Tuple(Time, Time, Time, Time, Time)", typeof((TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly)))]
     [TestCase("Tuple(Time, Time, Time, Time, Time, Time)", typeof((TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly)))]
     [TestCase("Tuple(Time, Time, Time, Time, Time, Time, Time)", typeof((TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly)))]
+    [TestCase("Tuple(Time, Time, Time, Time, Time, Time, Time, Time)", typeof((TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly)))]
+    [TestCase("Tuple(Time, Time, Time, Time, Time, Time, Time, Time, Time)", typeof((TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly)))]
+    [TestCase("Tuple(Time, Time, Time, Time, Time, Time, Time, Time, Time, Time, Time, Time, Time, Time, Time)", typeof((TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly, TimeOnly)))]
     public async Task Read_CompositeWithTwoFailingValues_FailsOnOneOfThemInEveryPath(string type, Type target)
     {
         using IColumn column = await ConverterHarness.DecodeAsync(type, TwoFailingValues(type));
@@ -416,6 +423,7 @@ public class ReadCombinatorTests
     [TestCase("Array(Int32)", typeof(int), "'Array(Int32)' cannot be read as System.Int32. It reads as an array.")]
     [TestCase("Map(String, Int32)", typeof(string[]), "'Map(String, Int32)' cannot be read as System.String[]. It reads as an array of KeyValuePair<TKey, TValue>.")]
     [TestCase("Tuple(Int32, String)", typeof(ValueTuple<int>), "'Tuple(Int32, String)' cannot be read as System.ValueTuple`1[System.Int32]. It reads as a ValueTuple of 2 element(s).")]
+    [TestCase("Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32)", typeof((int, int, int, int, int, int, int, int)), "'Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32)' cannot be read as System.ValueTuple`8[System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.ValueTuple`1[System.Int32]]. It reads as a ValueTuple of 9 element(s).")]
     [TestCase("Nullable(Int32)", typeof(long), "'Nullable(Int32)' cannot be read as System.Int64, which cannot hold NULL.")]
     [TestCase("LowCardinality(Nullable(String))", typeof(int), "'LowCardinality(Nullable(String))' cannot be read as System.Int32, which cannot hold NULL.")]
     [TestCase(
@@ -494,12 +502,13 @@ public class ReadCombinatorTests
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, "No column of two failing values."),
     };
 
-    // A Tuple of n Time fields: row 0 fails on its last field (90000), row 1 on its first field (-1).
+    // A Tuple of n Time fields: row 0 fails on its last field (90000), row 1 on its first field (-1). Past 7 fields, the
+    // last field is in TRest.
     private static IColumn TupleOfTimes(string type)
     {
         int arity = TypeParser.Parse(type).Arguments.Count;
         Type tuple = ConverterHarness.Codec(type).ElementType;
-        object Row(int first, int last) => Activator.CreateInstance(
+        object Row(int first, int last) => ValueTuples.Create(
             tuple,
             Enumerable.Range(0, arity).Select(i => (object)(i == arity - 1 ? last : i == 0 ? first : 1)).ToArray());
         Array rows = Array.CreateInstance(tuple, 2);

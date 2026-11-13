@@ -1205,7 +1205,14 @@ least 24 hours; use `TimeSpan` for the full ClickHouse range.
 | `LowCardinality(T)` | Same as `T` | `ILowCardinalityColumn<T>` |
 | `Nested(...)` | `object[][]` | `INestedColumn` |
 
-Tuples can contain up to seven elements. A `Nested` column is arity-independent and is best read
+A tuple can contain up to 256 elements. A tuple of more than seven elements reads as the type that
+C# gives a tuple literal of that length: `ValueTuple<T1, ..., T7, TRest>`, where `TRest` holds the
+elements after the seventh. For example, `Tuple(Int32, ..., Int32, String, String)` with nine
+elements reads as `(int, int, int, int, int, int, int, string, string)`, and `Item9` is its last
+element. `ITupleColumn.Children` and `ITupleColumn.FieldNames` have one entry for each element of
+the tuple. The writes accept the same shape.
+
+A `Nested` column is arity-independent and is best read
 through `INestedColumn`, which exposes its named flat field columns and shared row offsets without
 allocating boxed records. With ClickHouse's default `flatten_nested = 1`, nested fields arrive as
 separate dotted `Array(T)` columns instead.
@@ -1781,7 +1788,7 @@ them, for example to `row_limit`, when supporting those versions.
 The [supported data types](#supported-data-types) section describes the complete mappings. The
 current native codec has these notable boundaries:
 
-* Tuples can contain at most seven elements.
+* Tuples can contain at most 256 elements.
 * `AggregateFunction(function, ...)` intermediate states are not supported. Finalize them on the
   server, for example with `sumMerge(column)`, and read the result instead.
 * Only the two-argument, unstrided `QBit(T, N)` layout is supported.

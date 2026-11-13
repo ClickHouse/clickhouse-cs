@@ -6,7 +6,9 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// <summary>
 /// <c>Tuple(...)</c> from a <see cref="ValueTuple"/>: one writer for each field. The prefixes of the fields, in field
 /// order, then the bodies of the fields, in field order. <see cref="Begin"/> copies each field of all the values into a
-/// pooled buffer, so the prefix and the body of a field read the same values.
+/// pooled buffer, so the prefix and the body of a field read the same values. A tuple of more than seven elements has 8
+/// fields (<see cref="TupleShape"/>): the eighth is <c>TRest</c>, whose writer writes the prefixes, then the bodies, of
+/// the elements after the seventh. So the elements go out in the order of the server's type.
 /// </summary>
 /// <remarks>
 /// Each field keeps the rows and the marks of the source: a position that the source marks (a NULL of
@@ -459,6 +461,57 @@ internal sealed class TupleWriter<T1, T2, T3, T4, T5, T6, T7> : TupleWriterBase<
             b5[i] = run[i].Item5;
             b6[i] = run[i].Item6;
             b7[i] = run[i].Item7;
+        }
+    }
+}
+
+/// <summary>A tuple writer of more than seven elements: fields 1 to 7, and the elements after the seventh as field 8.</summary>
+/// <typeparam name="T1">The CLR type of field 1.</typeparam>
+/// <typeparam name="T2">The CLR type of field 2.</typeparam>
+/// <typeparam name="T3">The CLR type of field 3.</typeparam>
+/// <typeparam name="T4">The CLR type of field 4.</typeparam>
+/// <typeparam name="T5">The CLR type of field 5.</typeparam>
+/// <typeparam name="T6">The CLR type of field 6.</typeparam>
+/// <typeparam name="T7">The CLR type of field 7.</typeparam>
+/// <typeparam name="TRest">The <see cref="ValueTuple"/> of the elements after the seventh.</typeparam>
+internal sealed class TupleWriter<T1, T2, T3, T4, T5, T6, T7, TRest> : TupleWriterBase<ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>>
+    where TRest : struct
+{
+    /// <summary>Initializes the writer.</summary>
+    /// <param name="field1">The writer of field 1.</param>
+    /// <param name="field2">The writer of field 2.</param>
+    /// <param name="field3">The writer of field 3.</param>
+    /// <param name="field4">The writer of field 4.</param>
+    /// <param name="field5">The writer of field 5.</param>
+    /// <param name="field6">The writer of field 6.</param>
+    /// <param name="field7">The writer of field 7.</param>
+    /// <param name="rest">The writer of the elements after the seventh.</param>
+    public TupleWriter(ColumnWriter<T1> field1, ColumnWriter<T2> field2, ColumnWriter<T3> field3, ColumnWriter<T4> field4, ColumnWriter<T5> field5, ColumnWriter<T6> field6, ColumnWriter<T7> field7, ColumnWriter<TRest> rest)
+        : base(new TupleField<T1>(field1), new TupleField<T2>(field2), new TupleField<T3>(field3), new TupleField<T4>(field4), new TupleField<T5>(field5), new TupleField<T6>(field6), new TupleField<T7>(field7), new TupleField<TRest>(rest))
+    {
+    }
+
+    /// <inheritdoc/>
+    protected override void Gather(ReadOnlySpan<ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>> run, Array[] buffers, int at)
+    {
+        Span<T1> b1 = ((T1[])buffers[0]).AsSpan(at, run.Length);
+        Span<T2> b2 = ((T2[])buffers[1]).AsSpan(at, run.Length);
+        Span<T3> b3 = ((T3[])buffers[2]).AsSpan(at, run.Length);
+        Span<T4> b4 = ((T4[])buffers[3]).AsSpan(at, run.Length);
+        Span<T5> b5 = ((T5[])buffers[4]).AsSpan(at, run.Length);
+        Span<T6> b6 = ((T6[])buffers[5]).AsSpan(at, run.Length);
+        Span<T7> b7 = ((T7[])buffers[6]).AsSpan(at, run.Length);
+        Span<TRest> bRest = ((TRest[])buffers[7]).AsSpan(at, run.Length);
+        for (int i = 0; i < run.Length; i++)
+        {
+            b1[i] = run[i].Item1;
+            b2[i] = run[i].Item2;
+            b3[i] = run[i].Item3;
+            b4[i] = run[i].Item4;
+            b5[i] = run[i].Item5;
+            b6[i] = run[i].Item6;
+            b7[i] = run[i].Item7;
+            bRest[i] = run[i].Rest;
         }
     }
 }

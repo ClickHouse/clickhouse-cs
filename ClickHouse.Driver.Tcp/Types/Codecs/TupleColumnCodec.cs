@@ -15,10 +15,12 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// of how many elements the tuple has.
 ///
 /// <para>
-/// The decoded column is the typed <c>TupleColumn</c> for the element count (1 through 7), surfacing each row as
-/// a <c>ValueTuple</c> of the element values. Wider tuples are rejected rather than silently mishandled. Element
-/// names (a named tuple such as <c>Tuple(a Int32, b String)</c>) do not affect the wire layout or the CLR value;
-/// they are preserved in the type string and carried on the column as metadata.
+/// The decoded column is the typed <c>TupleColumn</c> for the element count, surfacing each row as a <c>ValueTuple</c>
+/// of the element values. A tuple of more than 7 elements is a <c>ValueTuple</c> whose eighth type argument holds the
+/// elements after the seventh, as in C# (<see cref="TupleShape"/>). A tuple of more than
+/// <see cref="TupleShape.MaxElements"/> elements is refused. Element names (a named tuple such as
+/// <c>Tuple(a Int32, b String)</c>) do not affect the wire layout or the CLR value; they are preserved in the type
+/// string and carried on the column as metadata.
 /// </para>
 ///
 /// <para>
@@ -28,34 +30,6 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 /// </summary>
 internal sealed class TupleColumnCodec : IColumnCodec
 {
-    private const int MaxArity = 7;
-
-    // The open generic ValueTuple / TupleColumn definitions indexed by arity (index 0 unused). MakeGenericType
-    // closes them over the child element types once, at resolution time.
-    private static readonly Type[] ValueTupleDefinitions =
-    {
-        null,
-        typeof(ValueTuple<>),
-        typeof(ValueTuple<,>),
-        typeof(ValueTuple<,,>),
-        typeof(ValueTuple<,,,>),
-        typeof(ValueTuple<,,,,>),
-        typeof(ValueTuple<,,,,,>),
-        typeof(ValueTuple<,,,,,,>),
-    };
-
-    private static readonly Type[] ColumnDefinitions =
-    {
-        null,
-        typeof(TupleColumn<>),
-        typeof(TupleColumn<,>),
-        typeof(TupleColumn<,,>),
-        typeof(TupleColumn<,,,>),
-        typeof(TupleColumn<,,,,>),
-        typeof(TupleColumn<,,,,,>),
-        typeof(TupleColumn<,,,,,,>),
-    };
-
     private readonly IColumnCodec[] children;
     private readonly string[] fieldNames;
     private readonly ConstructorInfo columnConstructor;
@@ -74,19 +48,11 @@ internal sealed class TupleColumnCodec : IColumnCodec
             elementTypes[i] = children[i].ElementType;
         }
 
-        ElementType = ValueTupleDefinitions[arity].MakeGenericType(elementTypes);
+        ElementType = TupleShape.Of(elementTypes);
         icolumnOfTupleType = typeof(IColumn<>).MakeGenericType(ElementType);
 
-        // Cache the arity-specific column's constructor once. The parameter-type array is the exact signature of
-        // the children-based constructor, disambiguating it from the ValueTuple[] convenience one; NonPublic is
-        // what reaches it, since that constructor is internal.
-        Type columnType = ColumnDefinitions[arity].MakeGenericType(elementTypes);
-        columnConstructor = columnType.GetConstructor(
-            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public,
-            binder: null,
-            new[] { typeof(string), typeof(string), typeof(IColumn[]), typeof(IReadOnlyList<string>), typeof(bool) },
-            modifiers: null)
-            ?? throw new InvalidOperationException($"The tuple column type '{columnType}' is missing its expected constructor.");
+        // Cache the constructor of the tuple column class once.
+        columnConstructor = TupleColumns.ConstructorFor(ElementType);
     }
 
     /// <inheritdoc/>
@@ -120,10 +86,10 @@ internal sealed class TupleColumnCodec : IColumnCodec
             throw new FormatException($"Tuple type '{node}' must have at least one element type argument.");
         }
 
-        if (node.Arguments.Count > MaxArity)
+        if (node.Arguments.Count > TupleShape.MaxElements)
         {
             throw new NotSupportedException(
-                $"Tuple type '{node}' has {node.Arguments.Count} elements; this client supports at most {MaxArity} (wider tuples are not yet implemented).");
+                $"Tuple type '{node}' has {node.Arguments.Count} elements; this client supports at most {TupleShape.MaxElements}.");
         }
 
         (string Name, TypeNode Type)[] elements = NamedElementParser.Split(node);

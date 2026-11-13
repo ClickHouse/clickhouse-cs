@@ -18,6 +18,7 @@ internal sealed partial class ConverterDerivation
         typeof(TupleWriter<,,,,>),
         typeof(TupleWriter<,,,,,>),
         typeof(TupleWriter<,,,,,,>),
+        typeof(TupleWriter<,,,,,,,>),
     };
 
     /// <summary>
@@ -230,12 +231,11 @@ internal sealed partial class ConverterDerivation
     {
         (string Name, TypeNode Type)[] elements = NamedElementParser.Split(node);
         int arity = elements.Length;
-        if (!clrType.IsGenericType || clrType.GetGenericTypeDefinition() != ValueTupleDefinitions[arity])
+        if (!TupleShape.TryGetElements(clrType, out Type[] arguments) || arguments.Length != arity)
         {
             return Refuse(node, root, $"'{node}' cannot be written from {clrType}. It is written from a ValueTuple of {arity} element(s).");
         }
 
-        Type[] arguments = clrType.GetGenericArguments();
         var fields = new object[arity];
         for (int i = 0; i < arity; i++)
         {
@@ -248,7 +248,7 @@ internal sealed partial class ConverterDerivation
             fields[i] = field.Converter;
         }
 
-        return Derivation.Of(Activator.CreateInstance(TupleWriterDefinitions[arity].MakeGenericType(arguments), fields));
+        return Derivation.Of(NestTuple(TupleWriterDefinitions, clrType, fields, 0));
     }
 
     // Variant(...) from object. Each alternative must be written from its canonical type, as a Variant whose

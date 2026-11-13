@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net;
 using System.Numerics;
 using System.Text;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
 
@@ -84,7 +85,7 @@ internal static class SampleColumns
             }
 
             case "Tuple":
-                return Activator.CreateInstance(ElementType(node), node.Arguments.Select((field, i) => Value(field, row + i)).ToArray());
+                return ValueTuples.Create(ElementType(node), node.Arguments.Select((field, i) => Value(field, row + i)).ToArray());
 
             case "Variant":
                 // Rows 1 and 4 are NULL. Rows 0 and 3 take the first alternative, and row 2 takes the second.
