@@ -47,6 +47,39 @@ public class ConnectionStringBuilderTests
         Assert.That(settings.AcceptEncoding, Is.Null, "null is what selects the driver's default codec list");
     }
 
+    // A JWT (base64url segments joined by dots), and an opaque token with the characters the
+    // connection string syntax must quote.
+    [TestCase("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjaS10ZXN0In0.c2ln-bmF0_dXJl")]
+    [TestCase("opaque;token=with=\"quotes\"")]
+    public void ConnectionStringBuilder_BearerToken_ShouldRoundTripThroughConnectionStringAndSettings(string bearerToken)
+    {
+        var builder = new ClickHouseConnectionStringBuilder { BearerToken = bearerToken };
+
+        var reparsed = new ClickHouseConnectionStringBuilder(builder.ConnectionString);
+        var settings = ClickHouseClientSettings.FromConnectionString(builder.ConnectionString);
+        var backToBuilder = ClickHouseConnectionStringBuilder.FromSettings(settings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reparsed.BearerToken, Is.EqualTo(bearerToken));
+            Assert.That(settings.BearerToken, Is.EqualTo(bearerToken));
+            Assert.That(backToBuilder.BearerToken, Is.EqualTo(bearerToken));
+        });
+    }
+
+    [Test]
+    public void ConnectionStringBuilder_WithoutBearerToken_ShouldLeaveTheSettingUnset()
+    {
+        var settings = ClickHouseClientSettings.FromConnectionString("Host=localhost;Username=user;Password=secret");
+        var builder = ClickHouseConnectionStringBuilder.FromSettings(settings);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.BearerToken, Is.Null, "null is what selects Basic authentication");
+            Assert.That(builder.ContainsKey("BearerToken"), Is.False);
+        });
+    }
+
     [Test]
     public void ConnectionStringBuilder_ReadBufferSize_ShouldRoundTripThroughConnectionString()
     {
