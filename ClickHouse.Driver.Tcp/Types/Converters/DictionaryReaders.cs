@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 
@@ -9,8 +10,8 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 
 /// <summary>
 /// <c>LowCardinality(X)</c> read as <typeparamref name="T"/>, and <c>LowCardinality(Nullable(X))</c> read as a
-/// reference type. The child converts the dictionary entries one time for a bound column, and each row gives the entry
-/// of its key, so the rows that share a key share one value.
+/// reference type. The child converts the dictionary entries one time for each column, and each row gives the entry of
+/// its key, so the rows that share a key share one value.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -22,61 +23,62 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 /// An entry that the child cannot convert does not fail the conversion of the dictionary: a read throws its failure
 /// when it reaches a row that is not NULL, as <see cref="DictionaryOrder"/> says.
 /// </para>
+/// <para>
+/// The reader keeps the converted entries of each column (<see cref="DictionaryEntryCache{TEntry}"/>), so all the reads
+/// of one column convert its dictionary once. A POCO read runs the setup of <see cref="Emit"/> for each window of rows,
+/// and that setup also binds the element reader of an <c>Array</c> or a <c>Map</c> again.
+/// </para>
 /// </remarks>
 /// <typeparam name="T">The CLR type of one value.</typeparam>
 internal sealed class DictionaryReader<T> : ColumnReader<T>
 {
     private static readonly MethodInfo EntriesMethod =
-        typeof(DictionaryReader<T>).GetMethod(nameof(Entries), BindingFlags.NonPublic | BindingFlags.Static);
+        typeof(DictionaryEntryCache<T>).GetMethod(nameof(DictionaryEntryCache<T>.For));
 
     private static readonly MethodInfo ValueAtMethod =
         typeof(DictionaryEntries<T>).GetMethod(nameof(DictionaryEntries<T>.ValueAt));
 
-    private readonly ColumnReader<T> inner;
-    private readonly DictionaryOrder order;
+    private readonly DictionaryEntryCache<T> entries;
 
     /// <summary>Initializes the reader over the reader of the dictionary type.</summary>
     /// <param name="inner">Reads the dictionary column.</param>
     /// <param name="order">Which failure a read throws when an entry cannot be converted.</param>
     public DictionaryReader(ColumnReader<T> inner, DictionaryOrder order)
     {
-        this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
-        this.order = order;
+        ArgumentNullException.ThrowIfNull(inner);
+        entries = new DictionaryEntryCache<T>(column => DictionaryEntries<T>.Convert(inner, column, order, static values => values));
     }
 
     /// <inheritdoc/>
-    public override BoundReader<T> Bind(IColumn column) => new Bound(ColumnSurface.Of<ILowCardinalityColumn>(column), this);
+    public override BoundReader<T> Bind(IColumn column) => new Bound(ColumnSurface.Of<ILowCardinalityColumn>(column), entries);
 
     /// <inheritdoc/>
     [RequiresDynamicCode("Builds an expression tree, which the caller compiles.")]
     public override Expression Emit(Expression column, ParameterExpression row, EmitScope scope)
     {
         ParameterExpression lowCardinality = scope.Local(typeof(ILowCardinalityColumn), "lowCardinality", EmitScope.Surface<ILowCardinalityColumn>(column));
-        ParameterExpression entries = scope.Local(
+        ParameterExpression converted = scope.Local(
             typeof(DictionaryEntries<T>),
             "entries",
-            Expression.Call(EntriesMethod, Expression.Constant(this), lowCardinality));
+            Expression.Call(Expression.Constant(entries), EntriesMethod, lowCardinality));
         ParameterExpression keys = scope.Local(typeof(ReadOnlySpan<int>), "keys", Expression.Property(lowCardinality, nameof(ILowCardinalityColumn.Keys)));
-        return Expression.Call(entries, ValueAtMethod, EmitScope.ElementAt(keys, row));
+        return Expression.Call(converted, ValueAtMethod, EmitScope.ElementAt(keys, row));
     }
-
-    private static DictionaryEntries<T> Entries(DictionaryReader<T> reader, ILowCardinalityColumn column)
-        => DictionaryEntries<T>.Convert(reader.inner, column, reader.order, static values => values);
 
     private sealed class Bound : BoundReader<T>
     {
         private readonly ILowCardinalityColumn column;
-        private readonly DictionaryReader<T> reader;
+        private readonly DictionaryEntryCache<T> cache;
         private DictionaryEntries<T> entries;
 
-        public Bound(ILowCardinalityColumn column, DictionaryReader<T> reader)
+        public Bound(ILowCardinalityColumn column, DictionaryEntryCache<T> cache)
         {
             this.column = column;
-            this.reader = reader;
+            this.cache = cache;
         }
 
         public override void Fill(int start, Span<T> destination)
-            => DictionaryEntries<T>.Once(ref entries, reader, column, Entries).Fill(column.Keys.Slice(start, destination.Length), destination);
+            => DictionaryEntries<T>.Once(ref entries, cache, column, static (c, l) => c.For(l)).Fill(column.Keys.Slice(start, destination.Length), destination);
     }
 }
 
@@ -84,48 +86,45 @@ internal sealed class DictionaryReader<T> : ColumnReader<T>
 /// <c>LowCardinality(Nullable(X))</c> read as <c>T?</c>, for a value type <typeparamref name="T"/>: the dictionary is a
 /// column of the bare <c>X</c>, so the child reads <typeparamref name="T"/>, and the entries are lifted to
 /// <c>T?</c>. The NULL slot is not converted and gives null, and an entry that the child cannot convert fails a read
-/// only at a row, as in <see cref="DictionaryReader{T}"/>.
+/// only at a row, as in <see cref="DictionaryReader{T}"/>. The reader keeps the converted entries of each column, as
+/// <see cref="DictionaryReader{T}"/> does.
 /// </summary>
 /// <typeparam name="T">The CLR type that the child gives for one entry.</typeparam>
 internal sealed class LiftingDictionaryReader<T> : ColumnReader<T?>
     where T : struct
 {
     private static readonly MethodInfo EntriesMethod =
-        typeof(LiftingDictionaryReader<T>).GetMethod(nameof(Entries), BindingFlags.NonPublic | BindingFlags.Static);
+        typeof(DictionaryEntryCache<T?>).GetMethod(nameof(DictionaryEntryCache<T?>.For));
 
     private static readonly MethodInfo ValueAtMethod =
         typeof(DictionaryEntries<T?>).GetMethod(nameof(DictionaryEntries<T?>.ValueAt));
 
-    private readonly ColumnReader<T> inner;
-    private readonly DictionaryOrder order;
+    private readonly DictionaryEntryCache<T?> entries;
 
     /// <summary>Initializes the reader over the reader of the dictionary type.</summary>
     /// <param name="inner">Reads the dictionary column.</param>
     /// <param name="order">Which failure a read throws when an entry cannot be converted.</param>
     public LiftingDictionaryReader(ColumnReader<T> inner, DictionaryOrder order)
     {
-        this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
-        this.order = order;
+        ArgumentNullException.ThrowIfNull(inner);
+        entries = new DictionaryEntryCache<T?>(column => DictionaryEntries<T?>.Convert(inner, column, order, Lift));
     }
 
     /// <inheritdoc/>
-    public override BoundReader<T?> Bind(IColumn column) => new Bound(ColumnSurface.Of<ILowCardinalityColumn>(column), this);
+    public override BoundReader<T?> Bind(IColumn column) => new Bound(ColumnSurface.Of<ILowCardinalityColumn>(column), entries);
 
     /// <inheritdoc/>
     [RequiresDynamicCode("Builds an expression tree, which the caller compiles.")]
     public override Expression Emit(Expression column, ParameterExpression row, EmitScope scope)
     {
         ParameterExpression lowCardinality = scope.Local(typeof(ILowCardinalityColumn), "lowCardinality", EmitScope.Surface<ILowCardinalityColumn>(column));
-        ParameterExpression entries = scope.Local(
+        ParameterExpression converted = scope.Local(
             typeof(DictionaryEntries<T?>),
             "entries",
-            Expression.Call(EntriesMethod, Expression.Constant(this), lowCardinality));
+            Expression.Call(Expression.Constant(entries), EntriesMethod, lowCardinality));
         ParameterExpression keys = scope.Local(typeof(ReadOnlySpan<int>), "keys", Expression.Property(lowCardinality, nameof(ILowCardinalityColumn.Keys)));
-        return Expression.Call(entries, ValueAtMethod, EmitScope.ElementAt(keys, row));
+        return Expression.Call(converted, ValueAtMethod, EmitScope.ElementAt(keys, row));
     }
-
-    private static DictionaryEntries<T?> Entries(LiftingDictionaryReader<T> reader, ILowCardinalityColumn column)
-        => DictionaryEntries<T?>.Convert(reader.inner, column, reader.order, Lift);
 
     private static T?[] Lift(T[] values)
     {
@@ -141,17 +140,17 @@ internal sealed class LiftingDictionaryReader<T> : ColumnReader<T?>
     private sealed class Bound : BoundReader<T?>, INullableBound
     {
         private readonly ILowCardinalityColumn column;
-        private readonly LiftingDictionaryReader<T> reader;
+        private readonly DictionaryEntryCache<T?> cache;
         private DictionaryEntries<T?> entries;
 
-        public Bound(ILowCardinalityColumn column, LiftingDictionaryReader<T> reader)
+        public Bound(ILowCardinalityColumn column, DictionaryEntryCache<T?> cache)
         {
             this.column = column;
-            this.reader = reader;
+            this.cache = cache;
         }
 
         public override void Fill(int start, Span<T?> destination)
-            => DictionaryEntries<T?>.Once(ref entries, reader, column, Entries).Fill(column.Keys.Slice(start, destination.Length), destination);
+            => DictionaryEntries<T?>.Once(ref entries, cache, column, static (c, l) => c.For(l)).Fill(column.Keys.Slice(start, destination.Length), destination);
 
         public int FindNull(int start, int length)
         {
@@ -325,6 +324,34 @@ internal sealed class DictionaryEntries<TEntry>
 
         return entries[key];
     }
+}
+
+/// <summary>
+/// The converted entries of each LowCardinality column that a dictionary reader reads, so the reads of one column
+/// convert its dictionary once. A reader tree is cached and shared, so the cache is safe for concurrent use. It keys on
+/// the column object and does not keep the column alive: an entry goes when its column is collected.
+/// </summary>
+/// <typeparam name="TEntry">The type of one entry.</typeparam>
+internal sealed class DictionaryEntryCache<TEntry>
+{
+    private readonly ConditionalWeakTable<ILowCardinalityColumn, DictionaryEntries<TEntry>> converted = new();
+    private readonly ConditionalWeakTable<ILowCardinalityColumn, DictionaryEntries<TEntry>>.CreateValueCallback convert;
+
+    /// <summary>Initializes an empty cache.</summary>
+    /// <param name="convert">Converts the entries of one column. It must not throw a failure of the child reader.</param>
+    public DictionaryEntryCache(Func<ILowCardinalityColumn, DictionaryEntries<TEntry>> convert)
+    {
+        ArgumentNullException.ThrowIfNull(convert);
+        this.convert = column => convert(column);
+    }
+
+    /// <summary>
+    /// The entries of <paramref name="column"/>, converted on the first call for that column. Two threads that convert
+    /// the same column at the same time make equal entries, and both get the ones that the cache keeps.
+    /// </summary>
+    /// <param name="column">The LowCardinality column.</param>
+    /// <returns>The entries.</returns>
+    public DictionaryEntries<TEntry> For(ILowCardinalityColumn column) => converted.GetValue(column, convert);
 }
 
 /// <summary>The reserved slots of a LowCardinality dictionary.</summary>

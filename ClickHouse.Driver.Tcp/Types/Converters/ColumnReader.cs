@@ -5,9 +5,11 @@ using System.Linq.Expressions;
 namespace ClickHouse.Driver.Tcp.Types.Converters;
 
 /// <summary>
-/// A converter tree that reads the values of one ClickHouse type as one CLR type. A tree holds no column and no
-/// per-block state, so one tree serves every block and every thread. <see cref="ConverterDerivation"/> builds and
-/// caches the trees.
+/// A converter tree that reads the values of one ClickHouse type as one CLR type. A tree keeps no reference to a column,
+/// and the state of one column lives in its bound reader, so one tree serves every block and every thread. The one
+/// exception is the converted dictionary of a LowCardinality column, which the tree keeps for each column in a table
+/// that does not keep the column alive (<see cref="DictionaryEntryCache{TEntry}"/>). <see cref="ConverterDerivation"/>
+/// builds and caches the trees.
 /// </summary>
 /// <remarks>
 /// A tree has two ways to read, and the two must give the same values:
@@ -44,8 +46,8 @@ internal abstract class ColumnReader<T> : ColumnReader
     public sealed override Type ValueType => typeof(T);
 
     /// <summary>
-    /// Pairs the tree with one decoded column. State that belongs to that column (for example a converted
-    /// LowCardinality dictionary) lives in the result, not in the tree.
+    /// Pairs the tree with one decoded column. State that belongs to that column lives in the result, not in the tree,
+    /// except a converted LowCardinality dictionary, which the tree keeps for each column (see <see cref="ColumnReader"/>).
     /// </summary>
     /// <param name="column">A column that the codec of the tree's ClickHouse type decoded.</param>
     /// <returns>A reader for the rows of <paramref name="column"/>.</returns>
