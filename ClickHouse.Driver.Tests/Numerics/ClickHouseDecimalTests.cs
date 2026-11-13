@@ -632,6 +632,92 @@ public class ClickHouseDecimalTests
         Assert.That((decimal)result, Is.EqualTo(value));
     }
 
+    [Test]
+    public void GetHashCode_IsConsistentWithEquals_ForDifferentScales()
+    {
+        var cases = new[]
+        {
+            (
+                Left: new ClickHouseDecimal(1.5m),
+                Right: new ClickHouseDecimal(new BigInteger(15), 1),
+                Name: "1.5m == 15 scale 1"),
+
+            (
+                Left: new ClickHouseDecimal(1.5m),
+                Right: new ClickHouseDecimal(new BigInteger(150), 2),
+                Name: "1.5m == 150 scale 2"),
+
+            (
+                Left: new ClickHouseDecimal(1.5m),
+                Right: new ClickHouseDecimal(new BigInteger(15000), 4),
+                Name: "1.5m == 15000 scale 4"),
+
+            (
+                Left: new ClickHouseDecimal(0, 0),
+                Right: new ClickHouseDecimal(0, 5),
+                Name: "0 scale 0 == 0 scale 5"),
+
+            (
+                Left: new ClickHouseDecimal(0m),
+                Right: new ClickHouseDecimal(BigInteger.Zero, 10),
+                Name: "0m == 0 scale 10"),
+
+            (
+                Left: new ClickHouseDecimal(new BigInteger(-12345), 2),
+                Right: new ClickHouseDecimal(new BigInteger(-1234500), 4),
+                Name: "-123.45 == -1234500 scale 4"),
+
+            (
+                Left: new ClickHouseDecimal(new BigInteger(100), 0),
+                Right: new ClickHouseDecimal(new BigInteger(10000), 2),
+                Name: "100 == 10000 scale 2"),
+
+            (
+                Left: new ClickHouseDecimal(new BigInteger(123), 0),
+                Right: new ClickHouseDecimal(new BigInteger(1230000), 4),
+                Name: "123 == 1230000 scale 4"),
+        };
+
+        Assert.Multiple(() =>
+        {
+            foreach (var testCase in cases)
+            {
+                Assert.That(testCase.Left, Is.EqualTo(testCase.Right), testCase.Name);
+                Assert.That(testCase.Left == testCase.Right, Is.True, testCase.Name);
+                Assert.That(
+                    testCase.Left.GetHashCode(),
+                    Is.EqualTo(testCase.Right.GetHashCode()),
+                    testCase.Name);
+
+                var set = new HashSet<ClickHouseDecimal> { testCase.Left };
+                Assert.That(set.Contains(testCase.Right), Is.True, testCase.Name);
+            }
+        });
+    }
+
+    [Test]
+    public void GetHashCode_DoesNotChangeStoredRepresentation()
+    {
+        var left = new ClickHouseDecimal(1.5m);
+        var right = new ClickHouseDecimal(new BigInteger(15000), 4);
+
+        var leftMantissa = left.Mantissa;
+        var leftScale = left.Scale;
+        var rightMantissa = right.Mantissa;
+        var rightScale = right.Scale;
+
+        _ = left.GetHashCode();
+        _ = right.GetHashCode();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(left.Mantissa, Is.EqualTo(leftMantissa));
+            Assert.That(left.Scale, Is.EqualTo(leftScale));
+            Assert.That(right.Mantissa, Is.EqualTo(rightMantissa));
+            Assert.That(right.Scale, Is.EqualTo(rightScale));
+        });
+    }
+
     private static int GetScale(decimal value)
     {
         var parts = decimal.GetBits(value);

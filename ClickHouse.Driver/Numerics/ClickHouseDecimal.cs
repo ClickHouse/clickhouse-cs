@@ -324,7 +324,10 @@ public readonly struct ClickHouseDecimal
     {
         unchecked
         {
-            return (Mantissa.GetHashCode() * 397) ^ Scale;
+            var mantissa = Mantissa;
+            var scale = Scale;
+            Normalize(ref mantissa, ref scale);
+            return (mantissa.GetHashCode() * 397) ^ scale;
         }
     }
 
