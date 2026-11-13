@@ -26,6 +26,8 @@
 
 Official C# client for [ClickHouse](https://clickhouse.com/). The `ClickHouse.Driver` NuGet package contains two clients:
 
+The client works with both ClickHouse Cloud and self-hosted ClickHouse. You can [start a free Cloud trial](https://console.clickhouse.cloud/signUp?utm_medium=referral&utm_source=github&utm_campaign=readme&utm_content=clickhouse-cs) or [install ClickHouse](https://clickhouse.com/docs/get-started/setup/install) locally.
+
 * **HTTP client**: `ClickHouseClient` and an ADO.NET provider for ORMs. It sends data in the RowBinary format over HTTP(S). Use it for most applications.
 * **Native TCP client** (experimental): `ClickHouseTcpClient`. It uses the ClickHouse native protocol and sends data in columnar blocks.
 
