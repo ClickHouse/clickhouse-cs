@@ -151,6 +151,12 @@ public class DynamicTypeInferenceTests
         => Assert.That(DynamicTypeInference.Infer((1, "a")).TypeName, Is.EqualTo("Tuple(Int32, String)"));
 
     [Test]
+    public void Infer_TupleOfMoreThanSevenElements_MapsEveryElementInOrder()
+        => Assert.That(
+            DynamicTypeInference.Infer((1, 2, 3, 4, 5, 6, 7, 8L, "nine")).TypeName,
+            Is.EqualTo("Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int64, String)"));
+
+    [Test]
     public void Infer_UnsupportedType_Throws()
         => Assert.Throws<NotSupportedException>(() => DynamicTypeInference.Infer(new object()));
 

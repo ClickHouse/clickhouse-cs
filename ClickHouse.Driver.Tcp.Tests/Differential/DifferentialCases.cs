@@ -17,13 +17,13 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 public static class DifferentialCases
 {
     /// <summary>The number of cases from <c>InsertRoundTripCase.CasesFor(TcpFeature.All)</c>.</summary>
-    public const int InsertRoundTripCount = 298;
+    public const int InsertRoundTripCount = 306;
 
     /// <summary>The number of cases from <c>CompositeLiftMatrixTests.Cases()</c>.</summary>
     public const int CompositeLiftMatrixCount = 23;
 
     /// <summary>The number of column types of the read targets table (<see cref="CaseSource.ColumnReadProjection"/>).</summary>
-    public const int ColumnReadProjectionCount = 56;
+    public const int ColumnReadProjectionCount = 57;
 
     /// <summary>The number of value and error scenarios (<see cref="CaseSource.ColumnReadScenario"/>).</summary>
     public const int ColumnReadScenarioCount = 39;
@@ -90,6 +90,14 @@ public static class DifferentialCases
         ("Map(UInt8, String)", new[] { typeof(KeyValuePair<byte, string>[]), typeof(KeyValuePair<byte, byte[]>[]), typeof(KeyValuePair<long, byte[]>[]) }),
         ("Tuple(String)", new[] { typeof(ValueTuple<string>), typeof(ValueTuple<byte[]>) }),
         ("Tuple(UInt8, String)", new[] { typeof((byte, string)), typeof((byte, byte[])), typeof((long, byte[])), typeof(string) }),
+        ("Tuple(UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, String, DateTime('UTC'))", new[]
+        {
+            typeof((byte, byte, byte, byte, byte, byte, byte, string, uint)),
+            typeof((byte, byte, byte, byte, byte, byte, byte, byte[], DateTime)),
+            typeof((byte, byte, byte, byte, byte, byte, byte, string, DateTimeOffset)),
+            typeof((long, byte, byte, byte, byte, byte, byte, byte[], DateTimeOffset)),
+            typeof((byte, byte, byte, byte, byte, byte, byte, string)),
+        }),
         ("LowCardinality(FixedString(4))", new[] { typeof(byte[]), typeof(string) }),
         ("JSON", new[] { typeof(string), typeof(byte[]) }),
         ("DateTime('UTC')", new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime), typeof(DateTime?), typeof(DateTimeOffset?), typeof(TimeSpan) }),
