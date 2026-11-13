@@ -223,9 +223,8 @@ public class ClickHouseDecimalTests
                 Convert.ChangeType(value, typeof(BigInteger), CultureInfo.InvariantCulture),
                 Is.EqualTo((BigInteger)reader.GetValue(2)),
                 "BigInteger conversion");
-            // Floor() of a negative non-integer rounds toward zero; that is a separate bug
-            if (value.Sign >= 0 || (value.Mantissa % BigInteger.Pow(10, scale)).IsZero)
-                Assert.That(value.Floor(), Is.EqualTo((ClickHouseDecimal)reader.GetValue(3)), "Floor()");
+            Assert.That(value.Floor(), Is.EqualTo((ClickHouseDecimal)reader.GetValue(3)), "Floor()");
+            Assert.That(value.Floor().Scale, Is.Zero, "Floor().Scale");
             for (var i = 0; i < precisions.Length; i++)
             {
                 var truncated = value.Truncate(precisions[i]);
