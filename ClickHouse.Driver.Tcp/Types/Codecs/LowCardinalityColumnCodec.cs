@@ -153,7 +153,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
             for (int i = 0; i < innerTypes.Count; i++)
             {
                 Type innerType = innerTypes[i];
-                if (ColumnProjection.Offers(inner, innerType))
+                if (LegacyColumnProjection.Offers(inner, innerType))
                 {
                     surfaced.Add(LowCardinalityShapes.For(innerType, nullable).SurfaceElementType);
                 }
@@ -455,7 +455,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
             }
         }
 
-        ColumnReadProjection dictionaryProjection = ColumnProjection.For(inner, innerTarget);
+        ColumnReadProjection dictionaryProjection = LegacyColumnProjection.For(inner, innerTarget);
         if (dictionaryProjection is null)
         {
             return false;
@@ -464,8 +464,8 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
         // A value-typed dictionary reading under a nullable surface has to be lifted into Nullable<T>; every other
         // pairing surfaces the dictionary's own type, absent rows included.
         projection = nullable && innerTarget.IsValueType
-            ? ColumnProjection.Close(ProjectLiftedMethod, dictionaryProjection, innerTarget)
-            : ColumnProjection.Close(ProjectMethod, dictionaryProjection, innerTarget);
+            ? LegacyColumnProjection.Close(ProjectLiftedMethod, dictionaryProjection, innerTarget)
+            : LegacyColumnProjection.Close(ProjectMethod, dictionaryProjection, innerTarget);
         return true;
     }
 
@@ -478,7 +478,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     /// <returns>The view.</returns>
     private static IColumn Project<T>(IColumn source, ColumnReadProjection dictionaryProjection)
     {
-        ILowCardinalityColumn lowCardinality = ColumnProjection.Surface<ILowCardinalityColumn>(source);
+        ILowCardinalityColumn lowCardinality = LegacyColumnProjection.Surface<ILowCardinalityColumn>(source);
         var entries = (IColumn<T>)dictionaryProjection(lowCardinality.Dictionary);
         bool nullMarker = lowCardinality.ReservedSlotCount == 2;
 
@@ -501,7 +501,7 @@ internal sealed class LowCardinalityColumnCodec : IColumnCodec
     private static IColumn ProjectLifted<T>(IColumn source, ColumnReadProjection dictionaryProjection)
         where T : struct
     {
-        ILowCardinalityColumn lowCardinality = ColumnProjection.Surface<ILowCardinalityColumn>(source);
+        ILowCardinalityColumn lowCardinality = LegacyColumnProjection.Surface<ILowCardinalityColumn>(source);
         var entries = (IColumn<T>)dictionaryProjection(lowCardinality.Dictionary);
         bool nullMarker = lowCardinality.ReservedSlotCount == 2;
 

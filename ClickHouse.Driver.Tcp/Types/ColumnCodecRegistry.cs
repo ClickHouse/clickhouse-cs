@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using ClickHouse.Driver.Tcp.Types.Codecs;
+using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
@@ -40,6 +41,7 @@ internal sealed class ColumnCodecRegistry
             canonicalByAnyCase[name] = name;
         }
 
+        Converters = new ConverterDerivation(this);
         Projections = new ColumnReadProjections(this);
     }
 
@@ -47,6 +49,9 @@ internal sealed class ColumnCodecRegistry
     /// Cached projections used by <see cref="Block.ReadAs{T}(string)"/>.
     /// </summary>
     public ColumnReadProjections Projections { get; }
+
+    /// <summary>The converter derivation over this registry, with its cache of converter trees.</summary>
+    public ConverterDerivation Converters { get; }
 
     /// <summary>Whether a codec is registered for a base type name, i.e. whether this client knows the type.</summary>
     /// <param name="name">The base type name, in any case and under any of its aliases.</param>

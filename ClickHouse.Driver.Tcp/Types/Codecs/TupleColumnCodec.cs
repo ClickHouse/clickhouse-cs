@@ -284,7 +284,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
             }
 
             // The other children may still read as their own type or convert elementwise.
-            fieldProjections[i] = ColumnProjection.For(children[i], targetArguments[i]);
+            fieldProjections[i] = LegacyColumnProjection.For(children[i], targetArguments[i]);
             if (fieldProjections[i] is null)
             {
                 return false;
@@ -296,7 +296,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
             return false;
         }
 
-        projection = ColumnProjection.Close(ProjectTupleMethod, (fieldProjections, CompileRowReader(targetType, targetArguments)), targetType);
+        projection = LegacyColumnProjection.Close(ProjectTupleMethod, (fieldProjections, CompileRowReader(targetType, targetArguments)), targetType);
         return true;
     }
 
@@ -339,7 +339,7 @@ internal sealed class TupleColumnCodec : IColumnCodec
     /// <returns>The view.</returns>
     private static IColumn ProjectTuple<T>(IColumn source, (ColumnReadProjection[] Fields, Delegate Reader) state)
     {
-        ITupleColumn tuple = ColumnProjection.Surface<ITupleColumn>(source);
+        ITupleColumn tuple = LegacyColumnProjection.Surface<ITupleColumn>(source);
         if (tuple.Children.Count != state.Fields.Length)
         {
             throw new InvalidOperationException(
