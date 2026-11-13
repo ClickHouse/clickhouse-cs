@@ -34,6 +34,11 @@ internal interface ILowCardinalityShape
     /// <summary>Whether the inner codec can write an inner-typed column at all (e.g. <c>Nothing</c> cannot).</summary>
     bool CanInnerWrite(IColumnCodec inner);
 
+    /// <summary>Whether <see cref="WriteBody"/> writes the dictionary and the keys that the column holds.</summary>
+    /// <param name="column">A column that <see cref="CanWrite"/> accepts.</param>
+    /// <returns>Whether the column is a dense LowCardinality column of this shape.</returns>
+    bool WritesFromStorage(IColumn column);
+
     /// <summary>
     /// Writes the low-cardinality body for rows [<paramref name="start"/>, start + length): the metadata word,
     /// the dictionary size, the dictionary values, the keys count, then the keys. A dense low-cardinality column —

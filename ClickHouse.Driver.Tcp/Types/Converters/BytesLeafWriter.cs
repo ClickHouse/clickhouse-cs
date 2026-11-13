@@ -34,6 +34,9 @@ internal abstract class BytesLeafWriter<T> : ColumnWriter<T>
     /// </summary>
     public virtual bool ClrEqualityImpliesCanonicalEquality => false;
 
+    /// <inheritdoc/>
+    public sealed override bool IsFlat => true;
+
     /// <summary>The canonical bytes of one value.</summary>
     /// <param name="value">The value.</param>
     /// <param name="position">The zero-based position of the value in the write, for error messages.</param>

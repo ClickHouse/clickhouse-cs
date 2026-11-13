@@ -277,6 +277,16 @@ internal sealed class NullableColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => ResolveWriteShape(column) is not null;
 
+    /// <inheritdoc/>
+    // A decoded Nullable column: the null map and the inner column that the inner codec writes.
+    public bool WritesFromStorage(IColumn column)
+    {
+        Type type = column.GetType();
+        return type.IsGenericType
+            && (type.GetGenericTypeDefinition() == typeof(NullableValueColumn<>) || type.GetGenericTypeDefinition() == typeof(NullableReferenceColumn<>))
+            && CanWrite(column);
+    }
+
     private static bool TryInnerWriteType(Type elementType, out Type innerType)
     {
         innerType = Nullable.GetUnderlyingType(elementType);

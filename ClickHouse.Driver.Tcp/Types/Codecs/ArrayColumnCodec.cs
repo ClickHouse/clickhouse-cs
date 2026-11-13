@@ -304,6 +304,9 @@ internal sealed class ArrayColumnCodec<TElement> : IColumnCodec
     public bool CanWrite(IColumn column)
         => TryDense(column, out _) || ResolveWriteShape(column) is not null;
 
+    /// <inheritdoc/>
+    public bool WritesFromStorage(IColumn column) => TryDense(column, out _);
+
     /// <summary>
     /// Recognizes a validated dense column whose inner element type this codec can write. Convenience element
     /// types are accepted as well as the canonical decoded type, avoiding a jagged rebuild.

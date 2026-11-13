@@ -24,6 +24,13 @@ internal abstract class ColumnWriter
     /// the prefix phase when no child has a prefix.
     /// </summary>
     public virtual bool HasPrefix => false;
+
+    /// <summary>
+    /// Whether the body is the encoding of each value, one after the other, with no part that covers the whole write.
+    /// Then two writes, one after the other, give the body of one write of all their values, and they share the
+    /// prefix. A leaf is flat. A composite is not: it writes each of its streams across all the values.
+    /// </summary>
+    public virtual bool IsFlat => false;
 }
 
 /// <summary>A converter tree that writes values of <typeparamref name="T"/> as one ClickHouse type.</summary>
