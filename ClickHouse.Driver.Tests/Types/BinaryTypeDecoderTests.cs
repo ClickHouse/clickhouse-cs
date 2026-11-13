@@ -86,4 +86,30 @@ public class BinaryTypeDecoderTests
         Assert.That(first, Is.TypeOf<DateTimeType>());
         Assert.That(second, Is.Not.SameAs(first));
     }
+
+    [Test]
+    public void FromByteCode_NamedTuple_KeepsElementNames()
+    {
+        // 2 elements: "x" Int64, "y" String
+        byte[] byteCode =
+        [
+            BinaryTypeIndex.NamedTuple, 2,
+            1, (byte)'x', BinaryTypeIndex.Int64,
+            1, (byte)'y', BinaryTypeIndex.String,
+        ];
+
+        var type = (TupleType)Decode(byteCode, TypeSettings.Default);
+
+        Assert.That(type.ElementNames, Is.EqualTo(new[] { "x", "y" }));
+    }
+
+    [Test]
+    public void FromByteCode_UnnamedTuple_HasNoElementNames()
+    {
+        byte[] byteCode = [BinaryTypeIndex.UnnamedTuple, 2, BinaryTypeIndex.Int64, BinaryTypeIndex.String];
+
+        var type = (TupleType)Decode(byteCode, TypeSettings.Default);
+
+        Assert.That(type.ElementNames, Is.Null);
+    }
 }

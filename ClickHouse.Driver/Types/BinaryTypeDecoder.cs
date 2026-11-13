@@ -271,12 +271,13 @@ internal static class BinaryTypeDecoder
     {
         var size = reader.Read7BitEncodedInt();
         var types = new ClickHouseType[size];
+        var names = new string[size];
         for (int i = 0; i < size; i++)
         {
-            string name = reader.ReadString();
+            names[i] = reader.ReadString();
             types[i] = FromByteCode(reader, typeSettings);
         }
-        return new TupleType { UnderlyingTypes = types };
+        return new TupleType { UnderlyingTypes = types, ElementNames = names };
     }
 
     private static NothingType DecodeFunction(ExtendedBinaryReader reader, TypeSettings typeSettings)
@@ -317,12 +318,13 @@ internal static class BinaryTypeDecoder
     {
         var size = reader.Read7BitEncodedInt();
         var types = new ClickHouseType[size];
+        var names = new string[size];
         for (int i = 0; i < size; i++)
         {
-            var name = reader.ReadString(); // Skip field name
+            names[i] = reader.ReadString();
             types[i] = FromByteCode(reader, typeSettings);
         }
-        return new NestedType { UnderlyingTypes = types };
+        return new NestedType { UnderlyingTypes = types, ElementNames = names };
     }
 
     private static ClickHouseType DecodeCustomType(ExtendedBinaryReader reader, TypeSettings typeSettings)
