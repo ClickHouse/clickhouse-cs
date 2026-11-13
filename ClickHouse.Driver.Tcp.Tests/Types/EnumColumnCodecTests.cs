@@ -31,9 +31,48 @@ public class EnumColumnCodecTests
     public void Create_Enum8_NoMembers_Throws()
         => Assert.Throws<FormatException>(() => Enum8ColumnCodec.Create(TypeParser.Parse("Enum8()")));
 
-    [Test]
-    public void Create_MalformedMember_Throws()
-        => Assert.Throws<FormatException>(() => Enum8ColumnCodec.Create(TypeParser.Parse("Enum8('a')")));
+    [TestCase("Enum8('a' 1)")]
+    [TestCase("Enum8(x'a')")]
+    public void Create_MalformedMember_Throws(string type)
+        => Assert.Throws<FormatException>(() => Enum8ColumnCodec.Create(TypeParser.Parse(type)));
+
+    // The server numbers a member declared without an ordinal: the first member's ordinal (1 when the first
+    // member has none) plus the member's position, counted from 0. Each case has the members that the server's
+    // toTypeName() shows for the type (checked against 26.3 and 26.10).
+    private static IEnumerable<TestCaseData> MembersWithoutOrdinalsCases()
+    {
+        yield return new TestCaseData("Enum8('a', 'b')", new[] { "a", "b" }, new long[] { 1, 2 });
+        yield return new TestCaseData("Enum16('a', 'b')", new[] { "a", "b" }, new long[] { 1, 2 });
+        yield return new TestCaseData("Enum16('a' = -5, 'b', 'c')", new[] { "a", "b", "c" }, new long[] { -5, -4, -3 });
+        yield return new TestCaseData("Enum8('a', 'b' = 3)", new[] { "a", "b" }, new long[] { 1, 3 });
+        yield return new TestCaseData("Enum8('x=y', 'it''s')", new[] { "x=y", "it's" }, new long[] { 1, 2 });
+        yield return new TestCaseData("Enum('a', 'b')", new[] { "a", "b" }, new long[] { 1, 2 });
+        yield return new TestCaseData("Enum('a' = 127, 'b')", new[] { "a", "b" }, new long[] { 127, 128 });
+    }
+
+    [TestCaseSource(nameof(MembersWithoutOrdinalsCases))]
+    public void Resolve_EnumMembersWithoutOrdinals_NumbersThemLikeTheServer(string type, string[] labels, long[] ordinals)
+    {
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(type, ResolveContext.ForWrite);
+
+        IReadOnlyDictionary<string, long> members = codec switch
+        {
+            EnumColumnCodec<sbyte> enum8 => enum8.LabelToOrdinal.ToDictionary(m => m.Key, m => (long)m.Value),
+            EnumColumnCodec<short> enum16 => enum16.LabelToOrdinal.ToDictionary(m => m.Key, m => (long)m.Value),
+            _ => throw new AssertionException($"'{type}' resolved to {codec.GetType()}, not an enum codec."),
+        };
+
+        Assert.That(members, Is.EquivalentTo(labels.Zip(ordinals, (label, ordinal) => new KeyValuePair<string, long>(label, ordinal))));
+    }
+
+    // The server rejects the first three with UNEXPECTED_AST_STRUCTURE (after the first member, either every
+    // member declares an ordinal or none does) and the last with ARGUMENT_OUT_OF_BOUND ('b' is numbered 128).
+    [TestCase("Enum8('a', 'b' = 3, 'c')")]
+    [TestCase("Enum('a' = 5, 'b' = 7, 'c')")]
+    [TestCase("Enum8('a' = 5, 'b', 'c' = 10, 'd')")]
+    [TestCase("Enum8('a' = 127, 'b')")]
+    public void Resolve_EnumMembersMixingBothFormsOrNumberedOutOfRange_Throws(string type)
+        => Assert.Throws<FormatException>(() => ColumnCodecRegistry.Default.Resolve(type, ResolveContext.ForWrite));
 
     [Test]
     public void Create_DuplicateLabel_Throws()

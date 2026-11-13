@@ -114,6 +114,21 @@ public class EnumTypeWriteTests : AbstractConnectionTestFixture
         Assert.That(await client.ExecuteScalarAsync($"SELECT toString(e) FROM {table}"), Is.EqualTo(expectedLabel));
     }
 
+    // A label written through a ColumnTypes entry that omits the ordinals must store the member the server's
+    // table numbered the same way, not a member at another position.
+    [TestCase("Enum8('a', 'b')", "b")]
+    [TestCase("Enum16('a' = -5, 'b', 'c')", "c")]
+    public async Task InsertBinaryAsync_EnumColumnTypeWithoutOrdinals_StoresTheLabel(string columnType, string label)
+    {
+        var table = CreateTableName();
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {table} (e {columnType}) ENGINE Memory");
+        var options = new InsertOptions { ColumnTypes = new Dictionary<string, string> { ["e"] = columnType } };
+
+        await client.InsertBinaryAsync(table, ["e"], [[label]], options);
+
+        Assert.That(await client.ExecuteScalarAsync($"SELECT toString(e) FROM {table}"), Is.EqualTo(label));
+    }
+
     // A bare Enum8 in ColumnTypes resolves to a type without members, so the client has nothing to check against.
     [Test]
     public async Task InsertBinaryAsync_EnumColumnTypeWithoutMembers_WritesTheOrdinal()

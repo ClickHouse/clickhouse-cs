@@ -107,6 +107,78 @@ public class EnumTypeTests
         Assert.That(type.Lookup(1), Is.EqualTo("a=b"));
     }
 
+    // The server numbers a member declared without an ordinal: the first member's ordinal (1 when the first
+    // member has none) plus the member's position, counted from 0. Each expected type is the server's
+    // toTypeName() of the input (checked against 26.3 and 26.10).
+    [TestCase("Enum8('a', 'b')", "Enum8('a' = 1, 'b' = 2)")]
+    [TestCase("Enum('a', 'b')", "Enum8('a' = 1, 'b' = 2)")]
+    [TestCase("Enum16('a', 'b')", "Enum16('a' = 1, 'b' = 2)")]
+    [TestCase("Enum8('a')", "Enum8('a' = 1)")]
+    [TestCase("Enum8('a' = 5, 'b', 'c')", "Enum8('a' = 5, 'b' = 6, 'c' = 7)")]
+    [TestCase("Enum8('a' = -128, 'b')", "Enum8('a' = -128, 'b' = -127)")]
+    [TestCase("Enum8('a' = 126, 'b')", "Enum8('a' = 126, 'b' = 127)")]
+    [TestCase("Enum16('a' = 32766, 'b')", "Enum16('a' = 32766, 'b' = 32767)")]
+    [TestCase("Enum8('a', 'b' = 3)", "Enum8('a' = 1, 'b' = 3)")]
+    [TestCase("Enum8('x=y', 'b')", "Enum8('x=y' = 1, 'b' = 2)")]
+    [TestCase("Enum8('it\\'s', 'b')", "Enum8('it\\'s' = 1, 'b' = 2)")]
+    [TestCase("Nullable(Enum8('a', 'b'))", "Nullable(Enum8('a' = 1, 'b' = 2))")]
+    [TestCase("Array(Enum8('a', 'b'))", "Array(Enum8('a' = 1, 'b' = 2))")]
+    [TestCase("Map(String, Enum16('a', 'b'))", "Map(String, Enum16('a' = 1, 'b' = 2))")]
+    public void ParseClickHouseType_EnumMembersWithoutOrdinals_NumbersThemLikeTheServer(string typeString, string expected)
+    {
+        var type = TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default);
+
+        Assert.That(type.ToString(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void ParseClickHouseType_NamedTupleElementEnumWithoutOrdinals_NumbersItsMembers()
+    {
+        var tuple = (TupleType)TypeConverter.ParseClickHouseType("Tuple(e Enum8('a', 'b'), s String)", TypeSettings.Default);
+
+        Assert.That(tuple.UnderlyingTypes[0].ToString(), Is.EqualTo("Enum8('a' = 1, 'b' = 2)"));
+    }
+
+    // The server rejects these with UNEXPECTED_AST_STRUCTURE: after the first member, either every member
+    // declares an ordinal or none does.
+    [TestCase("Enum8('a', 'b' = 3, 'c')")]
+    [TestCase("Enum8('a' = 5, 'b' = 7, 'c')")]
+    [TestCase("Enum8('a' = 5, 'b', 'c' = 10, 'd')")]
+    public void ParseClickHouseType_EnumMembersMixingBothForms_ThrowsFormatException(string typeString)
+    {
+        Assert.Throws<FormatException>(() => TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default));
+    }
+
+    // The server rejects these with ARGUMENT_OUT_OF_BOUND (checked against 26.3, 26.8 and 26.10): when a member
+    // omits its ordinal, every ordinal must be in the range of the type, which is Int16 for a bare Enum.
+    [TestCase("Enum8('a' = 127, 'b')")]
+    [TestCase("Enum16('a' = 32767, 'b')")]
+    [TestCase("Enum('a' = 32767, 'b')")]
+    [TestCase("Enum8('a' = -129, 'b')")]
+    [TestCase("Enum8('a', 'b' = 200)")]
+    public void ParseClickHouseType_EnumMembersWithoutOrdinalsOutOfRange_ThrowsFormatException(string typeString)
+    {
+        Assert.That(
+            () => TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default),
+            Throws.TypeOf<FormatException>().With.Message.Contains("range ["));
+    }
+
+    // The server rejects these with "Duplicate values in enum" or "Duplicate names in enum" (checked against 26.3
+    // and 26.9): two members share an ordinal or a label, so one member would be lost.
+    [TestCase("Enum8('a', 'b' = 1)", "The ordinal 1 of 'b' is also the ordinal of 'a'.")]
+    [TestCase("Enum8('a', 'b' = 3, 'c' = 3)", "The ordinal 3 of 'c' is also the ordinal of 'b'.")]
+    [TestCase("Enum16('a', 'b' = 1)", "The ordinal 1 of 'b' is also the ordinal of 'a'.")]
+    [TestCase("Enum('a', 'b' = 1)", "The ordinal 1 of 'b' is also the ordinal of 'a'.")]
+    [TestCase("Enum8('a', 'a')", "The label 'a' is declared more than once.")]
+    [TestCase("Enum8('a' = 5, 'a')", "The label 'a' is declared more than once.")]
+    [TestCase("Enum8('a', 'a' = 1)", "The label 'a' is declared more than once.")]
+    public void ParseClickHouseType_EnumMembersWithoutOrdinalsSharingAMember_ThrowsFormatException(string typeString, string expectedMessageEnd)
+    {
+        Assert.That(
+            () => TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default),
+            Throws.TypeOf<FormatException>().With.Message.EndsWith(expectedMessageEnd));
+    }
+
     [Test]
     public void ToString_WithEscapedEnumLabels_ReturnsParseableTypeDeclaration()
     {
