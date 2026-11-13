@@ -77,7 +77,7 @@ public static class Compression
         using (var client = new ClickHouseClient($"{ExampleConfig.HttpConnectionString};Compression=false"))
         {
             // The driver will:
-            // - Set enable_http_compression=false and advertise no codec (uncompressed responses)
+            // - Send no enable_http_compression and advertise no codec (uncompressed responses)
             // - Send the SQL body in the clear, with no Content-Encoding
             var result = await client.ExecuteScalarAsync("SELECT 'Uncompressed response'");
             Console.WriteLine($"   Result: {result}");
