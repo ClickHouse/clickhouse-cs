@@ -116,6 +116,8 @@ public class EnumTypeTests
     [TestCase("Enum8('a')", "Enum8('a' = 1)")]
     [TestCase("Enum8('a' = 5, 'b', 'c')", "Enum8('a' = 5, 'b' = 6, 'c' = 7)")]
     [TestCase("Enum8('a' = -128, 'b')", "Enum8('a' = -128, 'b' = -127)")]
+    [TestCase("Enum8('a' = 126, 'b')", "Enum8('a' = 126, 'b' = 127)")]
+    [TestCase("Enum16('a' = 32766, 'b')", "Enum16('a' = 32766, 'b' = 32767)")]
     [TestCase("Enum8('a', 'b' = 3)", "Enum8('a' = 1, 'b' = 3)")]
     [TestCase("Enum8('x=y', 'b')", "Enum8('x=y' = 1, 'b' = 2)")]
     [TestCase("Enum8('it\\'s', 'b')", "Enum8('it\\'s' = 1, 'b' = 2)")]
@@ -145,6 +147,20 @@ public class EnumTypeTests
     public void ParseClickHouseType_EnumMembersMixingBothForms_ThrowsFormatException(string typeString)
     {
         Assert.Throws<FormatException>(() => TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default));
+    }
+
+    // The server rejects these with ARGUMENT_OUT_OF_BOUND (checked against 26.3, 26.8 and 26.10): when a member
+    // omits its ordinal, every ordinal must be in the range of the type, which is Int16 for a bare Enum.
+    [TestCase("Enum8('a' = 127, 'b')")]
+    [TestCase("Enum16('a' = 32767, 'b')")]
+    [TestCase("Enum('a' = 32767, 'b')")]
+    [TestCase("Enum8('a' = -129, 'b')")]
+    [TestCase("Enum8('a', 'b' = 200)")]
+    public void ParseClickHouseType_EnumMembersWithoutOrdinalsOutOfRange_ThrowsFormatException(string typeString)
+    {
+        Assert.That(
+            () => TypeConverter.ParseClickHouseType(typeString, TypeSettings.Default),
+            Throws.TypeOf<FormatException>().With.Message.Contains("range ["));
     }
 
     [Test]

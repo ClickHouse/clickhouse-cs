@@ -36,17 +36,18 @@ internal class EnumType : ParameterizedType
 
     public override ParameterizedType Parse(SyntaxTreeNode node, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings)
     {
-        var parameters = ParseEnumMembers(node);
-
         string typeName = TypeConverter.ExtractTypeName(node);
 
         switch (typeName)
         {
+            // The server types a bare Enum as Enum16 when an ordinal does not fit in Int8; this client reads it as
+            // Enum8 (issue #720).
             case "Enum":
+                return new Enum8Type(ParseEnumMembers(node, "Enum16", short.MinValue, short.MaxValue));
             case "Enum8":
-                return new Enum8Type(parameters);
+                return new Enum8Type(ParseEnumMembers(node, typeName, sbyte.MinValue, sbyte.MaxValue));
             case "Enum16":
-                return new Enum16Type(parameters);
+                return new Enum16Type(ParseEnumMembers(node, typeName, short.MinValue, short.MaxValue));
             default: throw new ArgumentOutOfRangeException($"Unsupported Enum type: {node.Value}");
         }
     }
@@ -82,8 +83,10 @@ internal class EnumType : ParameterizedType
 
     // A member may omit its ordinal. The server then numbers it like this: the first member's ordinal (1 when the
     // first member has none) plus the member's position, counted from 0. After the first member, either every
-    // member declares an ordinal or none does.
-    private static Dictionary<string, int> ParseEnumMembers(SyntaxTreeNode node)
+    // member declares an ordinal or none does. When a member omits its ordinal, the server also rejects every
+    // ordinal outside the range of the type. A definition in which every member declares its ordinal is not
+    // range-checked here: 26.3 accepts an ordinal outside the range and wraps it, as the writers do.
+    private static Dictionary<string, int> ParseEnumMembers(SyntaxTreeNode node, string rangeName, int min, int max)
     {
         var members = node.ChildNodes.Select(cn => ParseEnumMember(cn.Value)).ToList();
 
@@ -91,11 +94,20 @@ internal class EnumType : ParameterizedType
         if (omittedAfterFirst != 0 && omittedAfterFirst != members.Count - 1)
             throw new FormatException($"Invalid enum definition: {node}. After the first member, either every member declares an ordinal or none does.");
 
-        var first = members.Count > 0 ? members[0].Ordinal ?? 1 : 1;
+        var numbered = members.Exists(member => member.Ordinal is null);
+        long first = members.Count > 0 ? members[0].Ordinal ?? 1 : 1;
         var values = new Dictionary<string, int>(members.Count);
         for (var i = 0; i < members.Count; i++)
         {
-            values.Add(members[i].Label, members[i].Ordinal ?? checked(first + i));
+            var ordinal = members[i].Ordinal ?? first + i;
+            if (numbered && (ordinal < min || ordinal > max))
+            {
+                throw new FormatException(
+                    $"Invalid enum definition: {node}. The ordinal {ordinal.ToString(CultureInfo.InvariantCulture)} of '{members[i].Label}' is out of the {rangeName} " +
+                    $"range [{min.ToString(CultureInfo.InvariantCulture)}, {max.ToString(CultureInfo.InvariantCulture)}].");
+            }
+
+            values.Add(members[i].Label, (int)ordinal);
         }
 
         return values;
