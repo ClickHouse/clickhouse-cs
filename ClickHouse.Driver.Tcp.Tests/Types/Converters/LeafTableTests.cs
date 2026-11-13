@@ -133,7 +133,7 @@ public class LeafTableTests
         foreach (Type candidate in Candidates)
         {
             bool reads = ConverterDerivation.Default.DeriveNode(root, root, ConverterHarness.Context, candidate, ConversionDirection.Read).Succeeded;
-            bool writes = ConverterDerivation.Default.Derive(type, ConverterHarness.Context, candidate, ConversionDirection.Write).Succeeded;
+            bool writes = ConverterDerivation.Default.DeriveNode(root, root, ConverterHarness.Context, candidate, ConversionDirection.Write).Succeeded;
             if (reads != LegacyColumnProjection.Offers(codec, candidate))
             {
                 disagreements.Add($"read as {candidate}: derived {reads}");

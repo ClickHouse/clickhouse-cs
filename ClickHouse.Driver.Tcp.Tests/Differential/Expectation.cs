@@ -27,7 +27,7 @@ internal interface IReferenceOutcomes
     Outcome Read(Tier tier, Type target, Rows rows);
 
     /// <summary>The reference outcome of a write facet, or null when the case has no such facet or the tier no reference.</summary>
-    /// <param name="tier"><see cref="Tier.Write"/> or <see cref="Tier.CanWrite"/>.</param>
+    /// <param name="tier">A write tier (<see cref="Facet.IsWriteTier"/>).</param>
     /// <param name="inputLabel">The label of the write input.</param>
     /// <param name="rows">The row range.</param>
     /// <returns>The outcome.</returns>
@@ -85,15 +85,16 @@ internal sealed class Expectation
 
     /// <summary>The reference outcome of another write facet of the case, for the same rows.</summary>
     /// <param name="inputLabel">The label of the other write input.</param>
+    /// <param name="tier">The tier of the other facet: <see cref="Tier.Write"/> unless given.</param>
     /// <returns>The expectation.</returns>
-    public static Expectation SameAsWrite(string inputLabel)
+    public static Expectation SameAsWrite(string inputLabel, Tier tier = Tier.Write)
         => new(
-            $"the reference outcome of Write[{inputLabel}]",
+            $"the reference outcome of {tier}[{inputLabel}]",
             (actual, rows, _, references) =>
             {
-                Outcome expected = references.Write(Tier.Write, inputLabel, rows);
+                Outcome expected = references.Write(tier, inputLabel, rows);
                 return expected is null
-                    ? $"the case has no reference outcome for Write[{inputLabel}]"
+                    ? $"the case has no reference outcome for {tier}[{inputLabel}]"
                     : Outcome.Difference(expected, actual);
             });
 

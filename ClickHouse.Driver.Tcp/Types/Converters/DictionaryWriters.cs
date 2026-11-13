@@ -225,7 +225,7 @@ internal sealed class BytesDictionaryWriter<TSource, T, TValue> : DictionaryWrit
             {
                 keys[position] = (marked && absent[position] != 0) || unwrap.IsNull(value)
                     ? 0
-                    : interner.Intern(unwrap.Value(value), entries.Count);
+                    : interner.Intern(unwrap.Value(value));
                 position++;
             }
         }

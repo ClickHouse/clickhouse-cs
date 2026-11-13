@@ -11,17 +11,27 @@ namespace ClickHouse.Driver.Tcp;
 public static class ClickHouseTcpTypes
 {
     /// <summary>
-    /// Whether a column of <paramref name="elementType"/> values can be written as <paramref name="clickHouseType"/> by
-    /// <c>InsertAsync</c>.
+    /// Whether values of <paramref name="elementType"/> can be written as <paramref name="clickHouseType"/>: a column of
+    /// them by <c>InsertAsync</c>, a property of that type by <c>InsertRowsAsync&lt;T&gt;</c>, and untyped values of that
+    /// type by <c>InsertRowsAsync</c> with <see cref="object"/> rows.
     /// </summary>
     /// <param name="clickHouseType">The target column's ClickHouse type (e.g. <c>Array(Nullable(DateTime))</c>).</param>
     /// <param name="elementType">The CLR type of one row's value.</param>
-    /// <returns>Whether a column of that element type can be written to that type.</returns>
+    /// <returns>Whether values of that type can be written to that type.</returns>
     /// <remarks>
+    /// <para>
+    /// Besides the CLR types that the type is written from, four rules apply to the whole column type: a CLR enum is
+    /// written as its integer ordinal; a value is written as a type that it casts to with no conversion (for example a
+    /// <see cref="string"/> as the <see cref="object"/> of a <c>Variant</c>); a value type is written into a column of its
+    /// nullable type; and a nullable value type is written into a column that cannot hold NULL, where the insert throws
+    /// at the first NULL.
+    /// </para>
+    /// <para>
     /// <c>Variant</c> is written from <see cref="object"/>. A value goes to the alternative whose canonical CLR type is the
     /// value's type, or, when there is none, to the alternative that is written from the value's type. <c>Dynamic</c>
     /// infers a ClickHouse type from each runtime value. <c>Nested</c> is written only from a column that a query of the
     /// same type read, so the answer is false for it.
+    /// </para>
     /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="clickHouseType"/> or <paramref name="elementType"/> is null.</exception>
     /// <exception cref="FormatException"><paramref name="clickHouseType"/> is not a well-formed ClickHouse type.</exception>

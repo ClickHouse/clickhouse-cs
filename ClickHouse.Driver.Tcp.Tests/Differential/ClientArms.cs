@@ -9,9 +9,10 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 /// <summary>
 /// The old path: the arm of each tier that the candidates are compared with. <see cref="ReadAs"/> and
 /// <see cref="CanRead"/> run the old dispatch of the columnar read tier (<see cref="LegacyColumnarRead"/>),
-/// <see cref="Poco"/> runs the old POCO read plan (<see cref="LegacyPocoRead"/>), and <see cref="Write"/> and
-/// <see cref="CanWrite"/> run the old dispatch of the columnar write tier (<see cref="LegacyColumnarWrite"/>), because the
-/// client's entry points read and write through the converter derivation.
+/// <see cref="Poco"/> runs the old POCO read plan (<see cref="LegacyPocoRead"/>), <see cref="Write"/> and
+/// <see cref="CanWrite"/> run the old dispatch of the columnar write tier (<see cref="LegacyColumnarWrite"/>), and the
+/// row insert tiers run the old POCO write plan and the old untyped write type choice (<see cref="LegacyRowWrite"/>),
+/// because the client's entry points read and write through the converter derivation.
 /// </summary>
 /// <remarks>
 /// The old members that the converter layer replaces stay in production until the old path is removed. When a tier
@@ -33,6 +34,14 @@ internal static class ReferenceArms
     public static WriteArm Write { get; } = new LegacyColumnarWrite.WriteArm("Old path: Write");
 
     public static AnswerArm CanWrite { get; } = new ClientArms.FunctionAnswerArm("Old path: CanWrite", Tier.CanWrite, LegacyColumnarWrite.CanWrite);
+
+    public static WriteArm PocoWrite { get; } = new LegacyRowWrite.PocoArm("Old path: PocoWrite");
+
+    public static AnswerArm PocoCanWrite { get; } = new ClientArms.FunctionAnswerArm("Old path: PocoCanWrite", Tier.PocoCanWrite, LegacyRowWrite.PocoAnswer.Answer);
+
+    public static WriteArm UntypedWrite { get; } = new LegacyRowWrite.UntypedArm("Old path: UntypedWrite");
+
+    public static AnswerArm UntypedCanWrite { get; } = new ClientArms.FunctionAnswerArm("Old path: UntypedCanWrite", Tier.UntypedCanWrite, LegacyRowWrite.UntypedAnswer.Answer);
 }
 
 /// <summary>The client's entry points, one arm for each tier.</summary>
@@ -58,6 +67,21 @@ internal static class ClientArms
 
     /// <summary><c>ClickHouseTcpTypes.CanWrite</c>.</summary>
     public static readonly AnswerArm CanWrite = new FunctionAnswerArm("Client.CanWrite", Tier.CanWrite, ClickHouseTcpTypes.CanWrite);
+
+    /// <summary>
+    /// The POCO write plan of <c>InsertRowsAsync&lt;T&gt;</c>, with the gather tier that the runtime chooses, which is
+    /// <see cref="PocoGatherTier.Compiled"/> wherever the tests run, then the insert plan's write of the gathered column.
+    /// </summary>
+    public static readonly WriteArm PocoWrite = new RowWriteArms.ClientPocoArm("Client.PocoWrite", tier: null);
+
+    /// <summary>Whether the POCO write plan of <c>InsertRowsAsync&lt;T&gt;</c> builds for a property of the type.</summary>
+    public static readonly AnswerArm PocoCanWrite = new FunctionAnswerArm("Client.PocoCanWrite", Tier.PocoCanWrite, RowWriteArms.ClientPocoAnswer.Answer);
+
+    /// <summary>The untyped row insert of <c>InsertRowsAsync(object[])</c>, then the insert plan's write of the gathered column.</summary>
+    public static readonly WriteArm UntypedWrite = new RowWriteArms.ClientUntypedArm("Client.UntypedWrite");
+
+    /// <summary>Whether the untyped row insert of <c>InsertRowsAsync(object[])</c> takes values of the type.</summary>
+    public static readonly AnswerArm UntypedCanWrite = new FunctionAnswerArm("Client.UntypedCanWrite", Tier.UntypedCanWrite, RowWriteArms.ClientUntypedAnswer.Answer);
 
     /// <summary><c>Block.ReadAs&lt;T&gt;</c> of a block's only column; a subclass can read the column another way.</summary>
     internal class ReadAsArm : ReadArm
