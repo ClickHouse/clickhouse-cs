@@ -620,6 +620,39 @@ public class AcceptEncodingTests
         Assert.That(ex.Message, Does.Contain("plain text"));
     }
 
+    [Test]
+    public void InsertBinaryAsync_WhenServerReportsExceptionAfterProgressHeaders_ThrowsServerException()
+    {
+        const string serverMessage = "Code: 469. DB::Exception: Constraint c is violated";
+        var fakeHandler = new TrackingHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(serverMessage, Encoding.UTF8),
+            };
+            response.Headers.TryAddWithoutValidation("X-ClickHouse-Exception-Code", "469");
+            return response;
+        });
+        using var httpClient = new HttpClient(fakeHandler);
+        using var client = new ClickHouseClient(new ClickHouseClientSettings { HttpClient = httpClient });
+
+        var exception = Assert.ThrowsAsync<ClickHouseServerException>(
+            () => client.InsertBinaryAsync(
+                "test_table",
+                new[] { "n" },
+                new[] { new object[] { 1UL } },
+                new InsertOptions
+                {
+                    ColumnTypes = new Dictionary<string, string> { ["n"] = "UInt64" },
+                }));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.ErrorCode, Is.EqualTo(469));
+            Assert.That(exception.Message, Does.Contain("Constraint c is violated"));
+        });
+    }
+
     [TestCase("")]
     [TestCase("   ")]
     [TestCase("\r\n\t ")]
@@ -648,14 +681,15 @@ public class AcceptEncodingTests
         });
     }
 
-    [Test]
-    public void HandleError_WithEmptyBodyAndExceptionCodeHeader_UsesHeaderValueAsErrorCode()
+    [TestCase(HttpStatusCode.ServiceUnavailable)]
+    [TestCase(HttpStatusCode.OK)]
+    public void HandleError_WithEmptyBodyAndExceptionCodeHeader_UsesHeaderValueAsErrorCode(HttpStatusCode statusCode)
     {
         var fakeHandler = new TrackingHandler(_ =>
         {
-            var response = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            var response = new HttpResponseMessage(statusCode)
             {
-                ReasonPhrase = "Service Unavailable",
+                ReasonPhrase = statusCode == HttpStatusCode.OK ? "OK" : "Service Unavailable",
                 Content = new StringContent(string.Empty),
             };
             response.Headers.TryAddWithoutValidation("X-ClickHouse-Exception-Code", "241");
@@ -674,7 +708,7 @@ public class AcceptEncodingTests
         Assert.Multiple(() =>
         {
             Assert.That(ex.ErrorCode, Is.EqualTo(241));
-            Assert.That(ex.Message, Does.Contain("503"));
+            Assert.That(ex.Message, Does.Contain(((int)statusCode).ToString()));
             Assert.That(ex.Message, Does.Contain("241"));
         });
     }
