@@ -54,6 +54,9 @@ public sealed class ClickHouseClient : IClickHouseClient
     private const int DefaultMaxSmallPoolFreeBytes = 128 * 1024 * 1024; // 128 MB
     private const int DefaultMaxLargePoolFreeBytes = 512 * 1024 * 1024; // 512 MB
 
+    // Default of the server setting http_max_field_value_size, its limit on the size of one form field value.
+    private const int MaxFormFieldValueSize = 128 * 1024; // 128 KB
+
     private readonly List<IDisposable> disposables = new();
     private readonly ConcurrentDictionary<string, Lazy<ILogger>> loggerCache = new();
     private readonly SchemaResolver schemaResolver;
@@ -408,9 +411,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             }
         }
 
-        content.Add(
-            content: new StringContent(sqlQuery),
-            name: "query");
+        AddQueryFormFields(content, sqlQuery);
 
         var uri = uriBuilder.ToString();
 
@@ -421,6 +422,31 @@ public sealed class ClickHouseClient : IClickHouseClient
         postMessage.Content = content;
 
         return postMessage;
+    }
+
+    /// <summary>
+    /// Adds the SQL text as one or more <c>query</c> form fields of at most <see cref="MaxFormFieldValueSize"/>
+    /// bytes each. The server concatenates all <c>query</c> fields in order, so the SQL text is not limited
+    /// to the size of one field.
+    /// </summary>
+    private static void AddQueryFormFields(MultipartFormDataContent content, string sqlQuery)
+    {
+        var bytes = Encoding.UTF8.GetBytes(sqlQuery);
+        var offset = 0;
+        do
+        {
+            var end = Math.Min(offset + MaxFormFieldValueSize, bytes.Length);
+
+            // Do not split a multi-byte character: UTF-8 continuation bytes have the form 10xxxxxx.
+            while (end < bytes.Length && (bytes[end] & 0xC0) == 0x80)
+                end--;
+
+            var field = new ByteArrayContent(bytes, offset, end - offset);
+            field.Headers.ContentType = new MediaTypeHeaderValue("text/plain") { CharSet = "utf-8" };
+            content.Add(field, "query");
+            offset = end;
+        }
+        while (offset < bytes.Length);
     }
 
     private static void LogQuerySuccess(Stopwatch stopwatch, string queryId, ILogger logger, QueryStats queryStats)
