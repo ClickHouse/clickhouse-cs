@@ -365,6 +365,19 @@ public sealed class InsertRoundTripCase
         // Nullable tuples require projecting the inner column before building tuple write state.
         if (features.HasFlag(TcpFeature.NullableTuple))
         {
+            // A NULL row marks every element, the elements after the seventh too.
+            const string nullableNine = "Nullable(Tuple(UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, String, Nullable(Int32)))";
+            yield return Same(
+                "Nullable(Tuple(UInt8 x 7, String, Nullable(Int32))) [9 elements]",
+                nullableNine,
+                name => new ArrayColumn<(byte, byte, byte, byte, byte, byte, byte, string, int?)?>(name, nullableNine, new (byte, byte, byte, byte, byte, byte, byte, string, int?)?[]
+                {
+                    (1, 2, 3, 4, 5, 6, 7, "eight", 9),
+                    null,
+                    (0, 0, 0, 0, 0, 0, 0, string.Empty, null),
+                }),
+                NullableTupleSettings);
+
             yield return Same(
                 "Nullable(Tuple(UInt8, String))",
                 "Nullable(Tuple(UInt8, String))",
@@ -543,9 +556,10 @@ public sealed class InsertRoundTripCase
         }
 
         // Tuple(...): a heterogeneous fixed-arity composite serialized as N side-by-side element columns. The
-        // cases below collectively touch every supported element type across various arities (1 through the
-        // supported maximum of 7), then compose tuples with named elements, nesting, Nullable and Array elements,
-        // and an Array(Tuple(...)) that flattens through the tuple codec's per-element write path. Element names
+        // cases below collectively touch every supported element type across various arities (1 through 7, and
+        // more than 7, whose CLR value nests the elements after the seventh in TRest), then compose tuples with
+        // named elements, nesting, Nullable and Array elements, and an Array(Tuple(...)) that flattens through the
+        // tuple codec's per-element write path. Element names
         // do not change the CLR value (a ValueTuple either way); they only ride along in the type string.
         yield return Same(
             "Tuple(Int32) [arity 1]",
@@ -720,7 +734,7 @@ public sealed class InsertRoundTripCase
                     (Array.Empty<KeyValuePair<string, uint>>(), "second"),
                 }));
 
-        // A max-arity (7) tuple mixing fixed-width and variable-width elements.
+        // The last arity with no TRest, mixing fixed-width and variable-width elements.
         yield return Same(
             "Tuple(UInt8, Int8, UInt16, Int16, UInt32, Int32, String) [arity 7]",
             "Tuple(UInt8, Int8, UInt16, Int16, UInt32, Int32, String)",
@@ -728,6 +742,73 @@ public sealed class InsertRoundTripCase
             {
                 (0, -128, 0, short.MinValue, 0, int.MinValue, string.Empty),
                 (255, 127, ushort.MaxValue, short.MaxValue, uint.MaxValue, int.MaxValue, "héllo✓"),
+            }));
+
+        // 8 elements: the first arity whose CLR value is ValueTuple<T1, ..., T7, TRest>, with TRest = ValueTuple<T8>.
+        yield return Same(
+            "Tuple(UInt8, Int16, Int32, Int64, Float32, Float64, String, Bool) [8 elements]",
+            "Tuple(UInt8, Int16, Int32, Int64, Float32, Float64, String, Bool)",
+            name => new ArrayColumn<(byte, short, int, long, float, double, string, bool)>(name, "Tuple(UInt8, Int16, Int32, Int64, Float32, Float64, String, Bool)", new (byte, short, int, long, float, double, string, bool)[]
+            {
+                (0, short.MinValue, int.MinValue, long.MinValue, 0f, 0d, string.Empty, false),
+                (255, short.MaxValue, int.MaxValue, long.MaxValue, 1.5f, -1.5e100, "héllo✓", true),
+            }));
+
+        // 15 elements: TRest nests a second TRest. A LowCardinality element on each side of the first TRest puts a state
+        // prefix before and after it, and Nullable and Array elements after it carry a null map and offsets.
+        const string fifteen = "Tuple(LowCardinality(String), Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, Nullable(Int32), LowCardinality(String), Array(Int32), String, Date, UUID, Float64)";
+        yield return Same(
+            "Tuple(LowCardinality(String), ..., Float64) [15 elements]",
+            fifteen,
+            name => new ArrayColumn<(string, sbyte, short, int, long, byte, ushort, uint, int?, string, int[], string, DateOnly, Guid, double)>(name, fifteen, new (string, sbyte, short, int, long, byte, ushort, uint, int?, string, int[], string, DateOnly, Guid, double)[]
+            {
+                ("a", -1, -2, -3, -4, 5, 6, 7, null, "x", new[] { 1, 2 }, "first", new DateOnly(1970, 1, 1), Guid.Empty, 1.5),
+                ("b", sbyte.MaxValue, short.MaxValue, int.MaxValue, long.MaxValue, byte.MaxValue, ushort.MaxValue, uint.MaxValue, int.MinValue, "y", Array.Empty<int>(), string.Empty, new DateOnly(2149, 6, 6), new Guid("00112233-4455-6677-8899-aabbccddeeff"), -0d),
+                ("a", 0, 0, 0, 0, 0, 0, 0, 0, "x", new[] { -1 }, "third", new DateOnly(2000, 2, 29), Guid.Empty, double.NaN),
+            }));
+
+        // A named tuple of 9 elements: the names after the seventh ride in the type string like the others.
+        const string namedNine = "Tuple(a Int32, b Int32, c Int32, d Int32, e Int32, f Int32, g Int32, h String, i Nullable(String))";
+        yield return Same(
+            "Tuple(a Int32, ..., i Nullable(String)) [named, 9 elements]",
+            namedNine,
+            name => new ArrayColumn<(int, int, int, int, int, int, int, string, string)>(name, namedNine, new (int, int, int, int, int, int, int, string, string)[]
+            {
+                (1, 2, 3, 4, 5, 6, 7, "eight", "nine"),
+                (-1, -2, -3, -4, -5, -6, -7, string.Empty, null),
+            }));
+
+        // An eighth element that is itself a tuple: C# wraps it, so TRest is ValueTuple<ValueTuple<string, byte>>.
+        const string eighthIsTuple = "Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, Tuple(String, UInt8))";
+        yield return Same(
+            "Tuple(Int32 x 7, Tuple(String, UInt8)) [8th element a tuple]",
+            eighthIsTuple,
+            name => new ArrayColumn<(int, int, int, int, int, int, int, (string, byte))>(name, eighthIsTuple, new (int, int, int, int, int, int, int, (string, byte))[]
+            {
+                (1, 2, 3, 4, 5, 6, 7, ("a", 8)),
+                (-1, -2, -3, -4, -5, -6, -7, (string.Empty, 0)),
+            }));
+
+        // Wide tuples as the elements of an Array and the values of a Map.
+        const string arrayOfNine = "Array(Tuple(UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, String, Int64))";
+        yield return Same(
+            "Array(Tuple(UInt8 x 7, String, Int64)) [9 elements]",
+            arrayOfNine,
+            name => new ArrayColumn<(byte, byte, byte, byte, byte, byte, byte, string, long)[]>(name, arrayOfNine, new[]
+            {
+                new (byte, byte, byte, byte, byte, byte, byte, string, long)[] { (1, 2, 3, 4, 5, 6, 7, "a", long.MinValue), (0, 0, 0, 0, 0, 0, 0, string.Empty, 0) },
+                Array.Empty<(byte, byte, byte, byte, byte, byte, byte, string, long)>(),
+                new (byte, byte, byte, byte, byte, byte, byte, string, long)[] { (255, 254, 253, 252, 251, 250, 249, "z", long.MaxValue) },
+            }));
+
+        const string mapOfNine = "Map(String, Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, String))";
+        yield return Same(
+            "Map(String, Tuple(Int32 x 8, String)) [9 elements]",
+            mapOfNine,
+            name => new ArrayColumn<KeyValuePair<string, (int, int, int, int, int, int, int, int, string)>[]>(name, mapOfNine, new[]
+            {
+                Pairs<string, (int, int, int, int, int, int, int, int, string)>(("k", (1, 2, 3, 4, 5, 6, 7, 8, "nine")), ("l", (0, 0, 0, 0, 0, 0, 0, 0, string.Empty))),
+                Array.Empty<KeyValuePair<string, (int, int, int, int, int, int, int, int, string)>>(),
             }));
 
         // Tuple(): the zero-element tuple is a legal type, but it has none of the layout above — no element
@@ -1321,6 +1402,14 @@ public sealed class InsertRoundTripCase
             "Dynamic [tuple value]",
             "Dynamic",
             name => new ArrayColumn<object>(name, "Dynamic", new object[] { (1, "a"), "plain", null }),
+            DynamicSettings);
+
+        // A tuple of 9 elements in a Dynamic: the inferred type is a Tuple of 9, and the value reads back as the same
+        // nested ValueTuple.
+        yield return Same(
+            "Dynamic [9-element tuple value]",
+            "Dynamic",
+            name => new ArrayColumn<object>(name, "Dynamic", new object[] { (1, 2, 3, 4, 5, 6, 7, 8, "nine"), null, "plain" }),
             DynamicSettings);
 
         // One Dynamic column holding a value of (basically) every supported type — each row's runtime CLR type is

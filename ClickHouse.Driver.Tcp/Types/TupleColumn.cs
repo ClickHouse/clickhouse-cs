@@ -1,12 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 
 namespace ClickHouse.Driver.Tcp.Types;
 
 /// <summary>
 /// The arity-independent state of a tuple column: the child columns, the optional element names, the row count,
 /// and lifetime. The generic <c>TupleColumn</c> subclasses add the typed <c>ValueTuple</c> materialization for a
-/// specific number of elements (1 through 7).
+/// specific number of elements: one subclass for each of 1 through 7, and one for 8 or more (<see cref="TupleShape"/>).
 /// </summary>
 internal abstract class TupleColumnBase : ITupleColumn
 {
@@ -624,5 +626,122 @@ internal sealed class TupleColumn<T1, T2, T3, T4, T5, T6, T7> : TupleColumnBase,
             new ArrayColumn<T6>(name, types[5], values6),
             new ArrayColumn<T7>(name, types[6], values7),
         };
+    }
+}
+
+/// <summary>
+/// A tuple column of eight or more elements, surfacing each row as <c>ValueTuple&lt;T1, ..., T7, TRest&gt;</c>, the type
+/// that C# gives a tuple of more than seven elements (<see cref="TupleShape"/>). The children are the N element columns,
+/// as for the other arities. The values of <typeparamref name="TRest"/> come from a tuple column over children 8 to N,
+/// which borrows those children from this column.
+/// </summary>
+/// <typeparam name="T1">The CLR type of element 1.</typeparam>
+/// <typeparam name="T2">The CLR type of element 2.</typeparam>
+/// <typeparam name="T3">The CLR type of element 3.</typeparam>
+/// <typeparam name="T4">The CLR type of element 4.</typeparam>
+/// <typeparam name="T5">The CLR type of element 5.</typeparam>
+/// <typeparam name="T6">The CLR type of element 6.</typeparam>
+/// <typeparam name="T7">The CLR type of element 7.</typeparam>
+/// <typeparam name="TRest">The <see cref="ValueTuple"/> of elements 8 to N.</typeparam>
+internal sealed class TupleColumn<T1, T2, T3, T4, T5, T6, T7, TRest> : TupleColumnBase, IColumn<ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>>
+    where TRest : struct
+{
+    private static readonly ConstructorInfo RestConstructor = TupleColumns.ConstructorFor(typeof(TRest));
+
+    private readonly IColumn<T1> item1;
+    private readonly IColumn<T2> item2;
+    private readonly IColumn<T3> item3;
+    private readonly IColumn<T4> item4;
+    private readonly IColumn<T5> item5;
+    private readonly IColumn<T6> item6;
+    private readonly IColumn<T7> item7;
+    private readonly IColumn<TRest> rest;
+    private ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>[] cache;
+
+    internal TupleColumn(string name, string typeName, IColumn[] children, IReadOnlyList<string> fieldNames, bool ownsChildren)
+        : base(name, typeName, children, fieldNames, ownsChildren)
+    {
+        item1 = (IColumn<T1>)Child(0);
+        item2 = (IColumn<T2>)Child(1);
+        item3 = (IColumn<T3>)Child(2);
+        item4 = (IColumn<T4>)Child(3);
+        item5 = (IColumn<T5>)Child(4);
+        item6 = (IColumn<T6>)Child(5);
+        item7 = (IColumn<T7>)Child(6);
+
+        // This column owns the children (or not), so the column of the rest never disposes them.
+        IReadOnlyList<string> restNames = FieldNames.Count == 0 ? null : FieldNames.Skip(TupleShape.RestIndex).ToArray();
+        rest = (IColumn<TRest>)RestConstructor.Invoke(
+            BindingFlags.DoNotWrapExceptions,
+            binder: null,
+            new object[] { name, typeName, children[TupleShape.RestIndex..], restNames, false },
+            culture: null);
+    }
+
+    /// <inheritdoc/>
+    public ReadOnlySpan<ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>> Values
+    {
+        get
+        {
+            if (cache is null)
+            {
+                ReadOnlySpan<TRest> restValues = rest.Values;
+                var decoded = new ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>[RowCount];
+                for (int i = 0; i < RowCount; i++)
+                {
+                    decoded[i] = new ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>(item1[i], item2[i], item3[i], item4[i], item5[i], item6[i], item7[i], restValues[i]);
+                }
+
+                cache = decoded;
+            }
+
+            return cache.AsSpan(0, RowCount);
+        }
+    }
+
+    /// <inheritdoc/>
+    public ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest> this[int row] => cache is not null
+        ? cache[row]
+        : new ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>(item1[row], item2[row], item3[row], item4[row], item5[row], item6[row], item7[row], rest[row]);
+
+    /// <inheritdoc/>
+    public override object GetValue(int row) => this[row];
+}
+
+/// <summary>Finds the tuple column class for a <see cref="ValueTuple"/> type.</summary>
+internal static class TupleColumns
+{
+    // The open generic TupleColumn definitions indexed by the number of type arguments (index 0 unused).
+    private static readonly Type[] Definitions =
+    {
+        null,
+        typeof(TupleColumn<>),
+        typeof(TupleColumn<,>),
+        typeof(TupleColumn<,,>),
+        typeof(TupleColumn<,,,>),
+        typeof(TupleColumn<,,,,>),
+        typeof(TupleColumn<,,,,,>),
+        typeof(TupleColumn<,,,,,,>),
+        typeof(TupleColumn<,,,,,,,>),
+    };
+
+    // The constructor over child columns. The exact signature tells it from the constructor over ValueTuple rows.
+    private static readonly Type[] ChildrenSignature =
+    {
+        typeof(string), typeof(string), typeof(IColumn[]), typeof(IReadOnlyList<string>), typeof(bool),
+    };
+
+    /// <summary>
+    /// The constructor <c>(name, typeName, children, fieldNames, ownsChildren)</c> of the tuple column whose rows are
+    /// <paramref name="tupleType"/>. It is internal, so a caller invokes it through reflection.
+    /// </summary>
+    /// <param name="tupleType">A <see cref="ValueTuple"/> type of the shape that <see cref="TupleShape.Of"/> gives.</param>
+    /// <returns>The constructor.</returns>
+    public static ConstructorInfo ConstructorFor(Type tupleType)
+    {
+        Type[] arguments = tupleType.GetGenericArguments();
+        Type columnType = Definitions[arguments.Length].MakeGenericType(arguments);
+        return columnType.GetConstructor(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public, binder: null, ChildrenSignature, modifiers: null)
+            ?? throw new InvalidOperationException($"The tuple column type '{columnType}' is missing its expected constructor.");
     }
 }

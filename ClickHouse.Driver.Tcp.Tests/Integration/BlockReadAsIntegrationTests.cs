@@ -41,6 +41,59 @@ public class BlockReadAsIntegrationTests
     }
 
     [Test]
+    public async Task ReadAs_TupleOfNineElementsFromTheServer_ReadsTheElementsAfterTheSeventhInRest()
+    {
+        // The server builds the tuple, so the bytes are its own. The last two elements are in TRest, and the read as
+        // other types converts them there too.
+        await using var client = TcpServerFixture.CreateClient();
+
+        (byte, byte, byte, byte, byte, byte, byte, string, uint)[] stored = null;
+        (byte, byte, byte, byte, byte, byte, byte, byte[], DateTime)[] converted = null;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT tuple(toUInt8(number), 2::UInt8, 3::UInt8, 4::UInt8, 5::UInt8, 6::UInt8, 7::UInt8, toString(number), toDateTime(number, 'UTC')) AS t FROM system.numbers LIMIT 2",
+            cancellationToken: None))
+        {
+            stored = block.Column<(byte, byte, byte, byte, byte, byte, byte, string, uint)>("t").Values.ToArray();
+            converted = block.ReadAs<(byte, byte, byte, byte, byte, byte, byte, byte[], DateTime)>("t").Values.ToArray();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stored, Is.EqualTo(new (byte, byte, byte, byte, byte, byte, byte, string, uint)[] { (0, 2, 3, 4, 5, 6, 7, "0", 0u), (1, 2, 3, 4, 5, 6, 7, "1", 1u) }));
+            Assert.That(converted.Select(row => (row.Item1, row.Item7, row.Item8.Single(), row.Item9)), Is.EqualTo(new[]
+            {
+                ((byte)0, (byte)7, (byte)'0', DateTime.UnixEpoch),
+                ((byte)1, (byte)7, (byte)'1', DateTime.UnixEpoch.AddSeconds(1)),
+            }));
+        });
+    }
+
+    [Test]
+    public async Task Column_TupleOfMaxElements_ReadsEveryElement()
+    {
+        await using var client = TcpServerFixture.CreateClient();
+
+        System.Runtime.CompilerServices.ITuple row = null;
+        int children = 0;
+
+        await foreach (Block block in client.StreamAsync(
+            "SELECT tuple(" + string.Join(", ", Enumerable.Range(0, 256).Select(i => $"{i}::Int32")) + ") AS t",
+            cancellationToken: None))
+        {
+            row = (System.Runtime.CompilerServices.ITuple)block[0].GetValue(0);
+            children = ((ITupleColumn)block[0]).Children.Count;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(children, Is.EqualTo(256));
+            Assert.That(row.Length, Is.EqualTo(256));
+            Assert.That(Enumerable.Range(0, row.Length).Select(i => row[i]), Is.EqualTo(Enumerable.Range(0, 256)));
+        });
+    }
+
+    [Test]
     public async Task ReadAs_DateTime64Column_ReadsTheCalendarValueWhileColumnReadsTheRawCount()
     {
         // The two readings of one column, side by side: the raw count the wire carries, and the instant it means.
