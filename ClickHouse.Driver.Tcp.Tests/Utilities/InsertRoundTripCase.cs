@@ -1665,6 +1665,36 @@ public sealed class InsertRoundTripCase
                     Ramp(768, i => i % 3 == 0 ? float.MaxValue : (i % 3 == 1 ? -0f : float.NaN)),
                 }));
 
+            // Three complete 32-element blocks and a partial fourth: the transpose writes these two kinds of
+            // block differently.
+            yield return Same(
+                "QBit(Float32, 100)",
+                "QBit(Float32, 100)",
+                name => new ArrayColumn<float[]>(name, "QBit(Float32, 100)", new[]
+                {
+                    Ramp(100, i => (i * 0.75f) - 37f),
+                    Ramp(100, i => i % 3 == 0 ? float.MinValue : (i % 3 == 1 ? -0f : float.NaN)),
+                }));
+
+            yield return Same(
+                "QBit(Float64, 100)",
+                "QBit(Float64, 100)",
+                name => new ArrayColumn<double[]>(name, "QBit(Float64, 100)", new[]
+                {
+                    Ramp(100, i => (i * 0.125d) - 6d),
+                    Ramp(100, i => i % 2 == 0 ? double.MaxValue : -double.Epsilon),
+                }));
+
+            // Values with at most 8 significant bits, so BFloat16 stores them exactly.
+            yield return Same(
+                "QBit(BFloat16, 100)",
+                "QBit(BFloat16, 100)",
+                name => new ArrayColumn<float[]>(name, "QBit(BFloat16, 100)", new[]
+                {
+                    Ramp(100, i => (i - 50) * 0.5f),
+                    Ramp(100, i => i % 2 == 0 ? -256f : 0.0078125f),
+                }));
+
             yield return Same(
                 "QBit(Float64, 17)",
                 "QBit(Float64, 17)",
@@ -1729,6 +1759,15 @@ public sealed class InsertRoundTripCase
                         Ramp(17, i => (sbyte)(i - 8)),
                         Ramp(17, i => i % 2 == 0 ? sbyte.MaxValue : sbyte.MinValue),
                         Ramp(17, i => i == 0 ? (sbyte)-1 : (sbyte)0),
+                    }));
+
+                yield return Same(
+                    "QBit(Int8, 100)",
+                    "QBit(Int8, 100)",
+                    name => new ArrayColumn<sbyte[]>(name, "QBit(Int8, 100)", new[]
+                    {
+                        Ramp(100, i => unchecked((sbyte)((i * 37) + 5))),
+                        Ramp(100, i => i % 2 == 0 ? sbyte.MinValue : sbyte.MaxValue),
                     }));
 
                 yield return Same(
