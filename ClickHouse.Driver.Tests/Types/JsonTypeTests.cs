@@ -1,6 +1,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using System.Net;
 using System.Numerics;
 using System.Runtime.Serialization;
@@ -1000,6 +1002,28 @@ public class JsonTypeTests : AbstractConnectionTestFixture
         Assert.That(reader.GetString(1), Is.EqualTo("Decimal(18, 18)"));
         var actualDecimal = ClickHouseDecimal.Parse(((JsonObject)reader.GetValue(0))["Price"].GetValue<string>());
         Assert.That(actualDecimal, Is.EqualTo(new ClickHouseDecimal(0.0123456789012345m)));
+    }
+
+    private class UnhintedDecimalArrayData { public decimal[] Prices { get; set; } }
+
+    [Test]
+    [RequiredFeature(Feature.Json)]
+    public async Task InsertBinaryAsync_WithUnhintedDecimalArrayScaleAbove9_ShouldPreserveAllFractionalDigits()
+    {
+        using var binaryClient = TestUtilities.GetTestClickHouseClient(jsonWriteMode: JsonWriteMode.Binary, jsonReadMode: JsonReadMode.Binary);
+        binaryClient.RegisterJsonSerializationType<UnhintedDecimalArrayData>();
+        var targetTable = CreateTableName();
+        await binaryClient.ExecuteNonQueryAsync($"CREATE TABLE {targetTable} (id UInt32, data JSON) ENGINE = Memory");
+
+        var prices = new[] { 1.5m, 0.0000000001m };
+        await binaryClient.InsertBinaryAsync(targetTable, ["id", "data"], [new object[] { 1u, new UnhintedDecimalArrayData { Prices = prices } }]);
+
+        using var reader = await binaryClient.ExecuteReaderAsync($"SELECT data, dynamicType(data.Prices) FROM {targetTable}");
+        ClassicAssert.IsTrue(reader.Read());
+        Assert.That(reader.GetString(1), Is.EqualTo("Array(Decimal(18, 17))"));
+        var actual = ((JsonObject)reader.GetValue(0))["Prices"].AsArray()
+            .Select(p => ClickHouseDecimal.Parse(p.GetValue<string>(), CultureInfo.InvariantCulture));
+        Assert.That(actual, Is.EqualTo(prices.Select(p => new ClickHouseDecimal(p))));
     }
 
     [Test]

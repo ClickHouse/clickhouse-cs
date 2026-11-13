@@ -1,0 +1,1 @@
+* Fixed decimals inside an array, list, dictionary or tuple written to a `Dynamic` column (or an unhinted `JSON` path in `JsonWriteMode.Binary`) being truncated to 9 fractional digits. All the values at one position of the collection are now stored as one decimal type that holds each of them exactly, or the write fails if no Decimal256 can hold them all (issue #636).
