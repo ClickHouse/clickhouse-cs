@@ -66,28 +66,20 @@ public class ConnectionPoolLoggingTests
     }
 
     [Test]
-    public async Task RentAsync_PoolFullOfIdleConnectionsWithOtherTags_LogsEachConnectionItCloses()
+    public async Task RentAsync_SessionTagOnAPoolFullOfIdleConnections_LogsTheConnectionItCloses()
     {
         var connections = new FakeConnectionFactory();
-        ClickHouseTcpClientOptions options = Options(maxPoolSize: 2) with { UseTls = true, Host = "service.example" };
+        ClickHouseTcpClientOptions options = Options(maxPoolSize: 1) with { UseTls = true, Host = "service.example" };
         await using var pool = new ConnectionPool(options, connections, new ControlledTimeProvider());
 
-        // Idle in this order: no tag, then "a". Each new tag below must close one of them to fit.
-        IConnectionLease untagged = await pool.RentAsync(replicaTag: null, None);
-        IConnectionLease tagged = await pool.RentAsync("a", None);
-        await untagged.DisposeAsync();
-        await tagged.DisposeAsync();
-
-        await using IConnectionLease c = await pool.RentAsync("c", None);
-        await using IConnectionLease d = await pool.RentAsync("d", None);
-
-        string[] messages = Log.WithEventId(3008).Select(entry => entry.Message).ToArray();
-        Assert.Multiple(() =>
+        await using (await pool.RentAsync(None))
         {
-            Assert.That(messages, Has.Length.EqualTo(2));
-            Assert.That(messages[0], Does.Contain("replica tag (none)").And.Contain("MaxPoolSize 2"));
-            Assert.That(messages[1], Does.Contain("replica tag a "));
-        });
+        }
+
+        await using IConnectionLease session = await pool.RentAsync("user-42", None);
+
+        string message = Log.WithEventId(3008).Single().Message;
+        Assert.That(message, Does.Contain("MaxPoolSize 1").And.Contain("replica tag user-42"));
     }
 
     [Test]

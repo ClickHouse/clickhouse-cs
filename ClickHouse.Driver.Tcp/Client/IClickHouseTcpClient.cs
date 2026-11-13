@@ -42,8 +42,8 @@ public interface IClickHouseTcpClient : IClickHouseTcpOperations
     /// <see cref="ClickHouseTcpSessionOptions.ReplicaTag"/> to open the session against one replica.
     /// </summary>
     /// <remarks>
-    /// Otherwise the same as <see cref="OpenSessionAsync(CancellationToken)"/>. With a replica tag, the session gets an
-    /// idle connection that was opened with that tag, or a new one.
+    /// Otherwise the same as <see cref="OpenSessionAsync(CancellationToken)"/>. With a replica tag other than the
+    /// client's, the session always gets a new connection.
     /// </remarks>
     /// <param name="options">The session options, or null for the client defaults.</param>
     /// <param name="cancellationToken">A token to observe while waiting for and establishing the connection.</param>

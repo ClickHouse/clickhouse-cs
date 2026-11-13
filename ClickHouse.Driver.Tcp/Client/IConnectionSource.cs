@@ -22,16 +22,10 @@ internal interface IConnectionSource : IAsyncDisposable
     /// the connection. On failure to obtain one (a dial timeout, or no connection freeing up in time) the call
     /// throws and nothing is leased.
     /// </summary>
-    /// <param name="replicaTag">
-    /// The operation's replica tag, or null or empty for the source's default (see
-    /// <see cref="ClickHouseTcpClientOptions.ReplicaTag"/>). The source hands out only a connection opened with the
-    /// resolved tag.
-    /// </param>
     /// <param name="cancellationToken">A token to observe while waiting for and establishing a connection.</param>
     /// <returns>A lease over a ready connection.</returns>
     /// <exception cref="TimeoutException">No connection became available within the source's wait limit.</exception>
-    /// <exception cref="ArgumentException"><paramref name="replicaTag"/> is not a valid tag for the client.</exception>
-    ValueTask<IConnectionLease> RentAsync(string replicaTag, CancellationToken cancellationToken);
+    ValueTask<IConnectionLease> RentAsync(CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -47,7 +41,4 @@ internal interface IConnectionLease : IAsyncDisposable
     /// an operation still running once its own timeout expires.
     /// </summary>
     ClickHouseTcpConnection Connection { get; }
-
-    /// <summary>The replica tag the connection was opened with, or null for none.</summary>
-    string ReplicaTag { get; }
 }

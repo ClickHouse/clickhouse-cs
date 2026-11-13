@@ -4,7 +4,6 @@ using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
-using ClickHouse.Driver.Tcp.Types;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
@@ -28,13 +27,6 @@ public class ReplicaRoutingIntegrationTests
     private TlsTerminatingProxy proxy;
     private string authorityPath;
 
-    public enum InsertPath
-    {
-        Columns,
-        Rows,
-        Poco,
-    }
-
     [OneTimeSetUp]
     public void StartProxy()
     {
@@ -54,15 +46,12 @@ public class ReplicaRoutingIntegrationTests
     }
 
     [Test]
-    public async Task ExecuteScalarAsync_WithAReplicaTag_RunsOnAConnectionThatSentTheStickyName()
+    public async Task ExecuteScalarAsync_ClientReplicaTag_RunsOnAConnectionThatSentTheStickyName()
     {
-        await using ClickHouseTcpClient client = CreateClient();
+        await using ClickHouseTcpClient client = CreateClient(replicaTag: "wl1");
         string queryId = NewQueryId();
 
-        object result = await client.ExecuteScalarAsync(
-            "SELECT 1",
-            new ClickHouseTcpQueryOptions { QueryId = queryId, ReplicaTag = "wl1" },
-            None);
+        object result = await client.ExecuteScalarAsync("SELECT 1", new ClickHouseTcpQueryOptions { QueryId = queryId }, None);
 
         Assert.Multiple(() =>
         {
@@ -80,26 +69,6 @@ public class ReplicaRoutingIntegrationTests
         await client.ExecuteScalarAsync("SELECT 1", new ClickHouseTcpQueryOptions { QueryId = queryId }, None);
 
         Assert.That(ConnectionThatSent(queryId).ServerName, Is.EqualTo(CertificateName));
-    }
-
-    [Test]
-    public async Task ExecuteScalarAsync_ClientDefaultTagAndAPerQueryTag_EachRunOnAConnectionWithItsOwnName()
-    {
-        await using ClickHouseTcpClient client = CreateClient(replicaTag: "dflt");
-        string first = NewQueryId();
-        string other = NewQueryId();
-        string second = NewQueryId();
-
-        await client.ExecuteScalarAsync("SELECT 1", new ClickHouseTcpQueryOptions { QueryId = first }, None);
-        await client.ExecuteScalarAsync("SELECT 1", new ClickHouseTcpQueryOptions { QueryId = other, ReplicaTag = "other" }, None);
-        await client.ExecuteScalarAsync("SELECT 1", new ClickHouseTcpQueryOptions { QueryId = second }, None);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(ConnectionThatSent(first).ServerName, Is.EqualTo(Sticky("dflt")));
-            Assert.That(ConnectionThatSent(other).ServerName, Is.EqualTo(Sticky("other")));
-            Assert.That(ConnectionThatSent(second), Is.SameAs(ConnectionThatSent(first)), "the default tag's connection is reused");
-        });
     }
 
     [Test]
@@ -123,12 +92,12 @@ public class ReplicaRoutingIntegrationTests
     }
 
     [Test]
-    public async Task ExecuteScalarAsync_WithAReplicaTag_LogsTheTagWhenItOpensTheConnection()
+    public async Task ExecuteScalarAsync_ClientReplicaTag_LogsTheTagWhenItOpensTheConnection()
     {
         using var logging = new CapturingLoggerFactory();
-        await using var client = new ClickHouseTcpClient(ProxyOptions() with { LoggerFactory = logging });
+        await using var client = new ClickHouseTcpClient(ProxyOptions() with { ReplicaTag = "logged", LoggerFactory = logging });
 
-        await client.ExecuteScalarAsync("SELECT 1", new ClickHouseTcpQueryOptions { ReplicaTag = "logged" }, None);
+        await client.ExecuteScalarAsync("SELECT 1", cancellationToken: None);
 
         CapturingLogger log = logging.Logger(ClickHouseTcpDiagnostics.ConnectionLogCategory);
         Assert.Multiple(() =>
@@ -152,51 +121,10 @@ public class ReplicaRoutingIntegrationTests
         Assert.That(ConnectionThatSent(queryId).ServerName, Is.EqualTo(Sticky("ds")));
     }
 
-    [TestCase(InsertPath.Columns)]
-    [TestCase(InsertPath.Rows)]
-    [TestCase(InsertPath.Poco)]
-    public async Task InsertAsync_WithAReplicaTag_RunsOnAConnectionThatSentTheStickyName(InsertPath path)
-    {
-        await using ClickHouseTcpClient client = CreateClient();
-        string table = $"tcp_replica_routing_test_{Guid.NewGuid():N}";
-        string queryId = NewQueryId();
-        var options = new ClickHouseTcpInsertOptions { QueryId = queryId, ReplicaTag = "ins" };
-        string insert = $"INSERT INTO {table} (id) VALUES";
-
-        await client.ExecuteAsync($"CREATE TABLE {table} (id UInt64) ENGINE = Memory", cancellationToken: None);
-        try
-        {
-            switch (path)
-            {
-                case InsertPath.Columns:
-                    await client.InsertAsync(insert, [PrimitiveColumn<ulong>.FromValues("id", "UInt64", [1UL, 2UL])], options, None);
-                    break;
-                case InsertPath.Rows:
-                    await client.InsertRowsAsync(insert, [[1UL], [2UL]], options, None);
-                    break;
-                case InsertPath.Poco:
-                    await client.InsertRowsAsync(insert, [new IdRow { Id = 1 }, new IdRow { Id = 2 }], options, None);
-                    break;
-            }
-
-            object count = await client.ExecuteScalarAsync($"SELECT count() FROM {table}", cancellationToken: None);
-
-            Assert.Multiple(() =>
-            {
-                Assert.That(count, Is.EqualTo(2UL));
-                Assert.That(ConnectionThatSent(queryId).ServerName, Is.EqualTo(Sticky("ins")));
-            });
-        }
-        finally
-        {
-            await client.ExecuteAsync($"DROP TABLE IF EXISTS {table}", cancellationToken: None);
-        }
-    }
-
     [Test]
     public async Task OpenSessionAsync_WithAReplicaTag_KeepsSessionStateOnOneConnectionThatSentTheStickyName()
     {
-        await using ClickHouseTcpClient client = CreateClient();
+        await using ClickHouseTcpClient client = CreateClient(replicaTag: "dflt");
         await using IClickHouseTcpSession session = await client.OpenSessionAsync(
             new ClickHouseTcpSessionOptions { ReplicaTag = "sess" },
             None);
@@ -208,15 +136,14 @@ public class ReplicaRoutingIntegrationTests
 
         await session.ExecuteAsync($"CREATE TEMPORARY TABLE {temporary} (id UInt64)", new ClickHouseTcpQueryOptions { QueryId = create }, None);
 
-        // The session's own tag is accepted on an operation.
         await session.InsertRowsAsync(
             $"INSERT INTO {temporary} (id) VALUES",
             [[1UL], [2UL], [3UL]],
-            new ClickHouseTcpInsertOptions { QueryId = insert, ReplicaTag = "sess" },
+            new ClickHouseTcpInsertOptions { QueryId = insert },
             None);
 
-        // The client runs other tags on other connections while the session holds its own.
-        await client.ExecuteScalarAsync("SELECT 1", new ClickHouseTcpQueryOptions { QueryId = elsewhere, ReplicaTag = "other" }, None);
+        // The client keeps its own tag on its other connections while the session holds its connection.
+        await client.ExecuteScalarAsync("SELECT 1", new ClickHouseTcpQueryOptions { QueryId = elsewhere }, None);
 
         object count = await session.ExecuteScalarAsync($"SELECT count() FROM {temporary}", new ClickHouseTcpQueryOptions { QueryId = select }, None);
 
@@ -227,30 +154,20 @@ public class ReplicaRoutingIntegrationTests
             Assert.That(pinned.ServerName, Is.EqualTo(Sticky("sess")));
             Assert.That(ConnectionThatSent(insert), Is.SameAs(pinned));
             Assert.That(ConnectionThatSent(select), Is.SameAs(pinned));
-            Assert.That(ConnectionThatSent(elsewhere).ServerName, Is.EqualTo(Sticky("other")));
+            Assert.That(ConnectionThatSent(elsewhere).ServerName, Is.EqualTo(Sticky("dflt")));
         });
     }
 
     [Test]
-    public async Task ExecuteScalarAsync_InASessionWithAnotherReplicaTag_ThrowsAndTheSessionKeepsItsState()
+    public async Task OpenSessionAsync_WithoutAReplicaTag_RunsOnAConnectionWithTheClientTag()
     {
-        await using ClickHouseTcpClient client = CreateClient();
-        await using IClickHouseTcpSession session = await client.OpenSessionAsync(
-            new ClickHouseTcpSessionOptions { ReplicaTag = "sess" },
-            None);
-        string temporary = $"tcp_replica_routing_session_{Guid.NewGuid():N}";
-        await session.ExecuteAsync($"CREATE TEMPORARY TABLE {temporary} (id UInt64)", cancellationToken: None);
+        await using ClickHouseTcpClient client = CreateClient(replicaTag: "dflt");
+        await using IClickHouseTcpSession session = await client.OpenSessionAsync(new ClickHouseTcpSessionOptions(), None);
+        string queryId = NewQueryId();
 
-        Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await session.ExecuteScalarAsync("SELECT 1", new ClickHouseTcpQueryOptions { ReplicaTag = "other" }, None));
+        await session.ExecuteScalarAsync("SELECT 1", new ClickHouseTcpQueryOptions { QueryId = queryId }, None);
 
-        object count = await session.ExecuteScalarAsync($"SELECT count() FROM {temporary}", cancellationToken: None);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(session.IsOpen, Is.True);
-            Assert.That(count, Is.EqualTo(0UL), "the refused operation sent nothing, so the temporary table is still there");
-        });
+        Assert.That(ConnectionThatSent(queryId).ServerName, Is.EqualTo(Sticky("dflt")));
     }
 
     private static string NewQueryId() => $"replica-routing-{Guid.NewGuid():N}";
@@ -277,9 +194,4 @@ public class ReplicaRoutingIntegrationTests
             TlsServerName = CertificateName,
             TlsCaCertificatePath = authorityPath,
         };
-
-    private sealed class IdRow
-    {
-        public ulong Id { get; set; }
-    }
 }

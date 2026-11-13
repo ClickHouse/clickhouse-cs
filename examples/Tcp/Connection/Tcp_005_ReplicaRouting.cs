@@ -42,14 +42,12 @@ public static class TcpReplicaRouting
             Console.WriteLine($"  {await client.ExecuteScalarAsync("SELECT hostName()")}");
         }
 
+        // A client tag applies to every connection of the client.
         Console.WriteLine("\nWith the same tag, connections reach the same replica:");
         for (int i = 0; i < 4; i++)
         {
-            await using var client = new ClickHouseTcpClient(options);
-            object replica = await client.ExecuteScalarAsync(
-                "SELECT hostName()",
-                new ClickHouseTcpQueryOptions { ReplicaTag = tag });
-            Console.WriteLine($"  {replica}");
+            await using var client = new ClickHouseTcpClient(options with { ReplicaTag = tag });
+            Console.WriteLine($"  {await client.ExecuteScalarAsync("SELECT hostName()")}");
         }
 
         // A session keeps temporary tables and settings on one connection. The tag chooses the replica it runs on.

@@ -177,7 +177,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
     }
 
     /// <summary>
-    /// The default replica tag for ClickHouse Cloud replica-aware routing. Absent, the default, uses normal load
+    /// The replica tag for ClickHouse Cloud replica-aware routing. Absent, the default, uses normal load
     /// balancing. Needs <see cref="UseTls"/>. Maps to <see cref="ClickHouseTcpClientOptions.ReplicaTag"/>.
     /// </summary>
     public string ReplicaTag

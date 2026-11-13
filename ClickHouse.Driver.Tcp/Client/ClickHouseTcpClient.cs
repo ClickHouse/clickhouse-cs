@@ -167,7 +167,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
         {
             try
             {
-                lease = await source.RentAsync(options?.ReplicaTag, cancellationToken).ConfigureAwait(false);
+                lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
 
                 // The connection's own enumerator owns each block's storage and, in its finally, returns the
                 // connection to Ready or terminates it. We pass the blocks straight through without disposing them.
@@ -419,7 +419,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
         using ClientOperation operation = ClientOperation.Start(Options, logger, sql, queryId);
         try
         {
-            await using IConnectionLease lease = await source.RentAsync(options?.ReplicaTag, cancellationToken).ConfigureAwait(false);
+            await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
             await lease.Connection.InsertAsync(
                 sql,
                 columns,
@@ -471,7 +471,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
         using ClientOperation operation = ClientOperation.Start(Options, logger, sql, queryId);
         try
         {
-            await using IConnectionLease lease = await source.RentAsync(options?.ReplicaTag, cancellationToken).ConfigureAwait(false);
+            await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
             await lease.Connection.InsertAsync(
                 sql,
                 buffer.Count,
@@ -514,7 +514,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
         using ClientOperation operation = ClientOperation.Start(Options, logger, sql, queryId);
         try
         {
-            await using IConnectionLease lease = await source.RentAsync(options?.ReplicaTag, cancellationToken).ConfigureAwait(false);
+            await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
             await lease.Connection.InsertAsync(
                 sql,
                 buffer.Count,
@@ -569,7 +569,11 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
         ClickHouseTcpSessionOptions options,
         CancellationToken cancellationToken = default)
     {
-        IConnectionLease lease = await source.RentAsync(options?.ReplicaTag, cancellationToken).ConfigureAwait(false);
+        // Only the pool opens a connection with a tag of its own. The other source is a session's pinned connection,
+        // and a session opens no sessions.
+        IConnectionLease lease = source is ConnectionPool pool
+            ? await pool.RentAsync(options?.ReplicaTag, cancellationToken).ConfigureAwait(false)
+            : await source.RentAsync(cancellationToken).ConfigureAwait(false);
         var pinned = new PinnedConnectionSource(lease);
         try
         {
@@ -597,7 +601,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
         using Activity activity = TcpActivity.StartPing(Options);
         try
         {
-            await using IConnectionLease lease = await source.RentAsync(replicaTag: null, cancellationToken).ConfigureAwait(false);
+            await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
             await lease.Connection.PingAsync(cancellationToken).ConfigureAwait(false);
             activity?.SetSuccess();
         }
@@ -611,7 +615,7 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
     /// <inheritdoc/>
     public async ValueTask<ClickHouseTcpServerInfo> GetServerInfoAsync(CancellationToken cancellationToken = default)
     {
-        await using IConnectionLease lease = await source.RentAsync(replicaTag: null, cancellationToken).ConfigureAwait(false);
+        await using IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
         ServerHandshake server = lease.Connection.Server;
         return new ClickHouseTcpServerInfo
         {

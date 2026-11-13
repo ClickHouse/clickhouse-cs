@@ -56,17 +56,6 @@ public class ReplicaRoutingCloudIntegrationTests
     }
 
     [Test]
-    public async Task ExecuteScalarAsync_ReplicaTagInTheClientOptions_ReachesTheReplicaOfThatTag()
-    {
-        string perQuery = await ReplicaOverANewConnectionAsync("chcs-client-default");
-
-        await using var client = new ClickHouseTcpClient(TcpServerFixture.Options() with { ReplicaTag = "chcs-client-default" });
-        object byDefault = await client.ExecuteScalarAsync("SELECT hostName()", cancellationToken: None);
-
-        Assert.That(byDefault, Is.EqualTo(perQuery));
-    }
-
-    [Test]
     public async Task OpenSessionAsync_SameReplicaTag_ReachesTheReplicaOfThatTag()
     {
         const string tag = "chcs-session";
@@ -88,22 +77,21 @@ public class ReplicaRoutingCloudIntegrationTests
     }
 
     [Test]
-    public async Task ExecuteScalarAsync_SeveralTagsThroughOneSmallPool_EachTagKeepsItsReplica()
+    public async Task OpenSessionAsync_SeveralTagsThroughAPoolOfOne_EachTagKeepsItsReplica()
     {
-        // More tags than pool slots, so the pool closes connections of one tag to open connections of another, and
-        // each round reaches every tag over a new connection.
-        string[] tags = Enumerable.Range(0, 6).Select(i => $"chcs-pool-{i}").ToArray();
-        await using var client = new ClickHouseTcpClient(TcpServerFixture.Options() with { MaxPoolSize = 2 });
+        // The client query before each session leaves an idle connection in a pool of one, so each session first
+        // closes that connection and then opens its own, and each round reaches every tag over a new connection.
+        string[] tags = Enumerable.Range(0, 4).Select(i => $"chcs-pool-{i}").ToArray();
+        await using var client = new ClickHouseTcpClient(TcpServerFixture.Options() with { MaxPoolSize = 1 });
         var replicasByTag = tags.ToDictionary(tag => tag, _ => new HashSet<string>());
 
         for (int round = 0; round < 3; round++)
         {
             foreach (string tag in tags)
             {
-                object replica = await client.ExecuteScalarAsync(
-                    "SELECT hostName()",
-                    new ClickHouseTcpQueryOptions { ReplicaTag = tag },
-                    None);
+                await client.ExecuteScalarAsync("SELECT 1", cancellationToken: None);
+                await using IClickHouseTcpSession session = await client.OpenSessionAsync(new ClickHouseTcpSessionOptions { ReplicaTag = tag }, None);
+                object replica = await session.ExecuteScalarAsync("SELECT hostName()", cancellationToken: None);
                 replicasByTag[tag].Add((string)replica);
             }
         }
@@ -148,11 +136,8 @@ public class ReplicaRoutingCloudIntegrationTests
 
     private static async Task<string> ReplicaOverANewConnectionAsync(string replicaTag)
     {
-        await using ClickHouseTcpClient client = TcpServerFixture.CreateClient();
-        object replica = await client.ExecuteScalarAsync(
-            "SELECT hostName()",
-            new ClickHouseTcpQueryOptions { ReplicaTag = replicaTag },
-            None);
+        await using var client = new ClickHouseTcpClient(TcpServerFixture.Options() with { ReplicaTag = replicaTag });
+        object replica = await client.ExecuteScalarAsync("SELECT hostName()", cancellationToken: None);
         return (string)replica;
     }
 }

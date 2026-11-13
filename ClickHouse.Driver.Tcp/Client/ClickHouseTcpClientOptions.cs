@@ -155,10 +155,10 @@ public sealed record ClickHouseTcpClientOptions
     public Action<SslClientAuthenticationOptions> ConfigureTls { get; init; }
 
     /// <summary>
-    /// The default replica tag for ClickHouse Cloud replica-aware routing, or null (the default) for normal load
-    /// balancing. Connections with the same tag go to the same replica while the number of replicas does not change.
-    /// A per-query <see cref="ClickHouseTcpQueryOptions.ReplicaTag"/> or a session's
-    /// <see cref="ClickHouseTcpSessionOptions.ReplicaTag"/> overrides it.
+    /// The replica tag for ClickHouse Cloud replica-aware routing, or null (the default) for normal load balancing.
+    /// Every pooled connection of the client is opened with it. Connections with the same tag go to the same replica
+    /// while the number of replicas does not change. A session's <see cref="ClickHouseTcpSessionOptions.ReplicaTag"/>
+    /// overrides it.
     /// </summary>
     /// <remarks>
     /// <para>

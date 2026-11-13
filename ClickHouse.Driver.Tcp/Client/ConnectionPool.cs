@@ -24,11 +24,9 @@ namespace ClickHouse.Driver.Tcp.Client;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Each connection keeps the replica tag it was opened with (see <see cref="ClickHouseTcpClientOptions.ReplicaTag"/>),
-/// and a checkout reuses only a connection with the tag it asks for. All tags share the one
-/// <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>. Idle connections hold no permit, so idle connections of other
-/// tags could otherwise push the open sockets past the cap: a checkout that must dial while the pool is full first
-/// closes the longest-idle connection, and dials only after that connection is closed.
+/// Every connection in the idle set has the client's replica tag (see
+/// <see cref="ClickHouseTcpClientOptions.ReplicaTag"/>). A session with another tag gets a new connection that only it
+/// uses, and the pool closes that connection when it comes back.
 /// </para>
 /// <para>
 /// Waiting callers are <b>not</b> served in a guaranteed order, because the wait is a
@@ -62,8 +60,8 @@ internal sealed class ConnectionPool : IConnectionSource
 
     private readonly ClickHouseTcpClientOptions options;
 
-    // The tag of a checkout that names none, and of every connection a top-up opens. Validated with the options.
-    private readonly string defaultReplicaTag;
+    // The tag of every connection that can go to the idle set, or null for none. Validated with the options.
+    private readonly string clientReplicaTag;
 
     private readonly IConnectionFactory factory;
     private readonly ILogger logger;
@@ -101,11 +99,6 @@ internal sealed class ConnectionPool : IConnectionSource
     // MaxPoolSize while they are in the air. Guarded by `gate`.
     private int pending;
 
-    // The checkouts counted in `pending` that have not yet chosen between an idle connection and a dial. Such a
-    // checkout may still take an idle connection, so it does not yet stand for a socket of its own. Excluded from
-    // CommittedConnections, which decides whether a dial must first close an idle connection. Guarded by `gate`.
-    private int undecided;
-
     // Factory use has a lifetime of its own. A dial starts before it has a connection the pool can put in a set,
     // so a drain that times out cannot tell it apart from an established lease by counting permits alone. The
     // counter keeps the factory alive for those dials; once teardown requests disposal, the last one out releases
@@ -136,7 +129,7 @@ internal sealed class ConnectionPool : IConnectionSource
     internal ConnectionPool(ClickHouseTcpClientOptions options, IConnectionFactory factory, TimeProvider time)
     {
         this.options = options;
-        defaultReplicaTag = ReplicaRouting.Normalize(options.ReplicaTag);
+        clientReplicaTag = ReplicaRouting.Normalize(options.ReplicaTag);
         this.factory = factory;
         this.time = time;
         logger = DiagnosticLogger.Create(options.LoggerFactory, ClickHouseTcpDiagnostics.PoolLogCategory);
@@ -178,10 +171,32 @@ internal sealed class ConnectionPool : IConnectionSource
     }
 
     /// <inheritdoc/>
-    public async ValueTask<IConnectionLease> RentAsync(string replicaTag, CancellationToken cancellationToken)
+    public ValueTask<IConnectionLease> RentAsync(CancellationToken cancellationToken)
+        => RentAsync(replicaTag: null, cancellationToken);
+
+    /// <summary>
+    /// Leases a connection opened with <paramref name="replicaTag"/>, for a session. A null or empty tag, or the
+    /// client's own, is the same as <see cref="RentAsync(CancellationToken)"/>. Any other tag gets a new connection
+    /// that no other checkout shares: it never comes from the idle set, and the pool closes it when it comes back.
+    /// </summary>
+    /// <param name="replicaTag">The session's replica tag, or null or empty for the client's.</param>
+    /// <param name="cancellationToken">A token to observe while waiting for and establishing a connection.</param>
+    /// <returns>A lease over a ready connection.</returns>
+    /// <exception cref="TimeoutException">No connection became available within the pool timeout.</exception>
+    /// <exception cref="ArgumentException"><paramref name="replicaTag"/> cannot be sent with this client's
+    /// options.</exception>
+    internal async ValueTask<IConnectionLease> RentAsync(string replicaTag, CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        string tag = ResolveReplicaTag(replicaTag);
+
+        string tag = ReplicaRouting.Normalize(replicaTag) ?? clientReplicaTag;
+        bool dedicated = !string.Equals(tag, clientReplicaTag, StringComparison.Ordinal);
+        if (dedicated)
+        {
+            // Before the permit, so a refused tag holds no slot. The client's tag was validated with the options.
+            ReplicaRouting.Validate(tag, options, nameof(ClickHouseTcpSessionOptions.ReplicaTag));
+        }
+
         await AcquirePermitAsync(cancellationToken).ConfigureAwait(false);
 
         // The slot is taken for the whole checkout, not just for a dial: a connection lifted out of `idle` is in
@@ -190,33 +205,32 @@ internal sealed class ConnectionPool : IConnectionSource
         lock (gate)
         {
             pending++;
-            undecided++;
         }
 
         // From here a permit and a slot are both held; every path must either return a lease (which releases the
         // permit on dispose) or give both back before throwing, or the pool loses capacity for good.
         bool reserved = true;
-
-        // Set by TakeReusableIdle under `gate`, in the same lock as the choice it records, so the catch below knows
-        // whether this checkout is still counted in `undecided`.
-        bool decided = false;
         try
         {
             // Disposal may have started while this caller waited for the permit.
             ThrowIfDisposed();
 
-            PooledConnection connection = TakeReusableIdle(tag, ref decided, out PooledConnection evicted);
+            PooledConnection connection = dedicated ? null : TakeReusableIdle();
             bool reused = connection is not null;
             if (!reused)
             {
-                // Before the dial, so this checkout never has the old socket and the new one open at the same time.
-                CloseEvicted(evicted);
+                if (dedicated)
+                {
+                    // Before the dial, so this checkout never has the old socket and the new one open at the same time.
+                    CloseIdleToMakeRoom(tag);
+                }
+
                 if (logger is not null)
                 {
                     PoolLog.Dialing(logger);
                 }
 
-                connection = new PooledConnection(await DialAsync(tag, cancellationToken).ConfigureAwait(false), time, tag);
+                connection = new PooledConnection(await DialAsync(tag, cancellationToken).ConfigureAwait(false), time, dedicated);
             }
 
             connection.OnRented();
@@ -259,10 +273,6 @@ internal sealed class ConnectionPool : IConnectionSource
                 lock (gate)
                 {
                     pending--;
-                    if (!decided)
-                    {
-                        undecided--;
-                    }
                 }
             }
 
@@ -581,8 +591,8 @@ internal sealed class ConnectionPool : IConnectionSource
                 bool pooled = false;
                 try
                 {
-                    ClickHouseTcpConnection opened = await CreateConnectionAsync(defaultReplicaTag, shutdown.Token).ConfigureAwait(false);
-                    var connection = new PooledConnection(opened, time, defaultReplicaTag);
+                    ClickHouseTcpConnection opened = await CreateConnectionAsync(clientReplicaTag, shutdown.Token).ConfigureAwait(false);
+                    var connection = new PooledConnection(opened, time);
 
                     lock (gate)
                     {
@@ -648,16 +658,6 @@ internal sealed class ConnectionPool : IConnectionSource
     /// open. Erring that way makes a top-up decline to dial rather than overshoot.
     /// </summary>
     private int AccountedConnections => idle.Count + leased.Count + pending;
-
-    /// <summary>
-    /// The connections the pool has open or has committed to open: idle, in use, being dialed, or taken out of the
-    /// idle set by a checkout. Read under <c>gate</c>. Unlike <see cref="AccountedConnections"/> it leaves out the
-    /// checkouts that have not yet chosen between reuse and a dial, because such a checkout may take an idle
-    /// connection that is already counted. It never exceeds <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>:
-    /// reuse moves a connection from idle to a checkout, and a dial first closes an idle connection when the total
-    /// would pass the cap.
-    /// </summary>
-    private int CommittedConnections => idle.Count + leased.Count + pending - undecided;
 
     /// <summary>Whether the pool holds fewer connections than the floor asks for.</summary>
     private bool BelowFloor()
@@ -791,65 +791,30 @@ internal sealed class ConnectionPool : IConnectionSource
     }
 
     /// <summary>
-    /// Takes the next idle connection with <paramref name="replicaTag"/> that can still be used, closing any that
-    /// cannot on the way. Returns null when the idle set holds no usable connection with that tag, leaving the caller
-    /// to open one. Callers hold a slot in <c>pending</c> throughout, which accounts for a connection while it is in
-    /// neither set.
+    /// Takes the next idle connection that can still be used, closing any that cannot on the way. Returns null when
+    /// the idle set holds nothing usable, leaving the caller to open a connection. Callers hold a slot in
+    /// <c>pending</c> throughout, which accounts for a connection while it is in neither set.
     /// </summary>
-    /// <param name="replicaTag">The resolved tag of the checkout, or null for none.</param>
-    /// <param name="decided">
-    /// The caller's record of whether it has left <c>undecided</c>. Set to true under <c>gate</c>, in the lock that
-    /// first chooses between an idle connection and a dial.
-    /// </param>
-    /// <param name="evicted">
-    /// When this returns null, an idle connection with another tag that the caller must close before it dials, so
-    /// that its new connection fits under <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>; otherwise null.
-    /// Already out of the idle set.
-    /// </param>
     /// <returns>A usable idle connection, or null.</returns>
     /// <remarks>
-    /// <para>
     /// This loop is the pool's whole answer to a connection that died while idle. It counts no retries: it discards
     /// candidates until one passes or the set is empty, and then a fresh connection is opened. A failure to open
     /// <i>that</i> connection is reported to the caller rather than retried, so a server that is down is reported as
     /// down instead of being hidden behind the pool timeout.
-    /// </para>
-    /// <para>
-    /// The choice to dial and the eviction it needs are made in one lock, against
-    /// <see cref="CommittedConnections"/>. That total stays within the cap, and a dial adds one to it, so a checkout
-    /// evicts at most one connection. The checkout's own slot covers the evicted socket until the caller closes it,
-    /// and the new socket only after, so the open sockets stay within the cap too. With one tag in use nothing is ever
-    /// evicted: a checkout dials only when nothing is idle.
-    /// </para>
     /// </remarks>
-    private PooledConnection TakeReusableIdle(string replicaTag, ref bool decided, out PooledConnection evicted)
+    private PooledConnection TakeReusableIdle()
     {
-        evicted = null;
         while (true)
         {
             PooledConnection candidate;
             lock (gate)
             {
-                if (!decided)
+                if (idle.Count == 0)
                 {
-                    undecided--;
-                    decided = true;
-                }
-
-                int index = FindIdle(replicaTag);
-                if (index < 0)
-                {
-                    // The caller dials. Its slot already counts in CommittedConnections, so a total past the cap is
-                    // past it by this one connection.
-                    if (idle.Count > 0 && CommittedConnections > options.MaxPoolSize)
-                    {
-                        evicted = idle[0];
-                        idle.RemoveAt(0);
-                    }
-
                     return null;
                 }
 
+                int index = options.PoolReusePolicy == ClickHouseTcpPoolReusePolicy.Fifo ? 0 : idle.Count - 1;
                 candidate = idle[index];
                 idle.RemoveAt(index);
             }
@@ -865,80 +830,40 @@ internal sealed class ConnectionPool : IConnectionSource
     }
 
     /// <summary>
-    /// The index of the idle connection the reuse policy picks among those with <paramref name="replicaTag"/>, or -1
-    /// when there is none. Call under <c>gate</c>. The idle set holds at most <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>
-    /// entries, and with one tag in use the first entry looked at matches.
+    /// Closes the longest-idle connection when a dial for a session with another replica tag would take the pool past
+    /// <see cref="ClickHouseTcpClientOptions.MaxPoolSize"/>. The caller holds a slot and dials after this returns.
     /// </summary>
-    /// <param name="replicaTag">The resolved tag of the checkout, or null for none.</param>
-    /// <returns>An index into <c>idle</c>, or -1.</returns>
-    private int FindIdle(string replicaTag)
+    /// <param name="replicaTag">The session's tag, for the log.</param>
+    /// <remarks>
+    /// Idle connections hold no permit, so a checkout that does not take one could otherwise open a socket past the
+    /// cap. The open sockets are within the cap before the dial, so closing one idle connection is always enough.
+    /// <see cref="AccountedConnections"/> can read high (see there), so this can close a connection that another
+    /// checkout was about to reuse. That checkout then opens a new connection, and the cap still holds.
+    /// </remarks>
+    private void CloseIdleToMakeRoom(string replicaTag)
     {
-        if (options.PoolReusePolicy == ClickHouseTcpPoolReusePolicy.Fifo)
+        PooledConnection closing = null;
+        lock (gate)
         {
-            for (int i = 0; i < idle.Count; i++)
+            if (idle.Count > 0 && AccountedConnections > options.MaxPoolSize)
             {
-                if (string.Equals(idle[i].ReplicaTag, replicaTag, StringComparison.Ordinal))
-                {
-                    return i;
-                }
-            }
-        }
-        else
-        {
-            for (int i = idle.Count - 1; i >= 0; i--)
-            {
-                if (string.Equals(idle[i].ReplicaTag, replicaTag, StringComparison.Ordinal))
-                {
-                    return i;
-                }
+                closing = idle[0];
+                idle.RemoveAt(0);
             }
         }
 
-        return -1;
-    }
-
-    /// <summary>
-    /// Closes the connection <see cref="TakeReusableIdle"/> took out of the idle set to make room for a dial, if any,
-    /// and logs it. Called before the dial.
-    /// </summary>
-    /// <param name="evicted">The connection to close, or null.</param>
-    private void CloseEvicted(PooledConnection evicted)
-    {
-        if (evicted is null)
+        if (closing is null)
         {
             return;
         }
 
-        // Closed before the line is written, for the same reason as the drain: the connection is out of the idle
-        // set, and a logger that threw first would leak its socket.
-        evicted.Close();
+        // Closed before the line is written, for the same reason as the drain: the connection is out of the idle set,
+        // and a logger that threw first would leak its socket.
+        closing.Close();
         if (logger is not null)
         {
-            PoolLog.EvictedForAnotherTag(logger, evicted.ReplicaTag ?? "(none)", options.MaxPoolSize);
+            PoolLog.ClosedForSessionTag(logger, replicaTag, options.MaxPoolSize);
         }
-    }
-
-    /// <summary>
-    /// The tag a checkout uses: the one it names, or the pool's default when it names none. A tag other than the
-    /// default is validated here, before the checkout takes a permit.
-    /// </summary>
-    /// <param name="replicaTag">The tag the operation names, or null or empty for the default.</param>
-    /// <returns>The tag to open or reuse a connection with, or null for none.</returns>
-    /// <exception cref="ArgumentException">The tag cannot be sent with this client's options.</exception>
-    private string ResolveReplicaTag(string replicaTag)
-    {
-        string tag = ReplicaRouting.Normalize(replicaTag);
-        if (tag is null)
-        {
-            return defaultReplicaTag;
-        }
-
-        if (!string.Equals(tag, defaultReplicaTag, StringComparison.Ordinal))
-        {
-            ReplicaRouting.Validate(tag, options, nameof(ClickHouseTcpQueryOptions.ReplicaTag));
-        }
-
-        return tag;
     }
 
     /// <summary>Waits for a free slot, honouring <see cref="ClickHouseTcpClientOptions.PoolTimeout"/>.</summary>
@@ -983,8 +908,15 @@ internal sealed class ConnectionPool : IConnectionSource
             // now, which frees the socket sooner. It catches what a failed or abandoned operation left behind, either
             // terminated or out of step with the server, and a connection past its age limit. Idleness cannot fire
             // here, the connection having just carried an operation, but it is part of the one shared predicate
-            // rather than a case this path has to remember to leave out.
-            bool reusable = connection.CanBeRented(options);
+            // rather than a case this path has to remember to leave out. A connection with a session's own tag is
+            // never kept, so the idle set holds only the client's tag.
+            bool reusable = !connection.Dedicated && connection.CanBeRented(options);
+            if (!reusable)
+            {
+                // Closed while still in `leased`. A session dial with its own tag counts `leased` to decide whether it
+                // must first close an idle connection, so the socket stays in that count until it is closed.
+                connection.Close();
+            }
 
             bool pooled = false;
             lock (gate)
@@ -1005,13 +937,15 @@ internal sealed class ConnectionPool : IConnectionSource
 
             if (!pooled)
             {
-                // Reusable but not pooled means disposal got there first, and the drain line already reports that.
-                if (!reusable && logger is not null)
+                if (reusable)
+                {
+                    // Disposal got there first, and the drain line already reports that.
+                    connection.Close();
+                }
+                else if (logger is not null)
                 {
                     PoolLog.Discarded(logger, connection.UsageCount);
                 }
-
-                connection.Close();
             }
         }
         finally
@@ -1080,8 +1014,6 @@ internal sealed class ConnectionPool : IConnectionSource
         }
 
         public ClickHouseTcpConnection Connection => pooled.Connection;
-
-        public string ReplicaTag => pooled.ReplicaTag;
 
         public ValueTask DisposeAsync()
         {

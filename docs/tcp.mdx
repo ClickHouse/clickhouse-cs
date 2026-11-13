@@ -204,7 +204,7 @@ Connection-string values for `TimeSpan` properties are expressed in seconds.
 | QuotaKey | `string` | `""` | `QuotaKey` | Key used with a ClickHouse keyed quota |
 | DialTimeout | `TimeSpan` | 30 seconds | `DialTimeout` | Timeout for the socket connection, TLS negotiation, and native-protocol handshake |
 | ReadTimeout | `TimeSpan` | 5 minutes | `ReadTimeout` | Maximum time for each transport read during an operation; zero disables the timeout |
-| ReplicaTag | `string` | `null` | `ReplicaTag` | Default replica tag for ClickHouse Cloud replica-aware routing; needs `UseTls`. See [Replica-aware routing](#replica-aware-routing) |
+| ReplicaTag | `string` | `null` | `ReplicaTag` | Replica tag of every connection of the client, for ClickHouse Cloud replica-aware routing; needs `UseTls`. See [Replica-aware routing](#replica-aware-routing) |
 
 ### Data format and serialization {#data-format-serialization}
 
@@ -297,7 +297,6 @@ Do not include the `set_` prefix when adding a setting to `CustomSettings` or pe
 | Settings | `IReadOnlyDictionary<string, string>` | `null` | Server settings for this operation; values override matching client-level `CustomSettings` |
 | Parameters | `ClickHouseTcpParameterCollection` | `null` | Values bound to `{name:Type}` placeholders in the SQL statement |
 | Callbacks | `ClickHouseTcpQueryCallbacks` | `null` | Synchronous callbacks for progress, profile information, server logs, profile events, totals, and extremes |
-| ReplicaTag | `string` | `null` | Replica tag for this operation; `null` or empty uses the client's `ReplicaTag`. See [Replica-aware routing](#replica-aware-routing) |
 
 ```csharp
 var queryOptions = new ClickHouseTcpQueryOptions
@@ -808,65 +807,19 @@ A tag chooses a replica, not a connection. Temporary tables and `SET` settings b
 connection, so another connection with the same tag reaches the same replica but does not see them.
 Keep them in a [session](#sessions), which you can open with a tag.
 
-You can set the tag for the client, for one operation, or for a session:
+You can set the tag for the client or for a session:
 
 ```csharp
-// The default for every operation of this client.
+// Every connection of this client.
 await using var client = new ClickHouseTcpClient(
     "Host=abc123.us-east-1.aws.clickhouse.cloud;UseTls=true;Password=...;ReplicaTag=etl");
-
-// One operation. ClickHouseTcpInsertOptions has the same property.
-object replica = await client.ExecuteScalarAsync(
-    "SELECT hostName()",
-    new ClickHouseTcpQueryOptions { ReplicaTag = "user-42" });
 
 // A session on one replica.
 await using IClickHouseTcpSession session = await client.OpenSessionAsync(
     new ClickHouseTcpSessionOptions { ReplicaTag = "user-42" });
 ```
 
-An operation or session tag replaces the client tag. A `null` or empty tag uses the client tag.
-
-### How the client sends the tag {#replica-aware-routing-tls}
-
-* The client sends the tag in the TLS server name (SNI) as `<tag>.sticky.<host>`, where `<host>` is
-  `TlsServerName` or, when that is not set, `Host`. It still connects to `Host`. This is what
-  `clickhouse-client --tls-sni-override` does.
-* TLS is necessary. The client refuses a tag when `UseTls` is `false`, and when `<host>` is an IP
-  address (set `TlsServerName` to the service host name).
-* The client checks the server certificate against `<host>`, as it does without a tag. A
-  certificate for `<host>`, or a wildcard certificate that covers it, does not cover the sticky
-  name, because a wildcard matches one label only. A certificate that names the sticky name is also
-  accepted. The chain is checked as usual.
-* A `ConfigureTls` hook sees the sticky name in `TargetHost`, and a validation callback that does the
-  check above. A hook that replaces the callback must check the host name itself.
-
-A tag is one DNS label: 1 to 63 characters from `A` to `Z`, `a` to `z`, `0` to `9` and `-`, and it
-cannot start or end with `-`. The client refuses other values with `ArgumentException`. To route by
-a value with other characters, such as an email address, use a hash of it as the tag:
-
-```csharp
-string tag = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(email)))[..32];
-```
-
-The HTTP client uses the `X-ClickHouse-Replica-Tag` header instead, which you can send with
-`CustomHeaders`.
-
-### Pooling and sessions with replica tags {#replica-aware-routing-pool}
-
-* The tag is fixed when a connection opens. An operation with a tag runs on an idle pooled
-  connection that was opened with the same tag, or on a new connection. The pool compares tags as
-  given, so `User-42` and `user-42` use different connections.
-* All tags share one `MaxPoolSize`. When the pool is full, it closes the idle connection that has
-  been idle longest, which has another tag, before it opens a connection for a new tag. Many
-  different tags on one client make the pool open and close connections often, and each new
-  connection costs a TLS handshake.
-* `MinPoolSize` keeps connections with the client tag. If most operations name other tags, set
-  `MinPoolSize` to `0`: otherwise the pool opens connections with the client tag that a full pool
-  then closes to make room for the other tags.
-* A session keeps the tag of its connection. An operation in the session can leave `ReplicaTag`
-  unset or set it to the session's tag. A different tag throws `InvalidOperationException`, and the
-  session stays usable.
+A session tag replaces the client tag. A `null` or empty session tag uses the client tag.
 
 ## Best practices {#best-practices}
 
@@ -1541,7 +1494,7 @@ When the client is registered through the dependency-injection extensions, it us
 |---|---|
 | `ClickHouse.Driver.Tcp.Client` | Operation start, completion, cancellation, abandonment, and row/byte counts at `Debug`; failures at `Error`. |
 | `ClickHouse.Driver.Tcp.Connection` | Dial, TLS, handshake, server version, protocol revision, and timezone at `Debug`; connection failures at `Warning`. |
-| `ClickHouse.Driver.Tcp.Pool` | Reuse at `Trace`; opening, retirement, discarded connections, connections closed to make room for another replica tag, and draining at `Debug`; exhaustion and background failures at `Warning`. |
+| `ClickHouse.Driver.Tcp.Pool` | Reuse at `Trace`; opening, retirement, discarded connections, connections closed to make room for a session's replica tag, and draining at `Debug`; exhaustion and background failures at `Warning`. |
 
 Configure the categories through the standard .NET logging configuration:
 

@@ -65,6 +65,6 @@ internal static partial class PoolLog
     [LoggerMessage(
         EventId = 3008,
         Level = LogLevel.Debug,
-        Message = "Closed an idle connection with replica tag {ReplicaTag} to stay within MaxPoolSize {MaxPoolSize}")]
-    public static partial void EvictedForAnotherTag(ILogger logger, string replicaTag, int maxPoolSize);
+        Message = "Closed an idle connection to stay within MaxPoolSize {MaxPoolSize} while opening a session connection with replica tag {ReplicaTag}")]
+    public static partial void ClosedForSessionTag(ILogger logger, string replicaTag, int maxPoolSize);
 }

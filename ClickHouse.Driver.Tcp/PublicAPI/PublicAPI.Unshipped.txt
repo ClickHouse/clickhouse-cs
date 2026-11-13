@@ -531,8 +531,6 @@ virtual ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.<Clone>$() -> ClickHouse
 virtual ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.EqualityContract.get -> System.Type
 virtual ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.Equals(ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions other) -> bool
 virtual ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.PrintMembers(System.Text.StringBuilder builder) -> bool
-ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.ReplicaTag.get -> string
-ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.ReplicaTag.init -> void
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.ClickHouseTcpClient(ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions options) -> void
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.ClickHouseTcpClient(string connectionString) -> void
