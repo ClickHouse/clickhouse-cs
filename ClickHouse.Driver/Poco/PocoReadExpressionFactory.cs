@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 using ClickHouse.Driver.Formats;
@@ -40,6 +41,7 @@ internal static class PocoReadExpressionFactory
     /// <param name="type">The resolved ClickHouse column type.</param>
     /// <param name="reader">The <see cref="ExtendedBinaryReader"/> parameter expression.</param>
     /// <param name="targetClrType">The bound property's CLR type; the returned expression has this type.</param>
+    [RequiresDynamicCode("Closes generic types and methods over the column's CLR types.")]
     public static Expression TryBuildReadBody(ClickHouseType type, Expression reader, Type targetClrType)
     {
         // LowCardinality / SimpleAggregateFunction / Object are transparent on the RowBinary wire (their
@@ -71,6 +73,7 @@ internal static class PocoReadExpressionFactory
     // Nullable(T) column: read the 1-byte null marker, then either null or the underlying value. Only fires
     // when the target can represent null; a non-nullable value-type property on a nullable column falls back
     // to the boxed path, which correctly throws on an actual null.
+    [RequiresDynamicCode("Closes generic types and methods over the column's CLR types.")]
     private static Expression TryBuildNullableRead(NullableType nullableType, Expression reader, Type targetClrType)
     {
         var targetUnderlying = Nullable.GetUnderlyingType(targetClrType);
@@ -100,6 +103,8 @@ internal static class PocoReadExpressionFactory
     // Map(K,V) -> List<KeyValuePair<K,V>> or KeyValuePair<K,V>[]. Returns null (so the boxed Dictionary path
     // is used) unless the property is exactly one of those shapes AND its K/V match the map's key/value
     // framework types — no silent element coercion, mirroring the exact-match rule everywhere else.
+    [RequiresDynamicCode("Closes generic types and methods over the column's CLR types.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2060", Justification = "MapType.ReadList and ReadArray have no DynamicallyAccessedMembers requirements.")]
     private static Expression TryBuildMapRead(MapType map, Expression reader, Type targetClrType)
     {
         Type elementType;
@@ -132,6 +137,7 @@ internal static class PocoReadExpressionFactory
 
     // ((ITypedReader<clrType>)type).ReadValue(reader) — result typed exactly clrType, no box. Invariance in T
     // enforces an exact-CLR match, mirroring the write side's ITypedWriter<T> dispatch.
+    [RequiresDynamicCode("Closes generic types and methods over the column's CLR types.")]
     private static Expression TryBuildTypedRead(ClickHouseType type, Expression reader, Type clrType)
     {
         var readerInterface = typeof(ITypedReader<>).MakeGenericType(clrType);

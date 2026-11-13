@@ -30,7 +30,7 @@ internal class QBitType : ParameterizedType
 
     public int Dimension { get; set; }
 
-    public override Type FrameworkType => ElementType.FrameworkType.MakeArrayType();
+    public override Type FrameworkType => ClrTypes.MakeArrayType(ElementType.FrameworkType);
 
     public override string Name => "QBit";
 
@@ -53,7 +53,7 @@ internal class QBitType : ParameterizedType
     {
         // QBit wire format is Array(UnderlyingType)
         var length = reader.Read7BitEncodedInt();
-        var data = Array.CreateInstance(ElementType.FrameworkType, Dimension);
+        var data = ClrTypes.CreateArray(ElementType.FrameworkType, Dimension);
         for (var i = 0; i < length; i++)
         {
             var value = ElementType.Read(reader);

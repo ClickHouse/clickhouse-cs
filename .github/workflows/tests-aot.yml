@@ -1,0 +1,57 @@
+name: Native AOT
+
+# Publishes ClickHouse.Driver.AotSmokeTest as a native AOT binary and runs it against a server. The publish
+# treats trim and AOT warnings as errors, so it fails on driver code that is not trim-safe before a check runs;
+# the binary then checks reads, inserts, POCO mapping and parameters under native AOT.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: false
+        type: string
+
+jobs:
+  aot:
+    name: Native AOT smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:latest
+        ports:
+          - 8123:8123
+        env:
+          CLICKHOUSE_SKIP_USER_SETUP: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/cache@v6
+        name: Cache NuGet
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-aot-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Setup .NET Core
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            10.x
+
+      # The native AOT toolchain links with clang and needs zlib's headers (https://aka.ms/nativeaot-prerequisites)
+      - name: Install native AOT prerequisites
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+
+      - name: Publish
+        run: dotnet publish ClickHouse.Driver.AotSmokeTest/ClickHouse.Driver.AotSmokeTest.csproj --configuration Release --runtime linux-x64 --output artifacts/aot
+
+      - name: Run
+        run: artifacts/aot/ClickHouse.Driver.AotSmokeTest
+        env:
+          CLICKHOUSE_CONNECTION: Host=localhost;Port=8123

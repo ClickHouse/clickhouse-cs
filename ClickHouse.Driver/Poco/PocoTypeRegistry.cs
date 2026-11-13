@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Formats;
@@ -42,7 +45,7 @@ internal sealed class PocoTypeRegistry
     /// <summary>
     /// Registers a POCO type for binary insert. Idempotent and thread-safe.
     /// </summary>
-    internal void RegisterForInsert<T>(ILogger logger = null)
+    internal void RegisterForInsert<[DynamicallyAccessedMembers(PocoMembers.Insert)] T>(ILogger logger = null)
         where T : class
         => insertMappings.GetOrAdd(typeof(T), _ => BuildInsertMapping<T>(logger));
 
@@ -51,7 +54,7 @@ internal sealed class PocoTypeRegistry
     /// validated up front; if either validation throws, neither mapping is committed, so the
     /// registry is left in its prior state.
     /// </summary>
-    internal void RegisterForBoth<T>(ILogger logger = null)
+    internal void RegisterForBoth<[DynamicallyAccessedMembers(PocoMembers.Read)] T>(ILogger logger = null)
         where T : class
     {
         var type = typeof(T);
@@ -116,17 +119,17 @@ internal sealed class PocoTypeRegistry
         where T : class
     {
         var writers = new Action<T, ExtendedBinaryWriter>[properties.Length];
-        var rowParam = Expression.Parameter(typeof(T), "row");
-        var writerParam = Expression.Parameter(typeof(ExtendedBinaryWriter), "writer");
 
         for (var i = 0; i < properties.Length; i++)
         {
-            var propertyAccess = Expression.Property(rowParam, properties[i].Property);
-            var body = PocoWriteExpressionFactory.TryBuildWriteBody(types[i], propertyAccess, writerParam);
+            // The box-free writers are compiled expression trees, which native AOT would only interpret
+            var typedWriter = RuntimeFeature.IsDynamicCodeSupported
+                ? TryBuildTypedWriter<T>(properties[i], types[i])
+                : null;
 
-            if (body != null)
+            if (typedWriter != null)
             {
-                writers[i] = Expression.Lambda<Action<T, ExtendedBinaryWriter>>(body, rowParam, writerParam).Compile();
+                writers[i] = typedWriter;
             }
             else
             {
@@ -140,6 +143,16 @@ internal sealed class PocoTypeRegistry
         }
 
         return writers;
+    }
+
+    [UnconditionalSuppressMessage("AotAnalysis", "IL3050", Justification = "Called only when dynamic code is supported.")]
+    private static Action<T, ExtendedBinaryWriter> TryBuildTypedWriter<T>(PocoPropertyInfo property, ClickHouseType type)
+    {
+        var rowParam = Expression.Parameter(typeof(T), "row");
+        var writerParam = Expression.Parameter(typeof(ExtendedBinaryWriter), "writer");
+        var propertyAccess = Expression.Property(rowParam, property.Property);
+        var body = PocoWriteExpressionFactory.TryBuildWriteBody(type, propertyAccess, writerParam);
+        return body == null ? null : Expression.Lambda<Action<T, ExtendedBinaryWriter>>(body, rowParam, writerParam).Compile();
     }
 
     /// <summary>
@@ -202,11 +215,6 @@ internal sealed class PocoTypeRegistry
         where T : class
     {
         var readers = new RowColumnReader<T>[types.Length];
-        var readerParam = Expression.Parameter(typeof(ExtendedBinaryReader), "reader");
-        var instanceParam = Expression.Parameter(typeof(T), "instance");
-        var converterParam = Expression.Parameter(typeof(IReadValueConverter), "converter");
-        var typeNamesParam = Expression.Parameter(typeof(string[]), "columnTypeNames");
-        var parameters = new[] { readerParam, instanceParam, converterParam, typeNamesParam };
 
         for (var i = 0; i < types.Length; i++)
         {
@@ -222,26 +230,14 @@ internal sealed class PocoTypeRegistry
                 continue;
             }
 
-            var propertyType = binding.PropInfo.PropertyType;
-            var readBody = PocoReadExpressionFactory.TryBuildReadBody(type, readerParam, propertyType);
-            if (readBody != null)
-            {
-                // A typed read yields the property's exact CLR type, so it converts through the typed
-                // ConvertValue<T> — the same overload GetFieldValue<T> uses for a typed read. Exact-typed by
-                // construction, so no runtime assignability check is needed.
-                Expression value = readBody;
-                if (withConverter)
-                {
-                    value = Expression.Call(
-                        converterParam,
-                        ConvertValueTypedMethod.MakeGenericMethod(propertyType),
-                        readBody,
-                        Expression.Constant(fieldNames[i]),
-                        Expression.ArrayIndex(typeNamesParam, Expression.Constant(i)));
-                }
+            // The box-free readers are compiled expression trees, which native AOT would only interpret
+            var typedReader = RuntimeFeature.IsDynamicCodeSupported
+                ? TryBuildTypedRowReader(type, binding, fieldNames[i], i, withConverter)
+                : null;
 
-                var assign = Expression.Assign(Expression.Property(instanceParam, binding.PropInfo.Property), value);
-                readers[i] = Expression.Lambda<RowColumnReader<T>>(assign, parameters).Compile();
+            if (typedReader != null)
+            {
+                readers[i] = typedReader;
             }
             else
             {
@@ -260,6 +256,40 @@ internal sealed class PocoTypeRegistry
         }
 
         return readers;
+    }
+
+    [UnconditionalSuppressMessage("AotAnalysis", "IL3050", Justification = "Called only when dynamic code is supported.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2060", Justification = "IReadValueConverter.ConvertValue<T> has no DynamicallyAccessedMembers requirements.")]
+    private static RowColumnReader<T> TryBuildTypedRowReader<T>(
+        ClickHouseType type, ColumnBinding<T> binding, string fieldName, int ordinal, bool withConverter)
+        where T : class
+    {
+        var readerParam = Expression.Parameter(typeof(ExtendedBinaryReader), "reader");
+        var instanceParam = Expression.Parameter(typeof(T), "instance");
+        var converterParam = Expression.Parameter(typeof(IReadValueConverter), "converter");
+        var typeNamesParam = Expression.Parameter(typeof(string[]), "columnTypeNames");
+
+        var propertyType = binding.PropInfo.PropertyType;
+        var readBody = PocoReadExpressionFactory.TryBuildReadBody(type, readerParam, propertyType);
+        if (readBody == null)
+            return null;
+
+        // A typed read yields the property's exact CLR type, so it converts through the typed
+        // ConvertValue<T> — the same overload GetFieldValue<T> uses for a typed read. Exact-typed by
+        // construction, so no runtime assignability check is needed.
+        Expression value = readBody;
+        if (withConverter)
+        {
+            value = Expression.Call(
+                converterParam,
+                ConvertValueTypedMethod.MakeGenericMethod(propertyType),
+                readBody,
+                Expression.Constant(fieldName),
+                Expression.ArrayIndex(typeNamesParam, Expression.Constant(ordinal)));
+        }
+
+        var assign = Expression.Assign(Expression.Property(instanceParam, binding.PropInfo.Property), value);
+        return Expression.Lambda<RowColumnReader<T>>(assign, readerParam, instanceParam, converterParam, typeNamesParam).Compile();
     }
 
     // Boxed fallback for a single column, replicating MapTo<T>'s per-column assignment. The value is boxed
@@ -303,7 +333,7 @@ internal sealed class PocoTypeRegistry
         };
     }
 
-    private static PocoInsertMapping<T> BuildInsertMapping<T>(ILogger logger)
+    private static PocoInsertMapping<T> BuildInsertMapping<[DynamicallyAccessedMembers(PocoMembers.Insert)] T>(ILogger logger)
         where T : class
     {
         var type = typeof(T);
@@ -367,7 +397,7 @@ internal sealed class PocoTypeRegistry
         };
     }
 
-    private static PocoReadMapping<T> BuildReadMapping<T>(ILogger logger)
+    private static PocoReadMapping<T> BuildReadMapping<[DynamicallyAccessedMembers(PocoMembers.Read)] T>(ILogger logger)
         where T : class
     {
         var type = typeof(T);
@@ -535,8 +565,13 @@ internal sealed class PocoTypeRegistry
             skipped.Count == 0 ? "none" : string.Join(", ", skipped));
     }
 
+    // Native AOT would interpret these expression trees, so there the accessors call through reflection,
+    // which the DynamicallyAccessedMembers annotations on T keep working.
     private static Func<T, object> CompileGetter<T>(PropertyInfo property)
     {
+        if (!RuntimeFeature.IsDynamicCodeSupported)
+            return instance => property.GetValue(instance);
+
         var param = Expression.Parameter(typeof(T), "instance");
         var access = Expression.Property(param, property);
         var box = Expression.Convert(access, typeof(object));
@@ -546,6 +581,12 @@ internal sealed class PocoTypeRegistry
 
     private static Action<T, object> CompileSetter<T>(PropertyInfo property)
     {
+        if (!RuntimeFeature.IsDynamicCodeSupported)
+        {
+            var propertyType = property.PropertyType;
+            return (instance, value) => property.SetValue(instance, value is null ? null : Unbox(value, propertyType));
+        }
+
         var instance = Expression.Parameter(typeof(T), "instance");
         var value = Expression.Parameter(typeof(object), "value");
         var typedValue = Expression.Convert(value, property.PropertyType);
@@ -554,7 +595,27 @@ internal sealed class PocoTypeRegistry
         return lambda.Compile();
     }
 
+    // Accepts what the compiled setter's unboxing conversion accepts, and nothing more: the exact type (or T for a
+    // Nullable<T> property), or an enum and its underlying integral type in either direction. Reflection alone
+    // would widen a primitive, or throw ArgumentException where callers expect InvalidCastException.
+    private static object Unbox(object value, Type propertyType)
+    {
+        if (propertyType.IsInstanceOfType(value))
+            return value;
+
+        var target = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
+        var source = value.GetType();
+        if ((target.IsEnum || source.IsEnum) && UnderlyingOf(source) == UnderlyingOf(target))
+            return target.IsEnum ? Enum.ToObject(target, value) : Convert.ChangeType(value, target, CultureInfo.InvariantCulture);
+
+        throw new InvalidCastException($"Unable to cast object of type '{source}' to type '{propertyType}'.");
+    }
+
+    private static Type UnderlyingOf(Type type) => type.IsEnum ? Enum.GetUnderlyingType(type) : type;
+
     private static Func<T> CompileConstructor<T>(ConstructorInfo ctor)
         where T : class
-        => Expression.Lambda<Func<T>>(Expression.New(ctor)).Compile();
+        => RuntimeFeature.IsDynamicCodeSupported
+            ? Expression.Lambda<Func<T>>(Expression.New(ctor)).Compile()
+            : () => (T)ctor.Invoke(null);
 }

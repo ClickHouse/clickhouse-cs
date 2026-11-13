@@ -4,8 +4,8 @@ using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Text.Json;
 using ClickHouse.Driver.ADO.Parameters;
+using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
@@ -203,7 +203,7 @@ internal static class HttpParameterFormatter
                 if (value is string jsonString)
                     return jsonString;
                 else
-                    return JsonSerializer.Serialize(value);
+                    return ReflectionJson.Serialize(value);
 
             default:
                 var valueTypeName = value?.GetType().FullName ?? "null";

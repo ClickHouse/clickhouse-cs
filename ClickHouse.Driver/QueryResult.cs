@@ -48,12 +48,6 @@ internal class QueryResult
             return null;
     }
 
-    private static readonly JsonSerializerOptions SummarySerializerOptions = new JsonSerializerOptions
-    {
-        PropertyNamingPolicy = new SnakeCaseNamingPolicy(),
-        NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString,
-    };
-
     private static QueryStats ExtractQueryStats(HttpResponseMessage response)
     {
         try
@@ -61,7 +55,7 @@ internal class QueryResult
             const string summaryHeader = "X-ClickHouse-Summary";
             if (response.Headers.TryGetValues(summaryHeader, out var values))
             {
-                return JsonSerializer.Deserialize<QueryStats>(values.First(), SummarySerializerOptions);
+                return JsonSerializer.Deserialize(values.First(), DriverJsonContext.Default.QueryStats);
             }
         }
         catch

@@ -10,7 +10,7 @@ internal class NestedType : TupleType
 {
     public override string Name => "Nested";
 
-    public override Type FrameworkType => base.FrameworkType.MakeArrayType();
+    public override Type FrameworkType => ClrTypes.MakeArrayType(base.FrameworkType);
 
     public override ParameterizedType Parse(SyntaxTreeNode node, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings)
     {
@@ -34,10 +34,31 @@ internal class NestedType : TupleType
         return lastSpaceIndex > 0 ? new SyntaxTreeNode { Value = name.Substring(lastSpaceIndex + 1) } : node;
     }
 
+    /// <summary>
+    /// A Nested value is an array of its tuples: an array of the exact framework type, each of whose elements fits
+    /// the tuple when the tuple's runtime type does not identify it (see <see cref="TupleType.CanWrite"/>).
+    /// </summary>
+    public override bool CanWrite(object value)
+    {
+        if (value is not Array { Rank: 1 } array || array.GetType() != FrameworkType)
+            return false;
+
+        if (ElementsIdentifyTuple)
+            return true;
+
+        foreach (var element in array)
+        {
+            if (!TupleFits(element))
+                return false;
+        }
+
+        return true;
+    }
+
     public override object Read(ExtendedBinaryReader reader)
     {
         var length = reader.Read7BitEncodedInt();
-        var data = Array.CreateInstance(base.FrameworkType, length);
+        var data = ClrTypes.CreateArray(base.FrameworkType, length);
         for (var i = 0; i < length; i++)
         {
             data.SetValue(ClearDBNull(base.Read(reader)), i);

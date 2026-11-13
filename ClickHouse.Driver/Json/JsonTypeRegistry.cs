@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Numerics;
 using System.Reflection;
@@ -23,6 +24,14 @@ internal sealed class JsonTypeRegistry
     private readonly ConcurrentDictionary<Type, JsonPropertyInfo[]> registeredTypes = new();
 
     /// <summary>
+    /// Why registration is not trim-safe: a property's type is registered too, and the trimmer does not
+    /// keep that type's properties.
+    /// </summary>
+    internal const string NestedTypesWarning =
+        "A property whose type is another object is serialized through that type's properties, which " +
+        "trimming can remove. Register each such nested type with RegisterJsonSerializationType too.";
+
+    /// <summary>
     /// Registers a POCO type for JSON/Dynamic serialization.
     /// Validates that all properties can be mapped to ClickHouse types.
     /// </summary>
@@ -30,7 +39,8 @@ internal sealed class JsonTypeRegistry
     /// <exception cref="ClickHouseJsonSerializationException">
     /// Thrown if any property type cannot be mapped to a ClickHouse type.
     /// </exception>
-    internal void RegisterType<T>()
+    [RequiresUnreferencedCode(NestedTypesWarning)]
+    internal void RegisterType<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>()
     where T : class
         => this.RegisterType(typeof(T));
 
@@ -43,7 +53,8 @@ internal sealed class JsonTypeRegistry
     /// <exception cref="ClickHouseJsonSerializationException">
     /// Thrown if any property type cannot be mapped to a ClickHouse type.
     /// </exception>
-    internal void RegisterType(Type type)
+    [RequiresUnreferencedCode(NestedTypesWarning)]
+    internal void RegisterType([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type type)
     {
         if (type == null)
             throw new ArgumentNullException(nameof(type));
@@ -67,7 +78,8 @@ internal sealed class JsonTypeRegistry
     /// </summary>
     /// <param name="type">The type to build property info for.</param>
     /// <param name="typesBeingRegistered">Set of types currently being registered in this call chain.</param>
-    private void BuildPropertyInfo(Type type, HashSet<Type> typesBeingRegistered)
+    [RequiresUnreferencedCode(NestedTypesWarning)]
+    private void BuildPropertyInfo([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type type, HashSet<Type> typesBeingRegistered)
     {
         // Track this type to prevent infinite recursion from circular references
         if (!typesBeingRegistered.Add(type))

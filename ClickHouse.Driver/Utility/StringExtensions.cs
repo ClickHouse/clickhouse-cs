@@ -122,19 +122,4 @@ internal static class StringExtensions
 
         return str.IndexOf(' ', i);
     }
-
-    public static string ToSnakeCase(this string str)
-    {
-        var result = new StringBuilder();
-        for (int i = 0; i < str.Length; i++)
-        {
-            if (char.IsUpper(str[i]) && i > 0)
-            {
-                result.Append('_');
-            }
-            result.Append(char.ToLower(str[i], System.Globalization.CultureInfo.InvariantCulture));
-        }
-
-        return result.ToString();
-    }
 }

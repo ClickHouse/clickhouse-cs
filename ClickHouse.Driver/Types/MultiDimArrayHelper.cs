@@ -254,11 +254,21 @@ internal static class MultiDimArrayHelper
             if (dims[i] == -1) dims[i] = 0;
         }
 
-        var result = Array.CreateInstance(elementType, dims);
+        var result = CreateMultidimensional(targetType, dims);
         var indices = new int[rank];
         CopyJaggedToMultidim(jagged, result, indices, depth: 0, rank: rank);
         return (T)(object)result;
     }
+
+    // T names the array type, so native AOT has compiled it.
+#if NET9_0_OR_GREATER
+    private static Array CreateMultidimensional(Type arrayType, int[] lengths) =>
+        Array.CreateInstanceFromArrayType(arrayType, lengths);
+#else
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("AotAnalysis", "IL3050", Justification = "The array type is a type argument the caller named.")]
+    private static Array CreateMultidimensional(Type arrayType, int[] lengths) =>
+        Array.CreateInstance(arrayType.GetElementType()!, lengths);
+#endif
 
     private static void MeasureRectangular(object level, int[] dims, int depth, int rank)
     {

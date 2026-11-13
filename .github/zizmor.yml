@@ -30,6 +30,7 @@ rules:
       - benchmark-compare.yml
       - examples.yml
       - docs_verify.yml
+      - tests-aot.yml
 
   # docs_sync.yml uses pull_request_target with types: [closed], so it runs
   # after a merge and checks out the base ref or a release tag. It never checks

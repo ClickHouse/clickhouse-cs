@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
 using System.Net;
@@ -287,6 +288,11 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     public override double GetDouble(int ordinal) => GetTypedValue<double>(ordinal);
 
+    // DbDataReader annotates its return value, so the override has to match. The type is a column's
+    // framework type, built by the driver, not one whose members the trimmer can be told to keep: a caller that
+    // reflects over its public fields or properties sees only those the app itself keeps.
+    [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicProperties)]
+    [UnconditionalSuppressMessage("Trimming", "IL2073", Justification = "See the comment above.")]
     public override Type GetFieldType(int ordinal)
     {
         var rawType = RawTypes[ordinal];

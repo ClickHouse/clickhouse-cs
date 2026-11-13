@@ -21,9 +21,56 @@ internal class ArrayType : ParameterizedType
     // ArrayTypeWriteTests.TypedWriters_CoverEveryValueTypeTypedWriteTarget checks.
     private static readonly Dictionary<Type, Func<ClickHouseType, ExtendedBinaryWriter, Array, bool>> TypedWriters = BuildTypedWriters();
 
-    public ClickHouseType UnderlyingType { get; set; }
+    private ClickHouseType underlyingType;
 
-    public override Type FrameworkType => UnderlyingType.FrameworkType.MakeArrayType();
+    // See ElementsIdentifyArray: 0 until first read, then 1 (true) or 2 (false).
+    private int elementsIdentifyArray;
+
+    public ClickHouseType UnderlyingType
+    {
+        get => underlyingType;
+        set
+        {
+            underlyingType = value;
+            elementsIdentifyArray = 0;
+        }
+    }
+
+    // Computed on first use, by CanWrite only: reading a Dynamic value builds a new type per value.
+    private bool ElementsIdentifyArray
+    {
+        get
+        {
+            var state = elementsIdentifyArray;
+            if (state == 0)
+                elementsIdentifyArray = state = ValueFit.IdentifiedByFrameworkType(underlyingType) ? 1 : 2;
+            return state == 1;
+        }
+    }
+
+    public override Type FrameworkType => ClrTypes.MakeArrayType(UnderlyingType.FrameworkType);
+
+    /// <summary>
+    /// A Variant member is selected by <see cref="CanWrite"/>. An array of the exact framework type is enough
+    /// unless that type is shared by several element types (see <see cref="ValueFit.IdentifiedByFrameworkType"/>):
+    /// then each element must also fit.
+    /// </summary>
+    public override bool CanWrite(object value)
+    {
+        if (!base.CanWrite(value))
+            return false;
+
+        if (ElementsIdentifyArray)
+            return true;
+
+        foreach (var element in (Array)value)
+        {
+            if (!ValueFit.Fits(UnderlyingType, element))
+                return false;
+        }
+
+        return true;
+    }
 
     public override string Name => "Array";
 
@@ -51,7 +98,7 @@ internal class ArrayType : ParameterizedType
             return typedReader(UnderlyingType, reader, length);
 
         // Fallback: reflection-based read for element types without a typed reader.
-        var data = Array.CreateInstance(elementType, length);
+        var data = ClrTypes.CreateArray(elementType, length);
         for (var i = 0; i < length; i++)
         {
             data.SetValue(ClearDBNull(UnderlyingType.Read(reader)), i);

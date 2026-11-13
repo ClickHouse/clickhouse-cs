@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text;
 using ClickHouse.Driver.ADO;
@@ -14,6 +15,9 @@ internal static class SchemaDescriber
 {
     private static readonly string[] ColumnsRestrictionNames = ["database", "table"];
 
+    // The DataType column is typed System.Type, so DataColumnCollection.Add asks the trimmer to keep System.Type's
+    // public properties, which reaches the annotated Type.TypeInitializer. The column only stores Type values.
+    [UnconditionalSuppressMessage("Trimming", "IL2111", Justification = "See the comment above.")]
     public static DataTable DescribeSchema(this ClickHouseDataReader reader)
     {
         var table = new DataTable();

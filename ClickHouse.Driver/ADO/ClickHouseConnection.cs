@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Logging;
+using ClickHouse.Driver.Poco;
 using ClickHouse.Driver.Utility;
 using Microsoft.Extensions.Logging;
 
@@ -275,7 +277,7 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <see cref="Readers.ClickHouseDataReader.MapTo{T}"/>.
     /// </summary>
     /// <typeparam name="T">The POCO type to register.</typeparam>
-    public void RegisterPocoType<T>()
+    public void RegisterPocoType<[DynamicallyAccessedMembers(PocoMembers.Read)] T>()
         where T : class
         => ClickHouseClient.RegisterPocoType<T>();
 

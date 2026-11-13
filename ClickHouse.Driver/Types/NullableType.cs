@@ -13,7 +13,7 @@ internal class NullableType : ParameterizedType
         get
         {
             var underlyingFrameworkType = UnderlyingType.FrameworkType;
-            return underlyingFrameworkType.IsValueType ? typeof(Nullable<>).MakeGenericType(underlyingFrameworkType) : underlyingFrameworkType;
+            return underlyingFrameworkType.IsValueType ? ClrTypes.MakeNullable(underlyingFrameworkType) : underlyingFrameworkType;
         }
     }
 
@@ -26,6 +26,9 @@ internal class NullableType : ParameterizedType
             UnderlyingType = parseClickHouseTypeFunc(node.SingleChild),
         };
     }
+
+    // Reached only for a Nullable inside a composite Variant member: a Variant cannot hold a Nullable itself.
+    public override bool CanWrite(object value) => value is null or DBNull || UnderlyingType.CanWrite(value);
 
     public override object Read(ExtendedBinaryReader reader) => reader.ReadByte() > 0 ? DBNull.Value : UnderlyingType.Read(reader);
 
