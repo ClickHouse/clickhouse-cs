@@ -324,6 +324,93 @@ public class ClickHouseRawResultDecompressionTests
         Assert.Throws<ObjectDisposedException>(() => decoder.ReadByte(), "the raw result owns the decoder it created");
     }
 
+    /// <summary>
+    /// A response carrying <c>X-ClickHouse-Exception-Tag</c> — sent whenever
+    /// <c>http_write_exception_in_output_format</c> is on, i.e. on every response of such a query, failing or
+    /// not. It engages the in-band exception scanner, and with it the single-consumption bookkeeping the
+    /// verbatim members already do, which the tests below extend to the decoding member.
+    /// </summary>
+    private static HttpResponseMessage CreateTaggedStreamedResponse(byte[] body, string contentEncoding)
+    {
+        var response = CreateStreamedResponse(body, contentEncoding);
+        response.Headers.Add("X-ClickHouse-Exception-Tag", "PU1FNUFH98");
+        return response;
+    }
+
+    [Test]
+    public async Task ReadDecompressedStreamAsync_OnATaggedResponse_AfterAPartialVerbatimRead_ThrowsLikeConsumedContent()
+    {
+        // With the scanner engaged, a verbatim read marks the content stream consumed. Decoding it from
+        // there would start mid-frame, so this must fail the same way the re-materializing members do —
+        // rather than surfacing a decoder-internal error, or worse a short body.
+        using var response = CreateTaggedStreamedResponse(Lz4Encoded(), "lz4");
+        using var raw = new ClickHouseRawResult(response);
+
+        (await raw.ReadAsStreamAsync()).ReadByte();
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => raw.ReadDecompressedStreamAsync());
+    }
+
+    [Test]
+    public async Task ReadAsByteArrayAsync_OnATaggedResponse_AfterAPartialDecode_ThrowsRatherThanTruncating()
+    {
+        // The mirror image: the decoding member consumes the content stream too (and reads ahead), so a
+        // member that has to re-materialize the whole body afterwards must fail loudly instead of caching
+        // whatever bytes are left.
+        using var response = CreateTaggedStreamedResponse(Lz4Encoded(), "lz4");
+        using var raw = new ClickHouseRawResult(response);
+
+        Assert.That((await raw.ReadDecompressedStreamAsync()).ReadByte(), Is.EqualTo(Plaintext[0]));
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => raw.ReadAsByteArrayAsync());
+    }
+
+    [Test]
+    public async Task ReadDecompressedStreamAsync_OnATaggedResponse_AfterABufferingMember_StillSeesTheWholeBody()
+    {
+        // A buffering member on the tagged path caches the body itself — still encoded, since it hands the
+        // wire bytes over verbatim — so the decode must run over that buffer rather than the content stream
+        // it drained.
+        using var response = CreateTaggedStreamedResponse(Lz4Encoded(), "lz4");
+        using var raw = new ClickHouseRawResult(response);
+
+        Assert.That(await raw.ReadAsByteArrayAsync(), Is.EqualTo(Lz4Encoded()));
+
+        using var buffer = new MemoryStream();
+        await (await raw.ReadDecompressedStreamAsync()).CopyToAsync(buffer);
+
+        Assert.That(buffer.ToArray(), Is.EqualTo(Plaintext));
+    }
+
+    [Test]
+    public async Task ReadDecompressedStreamAsync_OnATaggedResponse_WithUnsupportedCodec_LeavesTheBodyReadable()
+    {
+        // The undecodable-codec throw hands nothing out, so — exactly as on an untagged response — it must
+        // not mark the content consumed and lock the other members out of a body that is still whole.
+        // snappy, not zstd: zstd became decodable when the vendored ZstdSharp codec landed.
+        var compressed = Lz4Encoded();
+        using var response = CreateTaggedStreamedResponse(compressed, "snappy");
+        using var raw = new ClickHouseRawResult(response);
+
+        Assert.ThrowsAsync<NotSupportedException>(() => raw.ReadDecompressedStreamAsync());
+
+        Assert.That(await raw.ReadAsByteArrayAsync(), Is.EqualTo(compressed));
+    }
+
+    [Test]
+    public async Task ReadDecompressedStreamAsync_OnATaggedResponse_CalledTwice_ReturnsTheSameStream()
+    {
+        // Repeat calls must hand back the same scanner: a fresh one would have observed nothing, so the
+        // marker recorded so far — the whole point of the wrapper — would be lost.
+        using var response = CreateTaggedStreamedResponse(Lz4Encoded(), "lz4");
+        using var raw = new ClickHouseRawResult(response);
+
+        var first = await raw.ReadDecompressedStreamAsync();
+        var second = await raw.ReadDecompressedStreamAsync();
+
+        Assert.That(second, Is.SameAs(first));
+    }
+
     [Test]
     public async Task RawResultDispose_AfterTheCallerAlreadyDisposedTheDecoder_IsHarmless()
     {
