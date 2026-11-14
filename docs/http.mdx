@@ -81,6 +81,8 @@ There are two ways of configuring your connection to ClickHouse:
 
 Below is a full list of all the settings, their default values, and their effects.
 
+In a connection string, a `bool` key accepts `true`, `false` (in any case), `1`, or `0`, and an enum key accepts a member name of its enum type (in any case). A value that the client cannot read, such as `Compression=yes` or `Port=abc`, throws an `ArgumentException` that names the key. The client ignores keys that it does not know.
+
 ### Connection settings {#connection-settings}
 
 | Property | Type | Default | Connection String Key | Description |
