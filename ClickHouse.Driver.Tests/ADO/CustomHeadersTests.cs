@@ -1,17 +1,12 @@
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Tests.Utilities;
 using ClickHouse.Driver.Utility;
-using Newtonsoft.Json.Linq;
-using NSubstitute;
-using NSubstitute.ClearExtensions;
-using NUnit.Framework;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
-using static ICSharpCode.SharpZipLib.Zip.FastZip;
 
 namespace ClickHouse.Driver.Tests.ADO;
 
