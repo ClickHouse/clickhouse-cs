@@ -1,3 +1,7 @@
+# Communication style
+
+- Follow ASD-STE100
+
 # ClickHouse.Driver Development Guide
 
 This file has the rules for the whole repository. Each client, and the examples, has a second file
