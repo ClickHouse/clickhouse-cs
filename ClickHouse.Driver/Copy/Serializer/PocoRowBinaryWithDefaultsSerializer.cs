@@ -5,7 +5,7 @@ using ClickHouse.Driver.Types;
 
 namespace ClickHouse.Driver.Copy.Serializer;
 
-// https://clickhouse.com/docs/en/interfaces/formats#rowbinarywithdefaults
+// https://clickhouse.com/docs/reference/formats/RowBinary/RowBinaryWithDefaults
 internal class PocoRowBinaryWithDefaultsSerializer : IPocoRowSerializer
 {
     public void Serialize<T>(T row, Func<T, object>[] getters, ClickHouseType[] types, ExtendedBinaryWriter writer)

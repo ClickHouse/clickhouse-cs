@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
@@ -55,6 +56,29 @@ public class ClickHouseOldDecimalSqlTests
         var result = reader.GetEnsureSingleRow().Single();
         ClassicAssert.IsInstanceOf<decimal>(result);
         Assert.That(result, Is.EqualTo(expected));
+    }
+
+    // Values System.Decimal holds exactly, stored with a scale above 28 or a mantissa wider than 96 bits.
+    [TestCase("SELECT toDecimal128('0.5', 38)", "0.5")]
+    [TestCase("SELECT toDecimal128('-79228162514264337593543950335', 9)", "-79228162514264337593543950335")]
+    public async Task Select_WideDecimalRepresentableAsSystemDecimal_ReturnsExactValue(string sql, string expected)
+    {
+        using var reader = await connection.ExecuteReaderAsync(sql);
+        var result = reader.GetEnsureSingleRow().Single();
+        Assert.That(result, Is.TypeOf<decimal>().And.EqualTo(decimal.Parse(expected, CultureInfo.InvariantCulture)));
+    }
+
+    // More than 28 significant fractional digits: System.Decimal cannot hold the value without
+    // rounding, so the read must fail rather than lose digits.
+    [TestCase("SELECT toDecimal128('0.1234567890123456789012345678901', 31)")]
+    [TestCase("SELECT toDecimal128('0.0000000000000000000000000000001', 31)")]
+    public void Select_DecimalNotRepresentableAsSystemDecimal_ThrowsOverflowException(string sql)
+    {
+        Assert.ThrowsAsync<OverflowException>(async () =>
+        {
+            using var reader = await connection.ExecuteReaderAsync(sql);
+            reader.GetEnsureSingleRow();
+        });
     }
 
     [OneTimeTearDown]

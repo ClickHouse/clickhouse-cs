@@ -45,7 +45,11 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     public override string CommandText { get; set; }
 
     /// <summary>
-    /// Gets or sets the command timeout in seconds. Not currently used by ClickHouse.
+    /// Gets or sets the command timeout in seconds. A positive value is sent as the
+    /// <c>max_execution_time</c> setting, and the server stops a query that runs longer.
+    /// Zero (the default) and negative values send nothing, so a limit set on the connection or
+    /// in the server profile still applies. A <c>max_execution_time</c> in
+    /// <see cref="CustomSettings"/> overrides this property. The client does not enforce this limit.
     /// </summary>
     public override int CommandTimeout { get; set; }
 
@@ -239,14 +243,23 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
 
     private QueryOptions BuildQueryOptions()
     {
+        var settings = customSettings?.Count > 0 ? customSettings : null;
+
         return new QueryOptions
         {
             QueryId = QueryId,
             BearerToken = BearerToken,
             Database = connection?.Database,
             Roles = roles?.Count > 0 ? roles : null,
-            CustomSettings = customSettings?.Count > 0 ? customSettings : null,
+            CustomSettings = settings,
             AcceptEncoding = AcceptEncoding,
+            MaxExecutionTime = GetMaxExecutionTime(settings),
         };
     }
+
+    // In ADO.NET, a CommandTimeout of 0 means "no limit".
+    private TimeSpan? GetMaxExecutionTime(IDictionary<string, object> settings) =>
+        CommandTimeout > 0 && settings?.ContainsKey("max_execution_time") != true
+            ? TimeSpan.FromSeconds(CommandTimeout)
+            : null;
 }

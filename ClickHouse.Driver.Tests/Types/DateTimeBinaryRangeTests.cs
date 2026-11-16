@@ -1,14 +1,16 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Tests.Attributes;
+using NodaTime;
 using NUnit.Framework.Interfaces;
 
 namespace ClickHouse.Driver.Tests.Types;
 
 /// <summary>
-/// End-to-end coverage of binary-insert range validation for Date / Date32 / DateTime.
+/// End-to-end coverage of binary-insert range validation for Date / Date32 / DateTime / DateTime64.
 /// Inserts via <c>InsertBinaryAsync</c> against a real ClickHouse server and asserts both round-trip
 /// at the canonical bounds and an <see cref="ArgumentOutOfRangeException"/> just outside them
 /// (wrapped by the bulk-copy serializer as the inner exception).
@@ -219,5 +221,76 @@ public class DateTimeBinaryRangeTests : AbstractConnectionTestFixture
             await client.InsertBinaryAsync(Date32Table, new[] { "d" }, new[] { new object[] { value } }));
 
         AssertRangeException(ex, "Date32");
+    }
+
+    // DateTime64: the wire value is an Int64 count of 10^-scale seconds since the epoch. Scales 8 and 9 are finer
+    // than a .NET tick, so they reach the Int64 limit inside the DateTime range.
+
+    private static readonly DateTime DateTime64NanoMin = new DateTime(1677, 9, 21, 0, 12, 43, DateTimeKind.Utc).AddTicks(1_452_242);
+    private static readonly DateTime DateTime64NanoMax = new DateTime(2262, 4, 11, 23, 47, 16, DateTimeKind.Utc).AddTicks(8_547_758);
+    private static readonly DateTime DateTime64ScaleEightMax = new DateTime(4892, 10, 7, 21, 52, 48, DateTimeKind.Utc).AddTicks(5_477_580);
+
+    // An Unspecified DateTime is read in the column timezone: Asia/Tokyo is UTC+9.
+    private static DateTime InTokyo(DateTime utc) => DateTime.SpecifyKind(utc.AddHours(9), DateTimeKind.Unspecified);
+
+    private const string DateTime64NanoRange = "(1677-09-21 00:12:43.1452242 UTC to 2262-04-11 23:47:16.8547758 UTC)";
+
+    // DateTime64(8) has no lower limit within the DateTime range.
+    private const string DateTime64ScaleEightRange = "(up to 4892-10-07 21:52:48.5477580 UTC)";
+
+    private static IEnumerable<TestCaseData> DateTime64AtInt64LimitCases()
+    {
+        yield return new TestCaseData("DateTime64(9, 'UTC')", DateTime64NanoMin, -9_223_372_036_854_775_800L).SetArgDisplayNames("9", "min");
+        yield return new TestCaseData("DateTime64(9, 'UTC')", DateTime64NanoMax, 9_223_372_036_854_775_800L).SetArgDisplayNames("9", "max");
+        yield return new TestCaseData("DateTime64(8, 'UTC')", DateTime64ScaleEightMax, 9_223_372_036_854_775_800L).SetArgDisplayNames("8", "max");
+        // The limit applies to the instant, not to the wall-clock time.
+        yield return new TestCaseData("DateTime64(9, 'UTC')", new DateTimeOffset(DateTime64NanoMax).ToOffset(TimeSpan.FromHours(1)), 9_223_372_036_854_775_800L)
+            .SetArgDisplayNames("9", "max at +01:00");
+        yield return new TestCaseData("DateTime64(9, 'Asia/Tokyo')", InTokyo(DateTime64NanoMax), 9_223_372_036_854_775_800L)
+            .SetArgDisplayNames("9 Asia/Tokyo", "max as Unspecified");
+    }
+
+    private static IEnumerable<TestCaseData> DateTime64PastInt64LimitCases()
+    {
+        yield return new TestCaseData("DateTime64(9, 'UTC')", DateTime64NanoMin.AddTicks(-1), DateTime64NanoRange).SetArgDisplayNames("9", "min - 1 tick");
+        yield return new TestCaseData("DateTime64(9, 'UTC')", DateTime64NanoMax.AddTicks(1), DateTime64NanoRange).SetArgDisplayNames("9", "max + 1 tick");
+        yield return new TestCaseData("DateTime64(8, 'UTC')", DateTime64ScaleEightMax.AddTicks(1), DateTime64ScaleEightRange).SetArgDisplayNames("8", "max + 1 tick");
+        yield return new TestCaseData("DateTime64(9, 'UTC')", new DateTimeOffset(DateTime64NanoMax.AddTicks(1)).ToOffset(TimeSpan.FromHours(-1)), DateTime64NanoRange)
+            .SetArgDisplayNames("9", "max + 1 tick at -01:00");
+        yield return new TestCaseData("DateTime64(9, 'Asia/Tokyo')", InTokyo(DateTime64NanoMax.AddTicks(1)), DateTime64NanoRange)
+            .SetArgDisplayNames("9 Asia/Tokyo", "max + 1 tick as Unspecified");
+        yield return new TestCaseData("DateTime64(9, 'UTC')", DateTime64NanoMax.AddTicks(1).ToLocalTime(), DateTime64NanoRange)
+            .SetArgDisplayNames("9", "max + 1 tick as Local");
+        yield return new TestCaseData("DateTime64(9, 'UTC')", Instant.FromDateTimeUtc(DateTime64NanoMax.AddTicks(1)), DateTime64NanoRange)
+            .SetArgDisplayNames("9", "max + 1 tick as Instant");
+        yield return new TestCaseData("DateTime64(9, 'UTC')", new DateOnly(1500, 6, 1), DateTime64NanoRange).SetArgDisplayNames("9", "DateOnly 1500-06-01");
+    }
+
+    [TestCaseSource(nameof(DateTime64AtInt64LimitCases))]
+    public async Task InsertBinaryAsync_DateTime64_AtInt64Limit_RoundTrips(string type, object value, long expectedCount)
+    {
+        var table = CreateTableName($"dt64_{type}");
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {table} (t {type}) ENGINE = Memory");
+
+        await client.InsertBinaryAsync(table, new[] { "t" }, new[] { new object[] { value } });
+
+        // The stored count, not toString(t): some supported servers (e.g. 26.3) render an instant before 1900 as 1900.
+        var actual = (long)await client.ExecuteScalarAsync($"SELECT reinterpretAsInt64(t) FROM {table}");
+        Assert.That(actual, Is.EqualTo(expectedCount));
+    }
+
+    [TestCaseSource(nameof(DateTime64PastInt64LimitCases))]
+    public async Task InsertBinaryAsync_DateTime64_PastInt64Limit_ThrowsArgumentOutOfRangeException(string type, object value, string expectedRange)
+    {
+        var table = CreateTableName($"dt64_{type}");
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {table} (t {type}) ENGINE = Memory");
+
+        var ex = Assert.ThrowsAsync<ClickHouseBulkCopySerializationException>(async () =>
+            await client.InsertBinaryAsync(table, new[] { "t" }, new[] { new object[] { value } }));
+
+        AssertRangeException(ex, type);
+        var inner = (ArgumentOutOfRangeException)ex!.InnerException!;
+        Assert.That(inner.Message, Does.Contain(expectedRange));
+        Assert.That(inner.ActualValue, Is.EqualTo(value));
     }
 }

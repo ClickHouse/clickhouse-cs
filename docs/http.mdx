@@ -1147,7 +1147,7 @@ Compression trades CPU for bytes. Whether that is a win depends almost entirely 
 link is relative to how fast the codec runs. There is no setting that is right for
 everyone.
 
-#### The one number that decides it
+#### The one number that decides it {#the-one-number-that-decides-it}
 
 Compressing is worth it as long as the codec is faster than the network.
 
@@ -1160,7 +1160,7 @@ inside one cloud region commonly exceeds that, while anything crossing the publi
 
 The insert path tolerates compression to higher link speeds, because your client compresses on a core of its own and is typically faster than the server's response compression.
 
-#### Rough guide by deployment
+#### Rough guide by deployment {#rough-guide-by-deployment}
 
 | Where your client runs | Typical bandwidth | Reads | Inserts |
 |---|---|---|---|
@@ -1181,7 +1181,7 @@ compressing well past the speed at which a single-threaded one stops being worth
 
 The read path only parallelizes across multiple queries.
 
-#### Choosing a codec
+#### Choosing a codec {#choosing-a-codec}
 
 | Codec | Ratio | Use it when | Watch out for |
 |---|---|---|---|
@@ -1190,7 +1190,7 @@ The read path only parallelizes across multiple queries.
 | `gzip` | medium | Interoperability — universally understood by proxies and gateways. | Dominated on every axis by both `lz4` and `zstd` in our measurements: larger than `zstd` while costing several times more CPU to encode and 5–9× more to decode. Choose it for compatibility, not performance. |
 | `br` | highest at low levels | Bandwidth is genuinely the binding constraint and you can spend CPU for it. | Cliffs badly at higher levels — at `http_zlib_compression_level=6` we measured it at 3–4× `zstd`'s server CPU. Not advertised by default, because it outranks every fallback token in the default list. |
 
-#### Levels
+#### Levels {#levels}
 
 Response compression is governed by a single server setting, `http_zlib_compression_level`, which applies to *every* HTTP codec, not just zlib. It defaults to 3.
 
@@ -1206,7 +1206,7 @@ using var reader = await client.ExecuteReaderAsync(
     });
 ```
 
-#### Measuring your own crossover
+#### Measuring your own crossover {#measuring-your-own-crossover}
 
 The quickest way to optimize your choice of codec and compression level is to time the same query at a few codecs and compare.
 
@@ -1365,6 +1365,22 @@ Command methods:
 - `ExecuteNonQueryAsync()` - For INSERT, UPDATE, DELETE, DDL statements
 - `ExecuteScalarAsync()` - Returns first column of first row
 - `ExecuteReaderAsync()` - Returns a `ClickHouseDataReader` for iterating results
+
+`CommandTimeout` is a server-side limit in seconds. A positive value is sent as the
+`max_execution_time` setting, and the server stops a query that runs longer. With the default
+`timeout_overflow_mode`, the command throws a `ClickHouseServerException` with error code 159
+(`TIMEOUT_EXCEEDED`).
+
+```csharp
+await using var command = connection.CreateCommand("SELECT count() FROM huge_table");
+command.CommandTimeout = 30; // seconds
+```
+
+- Zero (the default) and negative values send nothing. A `max_execution_time` set on the
+  connection or in the server profile still applies.
+- A `max_execution_time` in the command's `CustomSettings` overrides `CommandTimeout`.
+  `CommandTimeout` overrides a `max_execution_time` set on the connection.
+- The client does not enforce `CommandTimeout`.
 
 ---
 
@@ -1597,8 +1613,18 @@ await using var reader = await cmd3.ExecuteReaderAsync();
 | Decimal256(S) | `decimal` / `ClickHouseDecimal` |
 
 <Note>
-Decimal type conversion is controlled via the UseCustomDecimals setting.
+Decimal type conversion is controlled via the UseCustomDecimals setting. When a value is read as `decimal` (with `UseCustomDecimals=false`, or through `GetDecimal`), it keeps the scale of the column, so `7` in a `Decimal(18, 4)` column is returned as `7.0000m`. `decimal` holds at most 28 fractional digits and a 96-bit mantissa, so when a value does not fit at the column's scale, trailing zeros are dropped where necessary, and a value that still does not fit throws an `OverflowException`.
 </Note>
+
+##### ClickHouseDecimal operations {#type-map-reading-clickhousedecimal}
+
+`ClickHouseDecimal` (namespace `ClickHouse.Driver.Numerics`) keeps the value as a `BigInteger` mantissa and a scale. These members round toward zero:
+
+- `Truncate(precision)` removes digits from the end of the fractional part until at most `precision` significant digits remain, or until no fractional digits remain: `12.345` gives `12.3` for precision `3` and `12` for precision `1`.
+- `Truncate()` and conversion to `BigInteger` (`Convert.ChangeType(value, typeof(BigInteger))`) return the integer part: `0.1` gives `0`, and `-1.9` gives `-1`.
+- Division calculates at least `MaxDivisionPrecision` significant digits of the quotient (a static property, default `50`) and truncates the remaining digits: `1 / 3` gives `0.` followed by 50 digits `3`. It always keeps all digits of the integer part, also when there are more than `MaxDivisionPrecision`: `10^60 / 0.3` gives 61 digits `3`.
+
+`NumberOfDigits(BigInteger)` returns the number of decimal digits of the absolute value, and `0` for zero.
 
 ---
 
@@ -1742,7 +1768,7 @@ A JSON map key type other than exactly `String` — `Map(LowCardinality(String),
 example — throws `NotSupportedException`.
 </Note>
 
-##### Overlapping paths
+##### Overlapping paths {#overlapping-paths}
 
 ClickHouse accepts a column which declares a path both as a value and as the parent of another
 path, for example `JSON(a Int64, a.b Int64)`. Both paths are present in every row, so the server
@@ -1874,6 +1900,12 @@ When inserting data, the driver converts .NET types to their corresponding Click
 | Int256 | `BigInteger`, `decimal`, `double`, `float`, `int`, `uint`, `long`, `ulong`, any `Convert.ToInt64()` compatible | |
 | UInt256 | `BigInteger`, `decimal`, `double`, `float`, `int`, `uint`, `long`, `ulong`, any `Convert.ToInt64()` compatible | |
 
+<Note>
+When you write a `ClickHouseDecimal` to an `Int8`, `UInt8`, `Int16`, `UInt16`, `Int32`, `UInt32`, `Int64` or `UInt64` column, the driver drops the fractional part (it rounds toward zero). If the integer part is out of the range of the column type, the conversion throws `OverflowException`: `255.9` is stored as `255` in a `UInt8` column, and `256.5` is not written. `InsertBinaryAsync` reports this as a `ClickHouseBulkCopySerializationException` with the `OverflowException` as its `InnerException`.
+
+`Convert.ToSByte` through `Convert.ToUInt64` and `Convert.ChangeType` on a `ClickHouseDecimal` use the same rules. `Convert.ChangeType` to a type that has no conversion from `ClickHouseDecimal`, such as `Guid`, `TimeSpan`, an enum or a nullable type, throws `InvalidCastException`.
+</Note>
+
 ---
 
 #### Floating point types {#type-map-writing-floating-point}
@@ -1911,14 +1943,14 @@ When inserting data, the driver converts .NET types to their corresponding Click
 | Date32 | `DateTime`, `DateTimeOffset`, `DateOnly`, `string`, NodaTime types | Converted to Unix days as Int32; supported range `[1900-01-01, 2299-12-31]` |
 | DateTime | `DateTime`, `DateTimeOffset`, `DateOnly`, `string`, NodaTime types | See below for details; supported range `[1970-01-01, 2106-02-07 06:28:15]` UTC |
 | DateTime32 | `DateTime`, `DateTimeOffset`, `DateOnly`, `string`, NodaTime types | Same as DateTime |
-| DateTime64 | `DateTime`, `DateTimeOffset`, `DateOnly`, `string`, NodaTime types | Precision based on Scale parameter |
+| DateTime64 | `DateTime`, `DateTimeOffset`, `DateOnly`, `string`, NodaTime types | Precision based on Scale parameter; `DateTime64(9)` accepts `[1677-09-21 00:12:43.1452242, 2262-04-11 23:47:16.8547758]` UTC, `DateTime64(8)` accepts values up to `4892-10-07 21:52:48.5477580` UTC |
 | Time | `TimeSpan`, `TimeOnly`, `int` | Clamped to ±999:59:59; int treated as seconds |
 | Time64 | `TimeSpan`, `TimeOnly`, `decimal`, `double`, `float`, `int`, `long`, `string` | String parsed as `[-]HHH:MM:SS[.fraction]`; clamped to ±999:59:59.999999999 |
 
 <Note>
 **Out-of-range values**
 
-On the binary write path, `Date`, `Date32`, `DateTime`, and `DateTime32` values outside their supported range throw `ArgumentOutOfRangeException` at `Write` time, naming the column type and the supported range. Previously, out-of-range values could be silently truncated through a 32-bit integer and reinterpreted by the server, producing real-but-wrong timestamps.
+On the binary write path, `Date`, `Date32`, `DateTime`, and `DateTime32` values outside their supported range throw `ArgumentOutOfRangeException` at `Write` time, naming the column type and the supported range. `DateTime64(8)` and `DateTime64(9)` values whose count of sub-second units since the epoch does not fit in an Int64 throw the same exception. Previously, out-of-range values could be silently truncated through a 32-bit integer and reinterpreted by the server, producing real-but-wrong timestamps.
 </Note>
 
 The driver respects `DateTime.Kind` when writing values:
@@ -1994,6 +2026,10 @@ command.AddParameter("dt", myDateTime);
 | Decimal64 | `decimal`, `ClickHouseDecimal`, any `Convert.ToDecimal()` compatible | Max precision 18 |
 | Decimal128 | `decimal`, `ClickHouseDecimal`, any `Convert.ToDecimal()` compatible | Max precision 38 |
 | Decimal256 | `decimal`, `ClickHouseDecimal`, any `Convert.ToDecimal()` compatible | Max precision 76 |
+
+<Note>
+When you write a scalar `decimal` or `ClickHouseDecimal` to a `Dynamic` column, or to a `JSON` path without a type hint in `JsonWriteMode.Binary`, the driver selects the type from the value. It uses the narrowest of `Decimal32`, `Decimal64`, `Decimal128` and `Decimal256` that holds the integer digits and the scale of the value, with the largest scale that this width permits. The numeric value does not change, but the stored scale can be larger than the scale of the input: `1.2m`, `1.23m` and `1.2345m` are all stored as `Decimal(9, 8)`, and `12.34m` as `Decimal(9, 7)`. A value that needs more than 76 digits cannot be written.
+</Note>
 
 ---
 
@@ -2106,13 +2142,13 @@ Property name matching with column type hints is case-sensitive. A property `Use
 | IPv4 | `IPAddress`, `string` | Must be IPv4; string parsed via `IPAddress.Parse()` |
 | IPv6 | `IPAddress`, `string` | Must be IPv6; string parsed via `IPAddress.Parse()` |
 | Nothing | Any | Writes nothing (no-op) |
-| Dynamic | — | **Not supported** (throws `NotImplementedException`) |
+| Dynamic | Scalar .NET types such as `int`, `string`, `Guid` and `DateTime`; arrays, `List<T>`, `Dictionary<K, V>` and tuples of these; `null`, `DBNull` | The ClickHouse type is inferred from the .NET type of each value. For example, `int` is written as `Int32` and `int[]` as `Array(Int32)`. `DateTime` and `DateTimeOffset` are written as `DateTime`, which has second precision. For `decimal` and `ClickHouseDecimal`, see [Decimal types](#type-map-writing-decimal). `null` and `DBNull` write `NULL`. Other .NET types, including enums and other collection types, throw `ArgumentOutOfRangeException`. For query parameters, see [Not supported for writing](#type-map-writing-not-supported). |
 | Array(T) | `IList`, `null` | Null writes empty array. For nested types (`Array(Array(T))` and deeper) both jagged shapes (`T[][]`, `List<List<T>>`) and rectangular multidimensional CLR arrays (`T[,]`, `T[,,]`, …) are accepted; the CLR rank must match the ClickHouse nesting depth. |
 | Tuple(T1, T2, ...) | `ITuple`, `IList` | Element count must match tuple arity. See [ValueTuple caveat](#valuetuple-caveat) for >7 elements. |
 | Map(K, V) | `IDictionary`, `IEnumerable<KeyValuePair<K, V>>` | A pair sequence (for example the `List<KeyValuePair<K, V>>` produced by `MapReadMode=KeyValuePairs`) is accepted in either read mode, and can repeat a key. Applies to binary inserts and to query parameters |
 | Nullable(T) | `null`, `DBNull`, or types accepted by T | Writes null flag byte before value |
-| Enum8 | `string`, `sbyte`, numeric types | String looked up in enum dictionary |
-| Enum16 | `string`, `short`, numeric types | String looked up in enum dictionary |
+| Enum8 | `string`, `sbyte`, numeric types | String looked up in enum dictionary. A number must be a declared ordinal. `null`, `DBNull` and an undeclared ordinal throw `ArgumentException`; use `Nullable(Enum8(...))` to store nulls |
+| Enum16 | `string`, `short`, numeric types | String looked up in enum dictionary. A number must be a declared ordinal. `null`, `DBNull` and an undeclared ordinal throw `ArgumentException`; use `Nullable(Enum16(...))` to store nulls |
 | LowCardinality(T) | Types accepted by T | Delegates to underlying type |
 | SimpleAggregateFunction | Types accepted by underlying type | Delegates to underlying type |
 | Nested(...) | `IList` of tuples | Element count must match field count |
@@ -2139,7 +2175,7 @@ Property name matching with column type hints is case-sensitive. A property `Use
 
 | ClickHouse Type | Notes |
 |-----------------|-------|
-| Dynamic | Throws `NotImplementedException` |
+| Dynamic | Query parameters only: the default parameter formatter throws `ArgumentException` for a non-null `{name:Dynamic}` value, and for `Dynamic` elements of a container parameter such as `{name:Array(Dynamic)}`. Binary inserts are supported. |
 | AggregateFunction | Throws `AggregateFunctionException` |
 
 ---

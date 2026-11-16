@@ -8,6 +8,19 @@ Examples are grouped by transport: `Http/` uses `ClickHouseClient` / `ClickHouse
 HTTP, `Tcp/` uses `ClickHouseTcpClient` over the native protocol. See `Tcp/README.md` for what is
 specific to the native client.
 
+## Running examples
+
+```bash
+cd examples
+dotnet run                          # Run all examples
+dotnet run -- --http                # Run one transport's examples (or --tcp)
+dotnet run -- --list                # List class names, which --filter matches
+dotnet run -- --filter basicusage   # Run the examples whose class name matches
+```
+
+`ExampleConfig` takes the server from environment variables, with localhost defaults. The "How to
+run" section of `README.md` lists them. HTTP examples use port 8123, TCP examples port 9000.
+
 ## Adding an example
 
 Five steps. Skip any one of them and the example does not run.

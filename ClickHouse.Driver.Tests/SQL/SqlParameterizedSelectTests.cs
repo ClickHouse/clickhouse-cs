@@ -236,6 +236,19 @@ public class SqlParameterizedSelectTests : IDisposable
     }
 
     [Test]
+    [TestCase("DOUBLE PRECISION", 1.5, ExpectedResult = 1.5)]
+    [TestCase("BIGINT UNSIGNED", ulong.MaxValue, ExpectedResult = ulong.MaxValue)]
+    public async Task<object> AddParameter_MultiWordAliasTypeHint_UsesAliasedType(string typeHint, object value)
+    {
+        // A multi-word alias contains a space, but is not a named element
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT {{val:{typeHint}}} AS res";
+        command.AddParameter("val", value);
+
+        return await command.ExecuteScalarAsync();
+    }
+
+    [Test]
     public async Task AddParameter_EscapedQuoteInsideEnumTypeHint_UsesTypeHint()
     {
         // A `\'` escape inside the Enum label left the old scanner believing it was still inside the
