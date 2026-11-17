@@ -213,6 +213,12 @@ var table = TestUtilities.CreateTableName();    // + DROP TABLE IF EXISTS in you
   serialisation suites.
 - **Test utilities**: before writing tests, read `Utilities/TestUtilities.cs` to understand existing
   config and utility patterns, including `CreateTableName`/`SanitizeTableName`.
+- **Clients for a real server**: get them from `TestUtilities.GetTestClickHouseClient()` /
+  `GetTestClickHouseConnection()` or `AbstractConnectionTestFixture`. A test that makes its own
+  `ClickHouseClientSettings` must set `CustomHeaders = TestUtilities.GetTestCustomHeaders()`. On
+  Cloud, these headers keep every request of the run on one replica; without them, a session, a
+  `Memory` table or a read of a row that the test just inserted can reach another replica and fail.
+  A connection string cannot carry the headers, so use the settings constructor.
 - **`system.query_log`**: `QueryLog.ScalarAsync` fails with a distinct message when no row appears;
   `QueryLog.CountAsync` waits for `minimumCount` rows before reporting.
 - **Server version gating**: `[FromVersion]`, `[IgnoreInVersion]` and `[RequiredFeature]` in
