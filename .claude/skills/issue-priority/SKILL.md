@@ -36,19 +36,17 @@ Set no priority when one of these is true:
   floor is the lowest entry of the `version` matrix in
   `.github/workflows/tests.yml` (HTTP) and `.github/workflows/tests-tcp.yml`
   (TCP).
-- The issue is a question, or it is about CI, dependencies, the release
-  process, or a discussion.
+- The issue is a question, or it is about CI, a dependency update that no
+  vulnerability causes, the release process, or a discussion.
 
 ## Vulnerabilities that are not public yet
 
 A security issue must not stay public with a description of how to reproduce
 it. This section applies when a reproduction or code inspection confirms a
-vulnerability that is not public yet. The classification skill of this
+vulnerability that is not public yet, as the classification skill of this
 repository defines it
 ([`../issue-classification/SKILL.md`](../issue-classification/SKILL.md), "A
-vulnerability that is not public yet"): memory corruption is one also when only
-a hostile server or network causes it, and a hang, or a crash with no memory
-corruption, that only such a server or network causes is not one.
+vulnerability that is not public yet").
 
 - Report it in a private GitHub vulnerability report for this repository
   (**Security** → **Report a vulnerability**), never in a public issue,
@@ -96,10 +94,10 @@ highest row applies:
 
 | Severity                | Use when |
 | ----------------------- | -------- |
-| Wrong data or security  | impact **Data integrity**: the client returns or stores wrong or incomplete data with no error, or reports success for a query or insert that failed; or impact **Security** with a vulnerability: a security defect |
+| Wrong data or security  | impact **Data integrity**: the client returns or stores wrong or incomplete data with no error, or reports success for a query or insert that failed; or impact **Security** with a vulnerability (for a vulnerability in a dependency: only when the client calls the vulnerable code) |
 | Broken, no workaround   | the feature fails (an exception, a hang, a crash, a stack overflow, a leak that ends in a crash or in exhausted connections), and the caller has no reasonable workaround; also a wrong or incomplete error with no workaround: the failure is reported, but its type, code, or message is wrong or lost. The impact **Stability** (a hang, a crash, such a leak) uses this row when the caller has no reasonable workaround |
-| Workaround exists       | the feature fails, but the caller can avoid the failure with a small change in their own code, for example a cast in SQL, another overload, or another setting (name the workaround in the reason); also impact **Performance**: a result that is correct but slow or uses too much memory |
-| Cosmetic, docs, feature | wrong log or message text, documentation, a feature request, a missing conversion that a cast avoids |
+| Workaround exists       | the feature fails, but the caller can avoid the failure with a small change in their own code, for example a cast in SQL, another overload, or another setting (name the workaround in the reason); also impact **Performance** of a defect: a result that is correct but slow or uses too much memory (a request to make an operation faster is a feature request: last row) |
+| Cosmetic, docs, feature | wrong log or message text, documentation, a feature request, a missing conversion that a cast avoids; also a request to make an operation faster, and a dependency update (also one for a vulnerability in a dependency, in code that the client does not call) |
 
 An issue that has the impact Security with no vulnerability (an authentication
 method that does not work or is missing) does not use the first row. Rate an
