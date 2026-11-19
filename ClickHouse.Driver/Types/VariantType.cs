@@ -8,6 +8,11 @@ namespace ClickHouse.Driver.Types;
 
 internal class VariantType : ParameterizedType
 {
+    /// <summary>
+    /// Discriminator the server writes in place of a type index when the value is NULL.
+    /// </summary>
+    internal const byte NullDiscriminator = 0xFF;
+
     // For 2 types, linear scan beats dictionary lookup. For 3 or more, use the HashMap.
     private const int MinTypesForMap = 3;
 
@@ -48,7 +53,7 @@ internal class VariantType : ParameterizedType
     public override object Read(ExtendedBinaryReader reader)
     {
         var typeIndex = reader.ReadByte();
-        if (typeIndex == 0xFF)
+        if (typeIndex == NullDiscriminator)
             return DBNull.Value;
 
         var type = UnderlyingTypes[typeIndex];
@@ -119,7 +124,7 @@ internal class VariantType : ParameterizedType
     {
         if (value is null or DBNull)
         {
-            writer.Write((byte)0xFF);
+            writer.Write(NullDiscriminator);
             return;
         }
 
