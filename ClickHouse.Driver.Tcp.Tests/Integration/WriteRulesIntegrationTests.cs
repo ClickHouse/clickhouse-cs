@@ -115,8 +115,8 @@ public class WriteRulesIntegrationTests
             .SetName("{m}(a nullable value type with no NULL)");
         yield return Case("Variant(String, UInt64)", new[] { "x", "y", "z" }, "concat(toString(variantType(value)), ':', toString(value))", "String:x", "String:y", "String:z")
             .SetName("{m}(a cast to object)");
-        yield return Case("Array(Int32)", new[] { new[] { 3_000_000_000u }, Array.Empty<uint>(), new[] { 7u } }, "toString(value)", "[-1294967296]", "[]", "[7]")
-            .SetName("{m}(an array cast that reads the elements as another type)");
+        yield return Case("Array(Int32)", new[] { new[] { Code.Low, Code.High }, Array.Empty<Code>(), new[] { (Code)7 } }, "toString(value)", "[-1,5]", "[]", "[7]")
+            .SetName("{m}(an enum array as an array of its underlying type)");
     }
 
     /// <summary>

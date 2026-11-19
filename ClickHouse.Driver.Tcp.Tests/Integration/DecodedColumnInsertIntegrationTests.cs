@@ -239,12 +239,19 @@ public class DecodedColumnInsertIntegrationTests
     }
 
     /// <summary>
-    /// A value that the target cannot hold (a label that it does not declare, an instant finer than its scale), and a
-    /// column that no CLR type converts (a scale above 7), are refused, and nothing is stored.
+    /// A value that the target cannot hold (a label that it does not declare, an instant finer than its scale), a column
+    /// that no CLR type converts (a scale above 7), and an <c>Array(UInt32)</c> into an <c>Array(Int32)</c> (also as a part
+    /// next to a part of another scale), which the cast rule of the writes refuses, are refused, and nothing is stored.
     /// </summary>
     [TestCase("Enum8('a' = 1, 'b' = 2)", "Enum8('a' = 1)", "'b'", "'b' is not a label of 'Enum8('a' = 1)'")]
     [TestCase("DateTime64(6, 'UTC')", "DateTime64(3, 'UTC')", "'2024-01-02 03:04:05.678901'", "without losing precision")]
     [TestCase("DateTime64(9, 'UTC')", "DateTime64(6, 'UTC')", "'2024-01-02 03:04:05.678901234'", "is written only into a column of the same scale")]
+    [TestCase("Array(UInt32)", "Array(Int32)", "[3000000000, 7]", "was given a column of element type System.UInt32[], which it cannot be written from. It accepts System.Int32[]")]
+    [TestCase(
+        "Tuple(DateTime64(3, 'UTC'), Array(UInt32))",
+        "Tuple(DateTime64(6, 'UTC'), Array(Int32))",
+        "('2024-01-02 03:04:05.678', [3000000000, 7])",
+        "'Int32' cannot be written from System.UInt32. It is written from: System.Int32. It is inside the column type 'Array(Int32)'.")]
     public async Task InsertAsync_ColumnReadAsARelatedTypeThatTheTargetCannotHold_IsRefused(string source, string target, string literal, string message)
     {
         string sourceTable = UniqueTableName();

@@ -453,6 +453,48 @@ public class DecodedColumnConversionTests
         });
     }
 
+    public static IEnumerable<TestCaseData> OtherSignCases()
+    {
+        uint[][] arrays = { new[] { 3_000_000_000u, 7u }, Array.Empty<uint>(), new[] { 1u } };
+        yield return new TestCaseData("Array(UInt32)", "Array(Int32)", arrays, "Column", null).SetArgDisplayNames("Array(UInt32)", "Array(Int32)");
+        yield return new TestCaseData(
+            "Tuple(DateTime64(3, 'UTC'), Array(UInt32))",
+            "Tuple(DateTime64(6, 'UTC'), Array(Int32))",
+            Instants.Zip(arrays).ToArray(),
+            "Parts",
+            "'Int32' cannot be written from System.UInt32. It is written from: System.Int32. It is inside the column type 'Array(Int32)'.")
+            .SetArgDisplayNames("Tuple(DateTime64(3), Array(UInt32))", "Tuple(DateTime64(6), Array(Int32))");
+        yield return new TestCaseData(
+            "Tuple(Nullable(Int8), Array(UInt32))",
+            "Tuple(Nullable(Int8), Array(Int32))",
+            new sbyte?[] { 1, null, -1 }.Zip(arrays).ToArray(),
+            "PartsUnderNull",
+            null)
+            .SetArgDisplayNames("Tuple(Nullable(Int8), Array(UInt32))", "Tuple(Nullable(Int8), Array(Int32))");
+    }
+
+    /// <summary>
+    /// A column that a query read, with an <c>Array(UInt32)</c> where the target has an <c>Array(Int32)</c>, is refused in
+    /// each way that the insert writes a column that a query read: as a whole column, part by part next to a part of
+    /// another scale, and part by part next to a <c>Nullable</c>. The array goes through the converter tree of
+    /// <see cref="T:uint[]"/>, and the cast rule of the writes refuses the cast to <see cref="T:int[]"/>, which would store
+    /// 3000000000 as -1294967296. Only the part by part write gives the reason of the part.
+    /// </summary>
+    [TestCaseSource(nameof(OtherSignCases))]
+    public void For_DecodedArrayOfUInt32IntoAnArrayOfInt32_IsRefusedInEachRoute(string source, string target, Array values, string route, string reason)
+    {
+        using IColumn decoded = Decode(source, values);
+
+        InsertColumnWrite write = InsertColumnWrite.For(Codec(target), decoded, target, Utc, ConverterDerivation.Default, out string refusal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ConverterDerivation.Default.RouteOfReadColumn(decoded, source, target, Utc).ToString(), Is.EqualTo(route));
+            Assert.That(write, Is.Null);
+            Assert.That(refusal, Is.EqualTo(reason));
+        });
+    }
+
     public static IEnumerable<TestCaseData> HiddenValueCases()
     {
         yield return Bytes(
