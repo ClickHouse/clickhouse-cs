@@ -9,14 +9,17 @@ namespace ClickHouse.Driver.Tests.ADO;
 /// <summary>
 /// Integration tests for JWT/Bearer token authentication.
 /// These tests require a ClickHouse Cloud instance configured with JWT authentication.
-/// Set the CLICKHOUSE_CLOUD_JWT environment variable to run these tests.
+/// Set the CLICKHOUSE_CLOUD_JWT environment variable to run these tests. In CI, the Cloud workflow
+/// signs a new token for each run with <c>.github/scripts/generate_jwt.py</c>.
 /// </summary>
 [TestFixture]
 [Category("Cloud")]
 [Category("JWT")]
-[Ignore("Temporarily disabled while JWT test environment is being repaired")]
 public class BearerAuthenticationTests
 {
+    // ClickHouse Cloud runs a JWT-authenticated request as an ephemeral user named JWT::<subject>::<claims_hash>.
+    private const string JwtUserNamePattern = "^JWT::.+::.+$";
+
     private string connectionString;
     private string bearerToken;
 
@@ -87,5 +90,50 @@ public class BearerAuthenticationTests
         command.CommandText = "SELECT 1";
 
         Assert.ThrowsAsync<ClickHouseServerException>(async () => await command.ExecuteScalarAsync());
+    }
+
+    [Test]
+    public async Task ExecuteScalarAsync_WithClientBearerToken_ShouldRunAsJwtUser()
+    {
+        var settings = new ClickHouseClientSettings(connectionString)
+        {
+            BearerToken = bearerToken,
+        };
+        using var client = new ClickHouseClient(settings);
+
+        var user = await client.ExecuteScalarAsync("SELECT currentUser()");
+
+        Assert.That(user, Does.Match(JwtUserNamePattern));
+    }
+
+    [Test]
+    public async Task ExecuteScalarAsync_WithBearerTokenInConnectionString_ShouldRunAsJwtUser()
+    {
+        var builder = new ClickHouseConnectionStringBuilder(connectionString)
+        {
+            BearerToken = bearerToken,
+        };
+        using var connection = new ClickHouseConnection(builder.ConnectionString);
+
+        var user = await connection.ExecuteScalarAsync("SELECT currentUser()");
+
+        Assert.That(user, Does.Match(JwtUserNamePattern));
+    }
+
+    [Test]
+    public async Task ExecuteScalarAsync_WithQueryOptionsBearerToken_ShouldRunOnlyThatQueryAsJwtUser()
+    {
+        // The client itself authenticates with the Basic credentials of CLICKHOUSE_CONNECTION.
+        using var client = new ClickHouseClient(connectionString);
+
+        var tokenUser = await client.ExecuteScalarAsync(
+            "SELECT currentUser()", options: new QueryOptions { BearerToken = bearerToken });
+        var clientUser = await client.ExecuteScalarAsync("SELECT currentUser()");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tokenUser, Does.Match(JwtUserNamePattern));
+            Assert.That(clientUser, Does.Not.Match(JwtUserNamePattern));
+        });
     }
 }
