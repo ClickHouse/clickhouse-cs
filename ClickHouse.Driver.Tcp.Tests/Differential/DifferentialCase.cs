@@ -100,6 +100,10 @@ public sealed class DifferentialCase
         {
             yield return Facet.Write(this, Tier.Write, input);
             yield return Facet.Write(this, Tier.CanWrite, input);
+            yield return Facet.Write(this, Tier.PocoWrite, input);
+            yield return Facet.Write(this, Tier.PocoCanWrite, input);
+            yield return Facet.Write(this, Tier.UntypedWrite, input);
+            yield return Facet.Write(this, Tier.UntypedCanWrite, input);
         }
     }
 
@@ -192,6 +196,27 @@ internal enum Tier
 
     /// <summary><c>ClickHouseTcpTypes.CanWrite</c>.</summary>
     CanWrite,
+
+    /// <summary>
+    /// The POCO write plan of <c>InsertRowsAsync&lt;T&gt;</c>: the values of the column in the <c>Value</c> property of
+    /// <c>Row&lt;T&gt;</c>, gathered for a block and written as the insert writes the block.
+    /// </summary>
+    PocoWrite,
+
+    /// <summary>Whether the POCO write plan of <c>InsertRowsAsync&lt;T&gt;</c> builds for a <c>Value</c> property of the type.</summary>
+    PocoCanWrite,
+
+    /// <summary>
+    /// The untyped row insert of <c>InsertRowsAsync(object[])</c>: the values of the column, boxed, one in each row,
+    /// gathered for a block and written as the insert writes the block.
+    /// </summary>
+    UntypedWrite,
+
+    /// <summary>
+    /// Whether the untyped row insert of <c>InsertRowsAsync(object[])</c> takes values whose CLR type is the type, or the
+    /// value type under it (a boxed nullable value is its value type).
+    /// </summary>
+    UntypedCanWrite,
 }
 
 /// <summary>One thing that a case checks: a read target in a read tier, or a write input in a write tier.</summary>
@@ -215,7 +240,7 @@ internal sealed class Facet
     /// <summary>The read target, for <see cref="Tier.ReadAs"/>, <see cref="Tier.Poco"/> and <see cref="Tier.CanRead"/>.</summary>
     public Type Target { get; }
 
-    /// <summary>The write input, for <see cref="Tier.Write"/> and <see cref="Tier.CanWrite"/>.</summary>
+    /// <summary>The write input, for the write tiers (<see cref="IsWrite"/>).</summary>
     public WriteInput Input { get; }
 
     /// <summary>The name of the facet in its case, for example <c>ReadAs&lt;DateTime&gt;</c> or <c>Write[insert]</c>.</summary>
@@ -224,8 +249,22 @@ internal sealed class Facet
     /// <summary>Whether the facet reads values (<see cref="Tier.ReadAs"/> or <see cref="Tier.Poco"/>).</summary>
     public bool ReadsValues => Tier is Tier.ReadAs or Tier.Poco;
 
-    /// <summary>Whether the facet gives a yes-or-no answer (<see cref="Tier.CanRead"/> or <see cref="Tier.CanWrite"/>).</summary>
-    public bool IsAnswer => Tier is Tier.CanRead or Tier.CanWrite;
+    /// <summary>Whether the facet gives a yes-or-no answer (<see cref="Tier.CanRead"/> or a write answer tier).</summary>
+    public bool IsAnswer => Tier is Tier.CanRead or Tier.CanWrite or Tier.PocoCanWrite or Tier.UntypedCanWrite;
+
+    /// <summary>Whether the facet is one of a write tier, which has a write input.</summary>
+    public bool IsWrite => IsWriteTier(Tier);
+
+    /// <summary>Whether a tier is a write tier, whose facets have a write input.</summary>
+    /// <param name="tier">The tier.</param>
+    /// <returns>Whether it is a write tier.</returns>
+    public static bool IsWriteTier(Tier tier)
+        => tier is Tier.Write or Tier.CanWrite or Tier.PocoWrite or Tier.PocoCanWrite or Tier.UntypedWrite or Tier.UntypedCanWrite;
+
+    /// <summary>Whether a tier writes bytes (<see cref="Tier.Write"/>, <see cref="Tier.PocoWrite"/>, <see cref="Tier.UntypedWrite"/>).</summary>
+    /// <param name="tier">The tier.</param>
+    /// <returns>Whether it writes bytes.</returns>
+    public static bool WritesBytes(Tier tier) => tier is Tier.Write or Tier.PocoWrite or Tier.UntypedWrite;
 
     public static Facet Read(DifferentialCase testCase, Tier tier, Type target)
         => new(testCase, tier, target, input: null, $"{tier}<{TypeNames.Of(target)}>");

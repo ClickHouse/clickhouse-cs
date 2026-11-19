@@ -51,6 +51,10 @@ internal sealed class DifferentialRegistry
         registry.SetReference(ReferenceArms.CanRead);
         registry.SetReference(ReferenceArms.Write);
         registry.SetReference(ReferenceArms.CanWrite);
+        registry.SetReference(ReferenceArms.PocoWrite);
+        registry.SetReference(ReferenceArms.PocoCanWrite);
+        registry.SetReference(ReferenceArms.UntypedWrite);
+        registry.SetReference(ReferenceArms.UntypedCanWrite);
         return registry;
     }
 
@@ -99,15 +103,15 @@ internal sealed class DifferentialRegistry
 
     /// <summary>Declares that the candidates give a different outcome from the reference for one write facet.</summary>
     /// <param name="caseId">The <see cref="DifferentialCase.Id"/> of the case.</param>
-    /// <param name="tier"><see cref="Tier.Write"/> or <see cref="Tier.CanWrite"/>.</param>
+    /// <param name="tier">A write tier (<see cref="Facet.IsWriteTier"/>).</param>
     /// <param name="inputLabel">The <see cref="WriteInput.Label"/> of the facet.</param>
     /// <param name="expected">The outcome that every candidate that covers the facet must give.</param>
     /// <param name="reason">Why the outcome changes, for example the decision or the issue.</param>
     public void DeclareChange(string caseId, Tier tier, string inputLabel, Expectation expected, string reason)
     {
-        if (tier is not (Tier.Write or Tier.CanWrite))
+        if (!Facet.IsWriteTier(tier))
         {
-            throw new ArgumentOutOfRangeException(nameof(tier), tier, "A facet with a write input is a Write or CanWrite facet.");
+            throw new ArgumentOutOfRangeException(nameof(tier), tier, "A facet with a write input is a facet of a write tier.");
         }
 
         DeclareChanges(

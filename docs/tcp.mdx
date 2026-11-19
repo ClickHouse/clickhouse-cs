@@ -585,10 +585,11 @@ insert completes before that block is released.
   array column that `ClickHouseTcpColumn.CreateArray` builds is written in the same way, from its
   offsets and its inner column.
 - Any other column is converted from the CLR type of its values to the target type, with the
-  mappings of [Type mapping: writing to ClickHouse](#type-map-writing). `ClickHouseTcpTypes.CanWrite`
-  gives the answer of this conversion. A value that the target type cannot hold (a text that is too
-  long for a `FixedString(N)`, a decimal past its precision) is refused with its row, and the insert
-  stops.
+  mappings of [Type mapping: writing to ClickHouse](#type-map-writing) and the
+  [write rules](#write-rules). `ClickHouseTcpTypes.CanWrite` gives the answer of this conversion. A
+  value that the target type cannot hold (a text that is too long for a `FixedString(N)`, a decimal
+  past its precision, a `NULL` in a column that cannot hold it) is refused with its row, and the
+  insert stops. The insert then closes its connection; the next operation uses another one.
 
 #### Row inserts {#row-inserts}
 
@@ -607,8 +608,13 @@ await client.InsertRowsAsync(
 ```
 
 Rows are converted to columns one block at a time. Each row must contain one value for every column
-named in the statement, and values in one column must use a consistent CLR type except where the
-target is `Variant` or `Dynamic`. Do not modify the rows until the operation completes.
+named in the statement. The CLR type of the first value of a column that is not null selects how
+the column is written, with the mappings of [Type mapping: writing to ClickHouse](#type-map-writing)
+and the [write rules](#write-rules): for example `DateTime[]` values for `Array(DateTime)`, or
+`DateTime` values for `LowCardinality(DateTime)`. The other values of the column must have that CLR
+type, or a type that casts to the type that the first value is written as: `Variant` and `Dynamic`
+are written from `object`, so they take a value of any supported type. Do not modify the rows until
+the operation completes.
 
 #### POCO inserts {#poco-inserts}
 
@@ -652,10 +658,42 @@ await client.InsertRowsAsync(
     rows);
 ```
 
-Every column named in the statement must map to a compatible public getter. POCO rows are converted
-one wire block at a time, so an invalid value in a later block can be found after earlier blocks
-have already been sent. `ClickHouseTcpNotMapped` keeps application-only properties such as
-`ImportBatch` out of the mapping.
+Every column named in the statement must map to a public getter whose type the column is written
+from, with the mappings of [Type mapping: writing to ClickHouse](#type-map-writing) and the
+[write rules](#write-rules). POCO rows are converted one wire block at a time, so an invalid value
+in a later block can be found after earlier blocks have already been sent. `ClickHouseTcpNotMapped`
+keeps application-only properties such as `ImportBatch` out of the mapping.
+
+#### Write rules {#write-rules}
+
+Each insert writes a value from the types in the [writing tables](#type-map-writing). In addition,
+these rules apply to the whole column type, the same in `InsertAsync`, `InsertRowsAsync<T>` and
+`InsertRowsAsync` with `object[]` rows, and `ClickHouseTcpTypes.CanWrite` includes them:
+
+* **CLR enum as its ordinal.** A CLR enum is written into a column that is written from its
+  underlying type, for example an `enum Status : sbyte` into `Int8` or `Enum8(...)`. The ordinal
+  is written as it is: the client does not compare it with the labels of the column type.
+* **Cast.** A value is written into a column that is written from a type that the value casts to,
+  such as a `string` into a `Variant` column, which is written from `object`. The .NET cast also
+  accepts an array of other integers of the same size, so a `uint[]` is written into
+  `Array(Int32)`, and a `uint` above `int.MaxValue` is then stored as a negative `Int32`.
+* **Value type into a nullable column.** A value type is written into a column that is written from
+  its nullable type, for example an `int` into `Nullable(Int32)` or `LowCardinality(Nullable(Int32))`.
+  No value is `NULL`.
+* **Nullable value type into a column that cannot hold `NULL`.** A nullable value type is written into
+  a column that is written from its value type, for example an `int?` into `Int32`. The insert
+  throws an `InvalidOperationException` at the first `NULL`, which names the column, its type and
+  the row of the insert.
+  - `InsertRowsAsync<T>` and `InsertRowsAsync` find the `NULL` when they convert the rows of its
+    block, before they send that block. The blocks before it are stored, and the connection stays
+    usable. The message also names the property, or the position of the column in the row.
+  - `InsertAsync` finds the `NULL` when it writes the column, inside the block. As for every value
+    that `InsertAsync` cannot write, the insert stops and closes its connection.
+
+A rule writes through every CLR type that the column type is written from: a `DateTime?` property is
+written into `LowCardinality(DateTime)`, because `LowCardinality(DateTime)` is written from
+`DateTime`. The rules apply to the whole column type only, so an `int[]` is not written into
+`Array(Nullable(Int32))`.
 
 ### SQL parameters {#sql-parameters}
 
@@ -1013,7 +1051,9 @@ The tables below distinguish the type returned by the decoded `IColumn<T>` from 
 available through conversion via `Block.ReadAs<T>`, `QueryAsync<T>` POCO mapping, or inserts. You can ask the same
 resolver used by those operations whether a particular mapping is supported. `CanRead` gives the answer of
 `Block.ReadAs<T>`, including the [read rules](#read-as) for enums, casts and nullable types. `CanWrite` gives the
-answer of [`InsertAsync`](#columnar-inserts) for a column of that element type:
+answer of every insert for values of that type: [`InsertAsync`](#columnar-inserts) for a column of that element type,
+[`InsertRowsAsync<T>`](#poco-inserts) for a property of that type, and [`InsertRowsAsync`](#row-inserts) for
+untyped values of that type, including the [write rules](#write-rules) for enums, casts and nullable types:
 
 ```csharp
 bool canRead = ClickHouseTcpTypes.CanRead("Array(Nullable(DateTime))", typeof(DateTime?[]));
@@ -1190,8 +1230,9 @@ server, for example with `sumMerge(column)`, and read the resulting value instea
 
 ### Type mapping: writing to ClickHouse {#type-map-writing}
 
-Each entry is the CLR type of one row in the `IColumn` passed to `InsertAsync`. These mappings are
-exact: the TCP client does not apply `Convert`-style coercions.
+Each entry is the CLR type of one row in the `IColumn` passed to `InsertAsync`, of a POCO property, or of
+an untyped value. These mappings are exact: the TCP client does not apply `Convert`-style coercions. The
+[write rules](#write-rules) for enums, casts and nullable types apply to every column type in addition.
 
 #### Integer types {#type-map-writing-integer}
 
@@ -1272,7 +1313,8 @@ column timezone, or in the session timezone when the column does not declare one
 | `Enum8(...)` | `sbyte`, `string` label |
 | `Enum16(...)` | `short`, `string` label |
 
-An unknown label is rejected before data is sent.
+An unknown label is rejected before data is sent. A CLR enum is written as its ordinal
+([write rules](#write-rules)).
 
 #### Other scalar types {#type-map-writing-other-scalar}
 
