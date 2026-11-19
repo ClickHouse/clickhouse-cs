@@ -253,7 +253,7 @@ public class AcceptEncodingTests
 
         await client.ExecuteNonQueryAsync("SELECT 1");
 
-        Assert.That(handler.Requests.Single().RequestUri.Query, Does.Contain("enable_http_compression=false"));
+        Assert.That(handler.Requests.Single().RequestUri.Query, Does.Not.Contain("enable_http_compression"));
     }
 
     /// <summary>
@@ -324,7 +324,27 @@ public class AcceptEncodingTests
         Assert.Multiple(() =>
         {
             Assert.That(negotiation.Header, Is.Empty);
-            Assert.That(negotiation.Flag, Is.EqualTo("false"));
+            Assert.That(negotiation.Flag, Is.EqualTo("<absent>"));
+        });
+    }
+
+    /// <summary>
+    /// With compression off, an <c>Accept-Encoding</c> injected through CustomHeaders is still sent, and
+    /// the URI carries no <c>enable_http_compression</c>: the server's own value of the setting decides
+    /// whether it is honoured.
+    /// </summary>
+    [Test]
+    public async Task CustomHeaderAcceptEncoding_WithCompressionDisabled_IsSentWithoutTheFlag()
+    {
+        var (client, handler) = CreateClient(useCompression: false, customHeaderAcceptEncoding: "gzip");
+
+        await client.ExecuteNonQueryAsync("SELECT 1");
+
+        var negotiation = NegotiationOf(handler);
+        Assert.Multiple(() =>
+        {
+            Assert.That(negotiation.Header, Is.EqualTo(new[] { "gzip" }));
+            Assert.That(negotiation.Flag, Is.EqualTo("<absent>"));
         });
     }
 
