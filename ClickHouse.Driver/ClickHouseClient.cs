@@ -688,7 +688,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             logger.LogDebug("Metadata loaded for table {Table}. Columns: {Columns}.", table, string.Join(", ", columnNames ?? Array.Empty<string>()));
         }
 
-        var query = $"INSERT INTO {table} ({string.Join(", ", columnNames)}) FORMAT {options.Format.ToString()}";
+        var query = $"INSERT INTO {table.EncloseQualifiedName()} ({string.Join(", ", columnNames)}) FORMAT {options.Format.ToString()}";
         var baseQueryId = options.QueryId ?? Guid.NewGuid().ToString();
 
         return new InsertPlan
@@ -896,8 +896,8 @@ public sealed class ClickHouseClient : IClickHouseClient
         if (string.IsNullOrEmpty(format))
             throw new ArgumentException("Format cannot be null or empty", nameof(format));
 
-        var columnList = columns != null ? $"({string.Join(", ", columns)})" : string.Empty;
-        var query = $"INSERT INTO {table} {columnList} FORMAT {format}";
+        var columnList = columns != null ? $"({string.Join(", ", columns.Select(c => c.EncloseColumnName()))})" : string.Empty;
+        var query = $"INSERT INTO {table.EncloseQualifiedName()} {columnList} FORMAT {format}";
 
         // The request message that carries this content disposes it - and, through StreamContent,
         // the supplied stream - once the request completes, on success and on failure alike.
