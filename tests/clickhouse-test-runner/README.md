@@ -290,9 +290,10 @@ changes only the clients does not start it; the nightly run tests the clients of
 - CI does not stop a shard after 20 failures in a row (`--max-failures-chain`, see above), so a failed run
   shows all the failures of its shard.
 - CI does not run the failed tests again: no known client bug makes random tests fail, so a failed test fails
-  the job. If such a bug appears, `RETRY_FAILED=<n>` runs the failed tests again, at most `n` times: a test
-  that passes on a retry shows as a warning, and a test that fails every time fails the job. Do not set
-  `RETRY_FAILED` when you grow or check the allowlist: a test that needs a retry is not reliable.
+  the job. The script also turns off the runner's own retries (`--dont_retry_failures`). If such a bug
+  appears, `RETRY_FAILED=<n>` runs the failed tests again, at most `n` times: a test that passes on a retry
+  shows as a warning, and a test that fails every time fails the job. Do not set `RETRY_FAILED` when you grow
+  or check the allowlist: a test that needs a retry is not reliable.
 - The server version and the upstream tests are pinned together in [`clickhouse-version`](clickhouse-version).
   A new ClickHouse release changes nothing in CI, so a pull request never fails because of a release that it
   does not touch. A bump is a pull request of its own; see [`AGENTS.md`](AGENTS.md#bump-the-server-version).

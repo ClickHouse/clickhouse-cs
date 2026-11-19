@@ -92,6 +92,7 @@ internal sealed class ResultWriter
         }
     }
 
+    // A Raw format writes the header without escapes, as the server does (TabSeparatedRowOutputFormat::writeLine).
     private void HeaderLine(IReadOnlyList<string> values)
     {
         for (var i = 0; i < values.Count; i++)
@@ -100,7 +101,14 @@ internal sealed class ResultWriter
             {
                 output.Append((byte)'\t');
             }
-            output.AppendEscaped(values[i], false);
+            if (format.Raw)
+            {
+                output.Append(values[i]);
+            }
+            else
+            {
+                output.AppendEscaped(values[i], false);
+            }
         }
         output.Append((byte)'\n');
     }

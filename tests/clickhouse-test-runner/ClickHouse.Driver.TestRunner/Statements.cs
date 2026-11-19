@@ -415,9 +415,9 @@ internal static class Statements
     }
 
     /// <summary>
-    /// Returns the text after the last <c>SETTINGS</c> keyword outside quotes, comments and parentheses (the
-    /// settings clause of the query), up to a following top-level <c>FORMAT</c> or the end, or null when there is
-    /// none.
+    /// Returns the text after the last <c>SETTINGS</c> keyword outside quotes, heredocs, comments and parentheses
+    /// (the settings clause of the query), up to a following top-level <c>FORMAT</c> or the end, or null when there
+    /// is none.
     /// </summary>
     public static string? TrailingSettingsClause(string sql)
     {
@@ -428,6 +428,10 @@ internal static class Statements
             if (c is '\'' or '"' or '`')
             {
                 i = SkipQuoted(sql, i);
+            }
+            else if (c == '$' && HeredocEnd(sql, i) is var heredocEnd and > 0)
+            {
+                i = heredocEnd;
             }
             else if (StartsLineComment(sql, i))
             {
@@ -481,7 +485,7 @@ internal static class Statements
         return clause.EndsWith(';') ? clause[..^1] : clause;
     }
 
-    /// <summary>Returns the words of <paramref name="sql"/> outside quotes, comments and (unless
+    /// <summary>Returns the words of <paramref name="sql"/> outside quotes, heredocs, comments and (unless
     /// <paramref name="nested"/>) parentheses.</summary>
     public static List<string> TopLevelWords(string sql, bool nested = false)
     {
@@ -493,6 +497,10 @@ internal static class Statements
             if (c is '\'' or '"' or '`')
             {
                 i = SkipQuoted(sql, i);
+            }
+            else if (c == '$' && HeredocEnd(sql, i) is var heredocEnd and > 0)
+            {
+                i = heredocEnd;
             }
             else if (StartsLineComment(sql, i))
             {

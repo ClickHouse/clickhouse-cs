@@ -150,8 +150,10 @@ echo "Protocol: ${CLICKHOUSE_TEST_RUNNER_PROTOCOL}" >&2
 cd "${UPSTREAM_CLICKHOUSE_DIR}"
 # --max-failures-chain: by default the runner stops after 20 failures in a row. A failed test is information,
 # so the run goes on (a regression, or a run of KNOWN_FAILURES, reaches 20 at once).
+# --dont_retry_failures: by default the runner runs a failed test again when its output has one of its
+# MESSAGES_TO_RETRY (for example "No such file or directory"). RETRY_FAILED is the only retry here.
 runner=(python3 tests/clickhouse-test --no-stateful --no-random-settings --no-random-merge-tree-settings
-  --max-failures-chain 1000000)
+  --max-failures-chain 1000000 --dont_retry_failures)
 
 retries="${RETRY_FAILED:-0}"
 if ! [[ "${retries}" =~ ^[0-9]+$ ]]; then

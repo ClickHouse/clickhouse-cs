@@ -151,13 +151,29 @@ public class LiveTests
         Assert.That(stdout, Is.EqualTo(await ServerTsvAsync(query)));
     }
 
+    // The header of a Raw format has no escapes, as its rows. Contrast: TSVWithNames escapes the header.
+    [TestCase(Protocol.Http, "TSVWithNames")]
+    [TestCase(Protocol.Tcp, "TSVWithNames")]
+    [TestCase(Protocol.Http, "TSVRawWithNames")]
+    [TestCase(Protocol.Tcp, "TSVRawWithNames")]
+    [TestCase(Protocol.Http, "TabSeparatedRawWithNamesAndTypes")]
+    [TestCase(Protocol.Tcp, "TabSeparatedRawWithNamesAndTypes")]
+    public async Task Run_HeaderOfFormat_IsAsOnTheServer(Protocol protocol, string format)
+    {
+        var query = $"SELECT 1 AS `a\\tb\\\\c'd`, 'x' AS `é\\nf` FORMAT {format}";
+        var (stdout, stderr, code) = await RunShimAsync(protocol, query);
+        Assert.That(code, Is.Zero, stderr);
+        Assert.That(stdout, Is.EqualTo(await ServerTsvAsync(query)));
+    }
+
     [TestCase(Protocol.Http)]
     [TestCase(Protocol.Tcp)]
     public async Task Run_KillMutation_WritesTheStoppedMutation(Protocol protocol)
     {
         // A mutation that cannot finish ('x' is not a UInt64) fails the ALTER and waits until KILL MUTATION stops it;
         // KILL returns a row for it, as in clickhouse-client.
-        var table = "shim_kill_" + protocol.ToString().ToLowerInvariant();
+        // A name of its own for each run: test runs can share one server.
+        var table = $"shim_kill_{protocol.ToString().ToLowerInvariant()}_{Guid.NewGuid():N}";
         var script = string.Join('\n',
             $"DROP TABLE IF EXISTS {table};",
             $"CREATE TABLE {table} (v String) ENGINE = MergeTree ORDER BY tuple();",
@@ -328,6 +344,8 @@ public class LiveTests
     [TestCase(Protocol.Tcp, "date_time_output_format = 'unix_timestamp'")]
     [TestCase(Protocol.Http, "format_tsv_null_representation = 'a\\tb'")]
     [TestCase(Protocol.Tcp, "format_tsv_null_representation = 'XYZ'")]
+    [TestCase(Protocol.Http, "format_tsv_null_representation = 'it''s'")]
+    [TestCase(Protocol.Tcp, "format_tsv_null_representation = 'it''s'")]
     [TestCase(Protocol.Http, "output_format_decimal_trailing_zeros = 1")]
     [TestCase(Protocol.Tcp, "output_format_decimal_trailing_zeros = 1")]
     [TestCase(Protocol.Http, "date_time_64_output_format_cut_trailing_zeros_align_to_groups_of_thousands = 1")]

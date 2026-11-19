@@ -129,6 +129,11 @@ public class StatementsTests
     public void ParameterNames_Sql_GivesThePlaceholdersInCode(string sql, string[] expected) =>
         Assert.That(Statements.ParameterNames(sql), Is.EquivalentTo(expected));
 
+    [TestCase("SELECT a, 'b c', `d`, \"e\", $$f g$$, $t$h$t$ -- i\nFROM (SELECT j) /* k */", false, "SELECT a FROM")]
+    [TestCase("INSERT INTO t SELECT $$x FROM y$$ FROM (SELECT z)", true, "INSERT INTO t SELECT FROM SELECT z")]
+    public void TopLevelWords_Sql_SkipsLiteralsAndComments(string sql, bool nested, string expected) =>
+        Assert.That(string.Join(' ', Statements.TopLevelWords(sql, nested)), Is.EqualTo(expected));
+
     [Test]
     public void Split_Statement_KeepsItsSemicolon()
     {

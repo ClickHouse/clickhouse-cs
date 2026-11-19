@@ -69,10 +69,11 @@ internal sealed record OutputSettings(DateTimeOutputFormat DateTimeFormat, strin
 
     private static bool IsTrue(string value) => value == "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
 
-    // Resolves the backslash escapes of a SQL string literal (the quotes are already removed).
+    // Resolves the escapes of a SQL string literal (the quotes are already removed): the backslash escapes and a
+    // doubled quote (`'it''s'`).
     internal static string Unescape(string literal)
     {
-        if (!literal.Contains('\\', StringComparison.Ordinal))
+        if (literal.AsSpan().IndexOfAny('\\', '\'') < 0)
         {
             return literal;
         }
@@ -80,6 +81,12 @@ internal sealed record OutputSettings(DateTimeOutputFormat DateTimeFormat, strin
         for (var i = 0; i < literal.Length; i++)
         {
             var c = literal[i];
+            if (c == '\'' && i + 1 < literal.Length && literal[i + 1] == '\'')
+            {
+                sb.Append('\'');
+                i++;
+                continue;
+            }
             if (c != '\\' || i + 1 == literal.Length)
             {
                 sb.Append(c);

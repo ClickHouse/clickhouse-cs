@@ -15,8 +15,21 @@ public class OutputSettingsTests
     [TestCase("SELECT 'SETTINGS a = 1' -- SETTINGS b = 1", null)]
     [TestCase("SELECT t.settings FROM t", null)]
     [TestCase("SELECT 1", null)]
+    [TestCase("SELECT $$SETTINGS date_time_output_format = 'iso'$$;", null)]
+    [TestCase("SELECT $tag$ SETTINGS a = 1 $tag$ FORMAT TSV", null)]
+    [TestCase("SELECT $$ SETTINGS a = 1 $$ SETTINGS b = 2", "b = 2")]
+    [TestCase("SELECT 1 AS $a$b$ SETTINGS a = 1", "a = 1")]
     public void TrailingSettingsClause_Query_FindsTheClauseOfTheQuery(string sql, string? expected) =>
         Assert.That(Statements.TrailingSettingsClause(sql), Is.EqualTo(expected));
+
+    // The value of a string literal without its quotes, as the server reads it.
+    [TestCase("XYZ", "XYZ")]
+    [TestCase("a\\tb\\\\c\\'d", "a\tb\\c'd")]
+    [TestCase("it''s", "it's")]
+    [TestCase("''''", "''")]
+    [TestCase("a\\\\''b", "a\\'b")]
+    public void Unescape_StringLiteral_ResolvesTheEscapes(string literal, string expected) =>
+        Assert.That(OutputSettings.Unescape(literal), Is.EqualTo(expected));
 
     [Test]
     public void From_Values_ReadsEachSetting()
