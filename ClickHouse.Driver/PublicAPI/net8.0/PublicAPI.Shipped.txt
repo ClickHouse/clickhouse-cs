@@ -5,7 +5,7 @@ ClickHouse.Driver.ADO.ClickHouseDataSource.CreateConnection() -> ClickHouse.Driv
 ClickHouse.Driver.ADO.ClickHouseDataSource.Logger.get -> Microsoft.Extensions.Logging.ILogger
 ClickHouse.Driver.ADO.ClickHouseDataSource.Logger.set -> void
 ClickHouse.Driver.ADO.ClickHouseDataSource.OpenConnection() -> ClickHouse.Driver.ADO.ClickHouseConnection
-ClickHouse.Driver.ADO.ClickHouseDataSource.OpenConnectionAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<ClickHouse.Driver.ADO.ClickHouseConnection>
+ClickHouse.Driver.ADO.ClickHouseDataSource.OpenConnectionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<ClickHouse.Driver.ADO.ClickHouseConnection>
 ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.GetTuple(int ordinal) -> System.Runtime.CompilerServices.ITuple
 ClickHouse.Driver.IClickHouseDataSource
 ClickHouse.Driver.IClickHouseDataSource.ConnectionString.get -> string
