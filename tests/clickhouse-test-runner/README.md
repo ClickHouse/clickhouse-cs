@@ -284,6 +284,12 @@ of more than 7 elements (`[tcp-tuple-over-7-elements]`).
 manually, and on pushes and pull requests that change this directory or the workflow. A pull request that
 changes only the clients does not start it; the nightly run tests the clients of `main`.
 
+To run it on such a pull request, add the `tests:run-core-sql` label
+([`upstream-sql-tests-label.yml`](../../.github/workflows/upstream-sql-tests-label.yml)). The run tests the
+pull request as it is when the label is added, and removes the label when it ends: to test a later push, add
+the label again. The token of a pull request from a fork cannot remove the label, so remove it by hand before
+you add it again.
+
 - The `build` job builds the shim once (`scripts/build.sh`), and the test jobs use it. The `harness-tests` job
   runs the unit and live tests of the shim.
 - The matrix of the test jobs is `{protocol: http, tcp} × {shard: 1..8}`, at `-j 4` on 4-vCPU runners.
