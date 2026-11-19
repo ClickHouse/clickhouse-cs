@@ -1060,6 +1060,10 @@ bool canRead = ClickHouseTcpTypes.CanRead("Array(Nullable(DateTime))", typeof(Da
 bool canWrite = ClickHouseTcpTypes.CanWrite("FixedString(8)", typeof(byte[]));
 ```
 
+When a read or an insert refuses a CLR type, its message names some types that the column type reads as or is
+written from. That list is short: it does not name the types of the read and write rules, or every type inside a
+composite type. Ask `CanRead` or `CanWrite` about any other type.
+
 Mappings for `Nullable`, `Array`, `Tuple`, `Map`, and `LowCardinality` apply recursively to their
 inner types.
 

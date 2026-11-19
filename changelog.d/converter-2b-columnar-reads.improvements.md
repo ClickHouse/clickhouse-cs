@@ -3,5 +3,5 @@
   `object`), a nullable value type for a column that is not nullable (for example `ulong?` for `UInt64`), and a value
   type for a nullable column, which throws at the first `NULL` value
   ([ClickHouse/integrations#801](https://github.com/ClickHouse/integrations/issues/801)).
-  - Changed a `Block.ReadAs<T>` view that converts a column to convert the whole column on its first access to `Values`
-    or to the indexer. The block gives the same view for each later call with the same column and type.
+  - A `Block.ReadAs<T>` view that converts a column converted the whole column on its first access to `Values` or to
+    the indexer, and the block gave the same view for each later call with the same column and type.
