@@ -29,6 +29,12 @@ internal abstract class FixedLeafWriter<T, TWire> : ColumnWriter<T>
     /// <inheritdoc/>
     public sealed override bool IsFlat => true;
 
+    /// <summary>
+    /// Whether two equal values of <typeparamref name="T"/> always convert to equal canonical values
+    /// (<see cref="IWriteConversion{T, TWire}.ClrEqualityImpliesCanonicalEquality"/>).
+    /// </summary>
+    public abstract bool ClrEqualityImpliesCanonicalEquality { get; }
+
     /// <summary>Writes canonical values, for example the entries of a LowCardinality dictionary.</summary>
     /// <param name="writer">The writer to encode into.</param>
     /// <param name="values">The canonical values.</param>
@@ -66,6 +72,9 @@ internal sealed class FixedLeafWriter<T, TWire, TConv> : FixedLeafWriter<T, TWir
     public FixedLeafWriter(TConv conversion, TWire placeholder)
         : base(placeholder)
         => this.conversion = conversion;
+
+    /// <inheritdoc/>
+    public override bool ClrEqualityImpliesCanonicalEquality => conversion.ClrEqualityImpliesCanonicalEquality;
 
     /// <inheritdoc/>
     public override TWire ToCanonical(T value, int position) => conversion.Convert(value, position);

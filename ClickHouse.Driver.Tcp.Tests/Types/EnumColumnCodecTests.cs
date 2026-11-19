@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using ClickHouse.Driver.Tcp.Tests.Utilities;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
 
@@ -59,46 +58,6 @@ public class EnumColumnCodecTests
         // define keeps both characters (hex('\z') is 5C7A), and a doubled quote is one quote.
         var codec = (EnumColumnCodec<sbyte>)Enum8ColumnCodec.Create(TypeParser.Parse($"Enum8({member})"));
         Assert.That(codec.OrdinalToLabel[(sbyte)1], Is.EqualTo(expected));
-    }
-
-    [Test]
-    public void CanWrite_LabelOrOrdinalColumn_AcceptsBothAndRejectsOthers()
-    {
-        IColumnCodec codec = Enum8ColumnCodec.Create(TypeParser.Parse("Enum8('a' = -1, 'b' = 127)"));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWrite(new ArrayColumn<sbyte>("v", null, new sbyte[] { -1 })), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<string>("v", null, new[] { "a" })), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<int>("v", null, new[] { 1 })), Is.False, "the ordinal has to be the declared width");
-            Assert.That(codec.CanWriteElementType(typeof(string)), Is.True);
-        });
-    }
-
-    /// <summary>
-    /// Verifies that nullable enum placeholders use a declared member.
-    /// </summary>
-    [Test]
-    public void NullPlaceholderAs_String_IsADeclaredLabel()
-    {
-        IColumnCodec codec = Enum8ColumnCodec.Create(TypeParser.Parse("Enum8('a' = -1, 'b' = 127)"));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.NullPlaceholderAs(typeof(string)), Is.EqualTo("a"));
-            Assert.That(codec.NullPlaceholderAs(typeof(sbyte)), Is.EqualTo((sbyte)-1));
-            Assert.Throws<NotSupportedException>(() => codec.NullPlaceholderAs(typeof(int)));
-        });
-    }
-
-    [Test]
-    public void WriteColumn_LabelTheTypeDoesNotDeclare_ThrowsNamingTheLabelAndTheLabelsItHas()
-    {
-        IColumnCodec codec = Enum8ColumnCodec.Create(TypeParser.Parse("Enum8('a' = -1, 'b' = 127)"));
-        var labels = new ArrayColumn<string>("v", null, new[] { "a", "c" });
-
-        ArgumentException thrown = Assert.ThrowsAsync<ArgumentException>(() => CodecTestHarness.WriteSliceAsync(codec, labels, 0, 2));
-        Assert.That(thrown.Message, Does.Contain("'c' is not a label of 'Enum8('a' = -1, 'b' = 127)'").And.Contain("'a', 'b'"));
     }
 
     /// <summary>

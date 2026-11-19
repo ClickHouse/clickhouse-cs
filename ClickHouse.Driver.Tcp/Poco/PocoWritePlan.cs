@@ -72,9 +72,8 @@ internal sealed class PocoWritePlan<T>
 
             claimedBy[member.MemberName] = column.Name;
 
-            // Resolve through the sample context so timezone-less values use this operation's session zone.
-            IColumnCodec codec = schema.Codecs.Resolve(column.TypeName, schema.Context);
-            builders[i] = PocoColumnBuilderFactory.Create<T>(column, codec, member, schema.Codecs.Converters, schema.Context, forcedTier);
+            // Derive through the sample context so timezone-less values use this operation's session zone.
+            builders[i] = PocoColumnBuilderFactory.Create<T>(column, member, schema.Codecs.Converters, schema.Context, forcedTier);
         }
 
         return new PocoWritePlan<T>(builders);

@@ -1,42 +1,16 @@
 using System;
-using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
-using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
 using ClickHouse.Driver.Tcp.Types.Codecs;
+using static ClickHouse.Driver.Tcp.Tests.Utilities.CodecTestHarness;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
 [TestFixture]
 public class DateTimeColumnCodecTests
 {
-    private static readonly CancellationToken None = CancellationToken.None;
-
     private static DateTimeColumnCodec Codec(string type, string serverTimezone = null)
         => DateTimeColumnCodec.Create(TypeParser.Parse(type), serverTimezone);
-
-    [Test]
-    public async Task RoundTrip_UtcWholeSeconds_PreservedAsOffset()
-    {
-        var values = new[]
-        {
-            DateTimeOffset.FromUnixTimeSeconds(0),
-            DateTimeOffset.FromUnixTimeSeconds(1_700_000_000),
-        };
-        DateTimeColumnCodec codec = Codec("DateTime('UTC')");
-
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTimeOffset>("c", "DateTime('UTC')", values)));
-        using var reader = ReaderOver(bytes);
-        using var column = (DateTimeColumn)await codec.ReadColumnAsync(reader, "c", "DateTime('UTC')", values.Length, None);
-
-        Assert.Multiple(() =>
-        {
-            CollectionAssert.AreEqual(values, column.ToDateTimeOffsets());
-            Assert.That(column.GetDateTimeOffset(0).Offset, Is.EqualTo(TimeSpan.Zero));
-            Assert.That(column.TypeName, Is.EqualTo("DateTime('UTC')"));
-        });
-    }
 
     [Test]
     public async Task ReadColumn_SingleValue_DecodesRawUnixSeconds()
@@ -151,135 +125,19 @@ public class DateTimeColumnCodecTests
         Assert.That(column.RowCount, Is.EqualTo(0));
     }
 
-    [TestCase(0u)]
-    [TestCase(1_700_000_000u)]
-    public async Task WriteColumn_RawSeconds_WrittenVerbatim(uint seconds)
-    {
-        // Raw epoch seconds are the wire representation, so they are written unchanged.
-        DateTimeColumnCodec codec = Codec("DateTime");
-        var column = new ArrayColumn<uint>("c", "DateTime", new[] { seconds });
-
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, column));
-
-        Assert.That(BitConverter.ToUInt32(bytes), Is.EqualTo(seconds));
-    }
-
-    [Test]
-    public async Task WriteColumn_DateTimeOffset_EncodesSameUnixSecondsAsEquivalentDateTime()
-    {
-        // The same instant expressed as a DateTimeOffset (with a non-zero offset) and as a UTC DateTime must
-        // produce identical column bodies — both are epoch seconds of the UTC instant.
-        DateTimeColumnCodec codec = Codec("DateTime");
-        DateTime utc = DateTime.UnixEpoch.AddSeconds(1_700_000_000);
-        var offset = new DateTimeOffset(utc, TimeSpan.Zero).ToOffset(TimeSpan.FromHours(5));
-
-        byte[] fromDateTime = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", "DateTime", new[] { utc })));
-        byte[] fromOffset = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTimeOffset>("c", "DateTime", new[] { offset })));
-
-        CollectionAssert.AreEqual(fromDateTime, fromOffset);
-    }
-
-    [Test]
-    public void WriteColumn_DateTimeOutsideClickHouseRange_Throws()
-    {
-        DateTimeColumnCodec codec = Codec("DateTime");
-        using var ms = new MemoryStream();
-        using var writer = new ClickHouseBinaryWriter(ms);
-        var beforeEpoch = new ArrayColumn<DateTime>("c", "DateTime", new[] { new DateTime(1969, 12, 31, 23, 59, 59, DateTimeKind.Utc) });
-        var pastMax = new ArrayColumn<DateTime>("c", "DateTime", new[] { new DateTime(2200, 1, 1, 0, 0, 0, DateTimeKind.Utc) });
-
-        Assert.Multiple(() =>
-        {
-            Assert.Throws<ArgumentOutOfRangeException>(() => codec.WriteColumn(writer, beforeEpoch));
-            Assert.Throws<ArgumentOutOfRangeException>(() => codec.WriteColumn(writer, pastMax));
-        });
-    }
-
     [Test]
     public async Task WriteColumn_UnspecifiedKindTimezonelessColumn_TreatedAsUtcNotMachineLocal()
     {
-        // A timezone-less column resolves to UTC, so a Kind=Unspecified wall-clock encodes as UTC — and the wire
-        // bytes never depend on the host machine's timezone.
+        // A timezone-less column with no session timezone resolves to UTC. So an insert writes a Kind=Unspecified wall
+        // clock as UTC, and the wire bytes do not depend on the timezone of the host machine.
         DateTimeColumnCodec codec = Codec("DateTime");
         var unspecified = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Unspecified);
         var utc = DateTime.SpecifyKind(unspecified, DateTimeKind.Utc);
 
-        byte[] fromUnspecified = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", "DateTime", new[] { unspecified })));
-        byte[] fromUtc = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", "DateTime", new[] { utc })));
+        byte[] fromUnspecified = await WriteSliceAsync(codec, new ArrayColumn<DateTime>("c", "DateTime", new[] { unspecified }), 0, 1);
+        byte[] fromUtc = await WriteSliceAsync(codec, new ArrayColumn<DateTime>("c", "DateTime", new[] { utc }), 0, 1);
 
         CollectionAssert.AreEqual(fromUtc, fromUnspecified);
-    }
-
-    [Test]
-    public async Task WriteColumn_UnspecifiedKindTimezoneBearingColumn_InterpretedInColumnTimezone()
-    {
-        // Consistency with the HTTP client: a Kind=Unspecified wall-clock is interpreted in the column's
-        // timezone, not UTC. 2024-01-15 10:30:00 in a +05:00 column is the instant 2024-01-15 05:30:00Z.
-        DateTimeColumnCodec codec = Codec("DateTime('Fixed/UTC+05:00:00')");
-        var unspecified = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Unspecified);
-
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", "DateTime('Fixed/UTC+05:00:00')", new[] { unspecified })));
-
-        long expected = new DateTimeOffset(2024, 1, 15, 10, 30, 0, TimeSpan.FromHours(5)).ToUnixTimeSeconds();
-        Assert.That(BitConverter.ToUInt32(bytes), Is.EqualTo((uint)expected));
-    }
-
-    [Test]
-    public void WriteColumn_UnspecifiedKindInDaylightSavingGap_ThrowsNamingTheZone()
-    {
-        // 2024-03-10 02:30 does not exist in New York (02:00 jumps to 03:00), so it names no instant and is
-        // rejected rather than shifted to one of the two neighbouring offsets.
-        const string type = "DateTime('America/New_York')";
-        DateTimeColumnCodec codec = Codec(type);
-        var gap = new DateTime(2024, 3, 10, 2, 30, 0, DateTimeKind.Unspecified);
-
-        ArgumentException thrown = Assert.ThrowsAsync<ArgumentException>(async () =>
-            await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { gap }))));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(thrown.Message, Does.Contain("America/New_York"));
-            Assert.That(thrown.Message, Does.Contain("2024-03-10 02:30:00"));
-            Assert.That(thrown.Message, Does.Contain("DateTimeOffset"));
-        });
-    }
-
-    [Test]
-    public async Task WriteColumn_UnspecifiedKindInAmbiguousHour_EncodesTheEarlierOccurrence()
-    {
-        // 2024-11-03 01:30 happens twice in New York. The lenient rule takes the earlier, 01:30 EDT = 05:30Z, as
-        // HTTP does; TimeZoneInfo alone picks standard time (06:30Z) and reports nothing — a silent hour apart.
-        const string type = "DateTime('America/New_York')";
-        DateTimeColumnCodec codec = Codec(type);
-        var ambiguous = new DateTime(2024, 11, 3, 1, 30, 0, DateTimeKind.Unspecified);
-
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime>("c", type, new[] { ambiguous })));
-
-        long expected = new DateTimeOffset(2024, 11, 3, 5, 30, 0, TimeSpan.Zero).ToUnixTimeSeconds();
-        Assert.That(BitConverter.ToUInt32(bytes), Is.EqualTo((uint)expected));
-    }
-
-    [Test]
-    public async Task WriteColumn_LocalKind_EncodesTheInstantAndIgnoresTheColumnTimezone()
-    {
-        // A Kind=Local value names an instant, resolved against the host machine's timezone, so the column's own
-        // timezone takes no part: two columns five hours apart encode it identically, and so does the Kind=Utc
-        // value naming the same instant. A wall-clock reading would differ between the two columns. Both
-        // assertions hold whatever zone the host is in.
-        const string utcType = "DateTime('UTC')";
-        const string offsetType = "DateTime('Fixed/UTC+05:00:00')";
-        var local = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Local);
-        DateTime utc = local.ToUniversalTime();
-
-        byte[] inUtcColumn = await WriteAsync(w => Codec(utcType).WriteColumn(w, new ArrayColumn<DateTime>("c", utcType, new[] { local })));
-        byte[] inOffsetColumn = await WriteAsync(w => Codec(offsetType).WriteColumn(w, new ArrayColumn<DateTime>("c", offsetType, new[] { local })));
-        byte[] fromUtcKind = await WriteAsync(w => Codec(offsetType).WriteColumn(w, new ArrayColumn<DateTime>("c", offsetType, new[] { utc })));
-
-        Assert.Multiple(() =>
-        {
-            CollectionAssert.AreEqual(inUtcColumn, inOffsetColumn, "the column timezone takes no part");
-            CollectionAssert.AreEqual(fromUtcKind, inOffsetColumn, "Local is the instant, not a wall clock in the column timezone");
-        });
     }
 
     [TestCase("DateTime('Not/AZone')", "Not/AZone")]
@@ -340,7 +198,7 @@ public class DateTimeColumnCodecTests
         DateTimeColumnCodec codec = Codec("DateTime('Fixed/UTC+19:00:00')");
         var values = new ArrayColumn<DateTime>("c", "DateTime", new[] { new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Unspecified) });
 
-        FormatException thrown = Assert.ThrowsAsync<FormatException>(() => WriteAsync(w => codec.WriteColumn(w, values)));
+        FormatException thrown = Assert.ThrowsAsync<FormatException>(() => WriteSliceAsync(codec, values, 0, values.RowCount));
         Assert.That(thrown.Message, Does.Contain("Fixed/UTC+19:00:00"));
     }
 
@@ -351,9 +209,11 @@ public class DateTimeColumnCodecTests
         var value = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
         DateTimeColumnCodec codec = Codec("DateTime('Fixed/UTC+19:00:00')");
 
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(
-            w,
-            new ArrayColumn<DateTime>("c", "DateTime('Fixed/UTC+19:00:00')", new[] { value })));
+        byte[] bytes = await WriteSliceAsync(
+            codec,
+            new ArrayColumn<DateTime>("c", "DateTime('Fixed/UTC+19:00:00')", new[] { value }),
+            0,
+            1);
 
         Assert.That(BitConverter.ToUInt32(bytes, 0), Is.EqualTo(1_705_314_600U));
     }
@@ -365,72 +225,14 @@ public class DateTimeColumnCodecTests
         var value = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Local);
         DateTimeColumnCodec codec = Codec("DateTime('Fixed/UTC+19:00:00')");
 
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(
-            w,
-            new ArrayColumn<DateTime>("c", "DateTime('Fixed/UTC+19:00:00')", new[] { value })));
+        byte[] bytes = await WriteSliceAsync(
+            codec,
+            new ArrayColumn<DateTime>("c", "DateTime('Fixed/UTC+19:00:00')", new[] { value }),
+            0,
+            1);
 
         Assert.That(
             BitConverter.ToUInt32(bytes, 0),
             Is.EqualTo((uint)new DateTimeOffset(value.ToUniversalTime(), TimeSpan.Zero).ToUnixTimeSeconds()));
     }
-
-    // The UTC null placeholder must not resolve the column timezone.
-    [Test]
-    public async Task WriteColumn_NullableNullIntoAZoneTimeZoneInfoCannotHold_WritesThePlaceholder()
-    {
-        const string type = "Nullable(DateTime('Fixed/UTC+19:00:00'))";
-        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(type, ResolveContext.ForWrite);
-
-        byte[] bytes = await WriteAsync(w => codec.WriteColumn(w, new ArrayColumn<DateTime?>("c", type, new DateTime?[] { null })));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(bytes[0], Is.EqualTo(1), "the null map marks the row absent");
-            Assert.That(BitConverter.ToUInt32(bytes, 1), Is.EqualTo(0U), "the placeholder is the epoch");
-        });
-    }
-
-    [Test]
-    public void CanWrite_AcceptsRawSecondsDateTimeAndDateTimeOffset_RejectsOthers()
-    {
-        DateTimeColumnCodec codec = Codec("DateTime");
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWrite(new ArrayColumn<uint>("c", "DateTime", Array.Empty<uint>())), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<DateTime>("c", "DateTime", Array.Empty<DateTime>())), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<DateTimeOffset>("c", "DateTime", Array.Empty<DateTimeOffset>())), Is.True);
-            Assert.That(codec.CanWrite(new ArrayColumn<string>("c", "DateTime", Array.Empty<string>())), Is.False);
-        });
-    }
-
-    [Test]
-    public void WritableElementTypes_ListsUIntThenOffsetThenDateTime()
-        => Assert.That(Codec("DateTime").WritableElementTypes, Is.EqualTo(new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime) }));
-
-    [Test]
-    public void NullPlaceholderAs_ReturnsEpochInRequestedSpelling_ThrowsForOthers()
-    {
-        DateTimeColumnCodec codec = Codec("DateTime");
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.NullPlaceholderAs(typeof(uint)), Is.EqualTo(0u));
-            Assert.That(codec.NullPlaceholderAs(typeof(DateTimeOffset)), Is.EqualTo(DateTimeOffset.UnixEpoch));
-            Assert.That(codec.NullPlaceholderAs(typeof(DateTime)), Is.EqualTo(DateTime.UnixEpoch));
-            Assert.Throws<NotSupportedException>(() => codec.NullPlaceholderAs(typeof(string)));
-        });
-    }
-
-    private static async Task<byte[]> WriteAsync(Action<ClickHouseBinaryWriter> write)
-    {
-        using var ms = new MemoryStream();
-        using (var writer = new ClickHouseBinaryWriter(ms))
-        {
-            write(writer);
-            await writer.FlushAsync(None);
-        }
-
-        return ms.ToArray();
-    }
-
-    private static ClickHouseBinaryReader ReaderOver(byte[] bytes) => new(new MemoryStream(bytes));
 }

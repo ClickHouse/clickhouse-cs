@@ -189,9 +189,7 @@ internal static class PocoColumnScatterFactory
 
     /// <summary>
     /// The scatter of <see cref="PocoScatterTier.Fill"/>: a bulk read of the rows into a pooled buffer, then the setter
-    /// of the property for each row. It compiles no code. When the bulk read fails, it reads and sets the rows again one
-    /// at a time, as the compiled loop does, so the first failure in row order is the one that it throws, also when that
-    /// is the failure of a setter.
+    /// of the property for each row. It compiles no code. When the bulk read fails, no setter runs.
     /// </summary>
     private sealed class FillScatter<T, TProp>
     {
@@ -218,15 +216,9 @@ internal static class PocoColumnScatterFactory
                 {
                     bound.Fill(start, values.AsSpan(0, rowCount));
                 }
-                catch (Exception failure)
+                catch (NullValueException failure)
                 {
-                    ReadAndSetInRowOrder(bound, rows, start, rowCount, rowOffset);
-                    if (failure is NullValueException nullValue)
-                    {
-                        throw site.NullFailure(nullValue, start, rowOffset);
-                    }
-
-                    throw;
+                    throw site.NullFailure(failure, start, rowOffset);
                 }
 
                 Action<T, TProp> setter = set;
@@ -238,26 +230,6 @@ internal static class PocoColumnScatterFactory
             finally
             {
                 ArrayPool<TProp>.Shared.Return(values, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<TProp>());
-            }
-        }
-
-        // After a bulk read fails: reads and sets one row at a time and throws the first failure, of a read or of a
-        // setter. The caller throws the failure of the bulk read when no row fails here.
-        private void ReadAndSetInRowOrder(BoundReader<TProp> bound, T[] rows, int start, int rowCount, long rowOffset)
-        {
-            var value = new TProp[1];
-            for (int i = 0; i < rowCount; i++)
-            {
-                try
-                {
-                    bound.Fill(start + i, value);
-                }
-                catch (NullValueException failure)
-                {
-                    throw site.NullFailure(failure, start, rowOffset);
-                }
-
-                set(rows[i], value[0]);
             }
         }
     }

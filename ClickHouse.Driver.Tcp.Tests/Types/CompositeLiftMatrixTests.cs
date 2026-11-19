@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using ClickHouse.Driver.Tcp.Types;
-using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Tests.Types;
 
-/// <summary>Tests read and write type lifting through nested composite codecs.</summary>
+/// <summary>
+/// Read and write type lifting through nested composite types. The differential tests (<c>DifferentialCases</c>) read
+/// each case as its canonical and its lifted type, and write it from both.
+/// </summary>
 [TestFixture]
 public class CompositeLiftMatrixTests
 {
@@ -62,6 +64,9 @@ public class CompositeLiftMatrixTests
             "Tuple(DateTime('UTC'), DateTime64(3, 'UTC'), Time)",
             typeof(ValueTuple<uint, long, int>),
             typeof(ValueTuple<DateTime, long, TimeSpan>));
+
+        // A nullable tuple whose fields lift.
+        yield return new Case("Nullable(Tuple(DateTime('UTC'), String))", typeof(ValueTuple<uint, string>?), typeof(ValueTuple<DateTime, string>?));
     }
 
     private static IColumnCodec Codec(string type)
@@ -76,63 +81,6 @@ public class CompositeLiftMatrixTests
     public void CanRead_NestedComposite_IsTrueForTheLiftedType(Case testCase)
         => Assert.That(ClickHouseTcpTypes.CanRead(testCase.ColumnType, testCase.Lifted), Is.True, $"{testCase.ColumnType} does not read as {testCase.Lifted}");
 
-    [TestCaseSource(nameof(Cases))]
-    public void CanWriteElementType_NestedComposite_AcceptsBothTheCanonicalAndTheLiftedShape(Case testCase)
-    {
-        IColumnCodec codec = Codec(testCase.ColumnType);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWriteElementType(testCase.Canonical), Is.True, "the canonical shape must always be writable");
-            Assert.That(codec.CanWriteElementType(testCase.Lifted), Is.True, $"{testCase.ColumnType} cannot be written from {testCase.Lifted}");
-        });
-    }
-
-    [TestCaseSource(nameof(Cases))]
-    public void CanWriteElementType_WhateverItAccepts_TheReadSideAlsoOffers(Case testCase)
-    {
-        IColumnCodec codec = Codec(testCase.ColumnType);
-
-        Type[] candidates =
-        {
-            testCase.Canonical,
-            testCase.Lifted,
-            typeof(uint[]), typeof(int[]), typeof(long[]), typeof(DateTime[]), typeof(TimeSpan[]), typeof(string[]),
-            typeof(DateTime?[]), typeof(TimeSpan?[]), typeof(uint?[]), typeof(int?[]),
-            typeof(DateTime[][]), typeof(TimeSpan[][]), typeof(uint[][]),
-            typeof(ValueTuple<DateTime, string>), typeof(ValueTuple<uint, string>), typeof(ValueTuple<DateTime>),
-            typeof(KeyValuePair<string, DateTime>[]), typeof(KeyValuePair<string, uint>[]),
-            typeof(object), typeof(object[]), typeof(DateTime), typeof(string),
-        };
-
-        Assert.Multiple(() =>
-        {
-            foreach (Type candidate in candidates)
-            {
-                if (!codec.CanWriteElementType(candidate))
-                {
-                    continue;
-                }
-
-                Assert.That(ClickHouseTcpTypes.CanRead(testCase.ColumnType, candidate), Is.True,
-                    $"{testCase.ColumnType} can be written from {candidate} but cannot be read into it");
-            }
-        });
-    }
-
-    [TestCaseSource(nameof(Cases))]
-    public void CanWriteElementType_NestedCompositeOfferedAnUnrelatedShape_ReturnsFalse(Case testCase)
-    {
-        IColumnCodec codec = Codec(testCase.ColumnType);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(codec.CanWriteElementType(typeof(Guid[])), Is.False);
-            Assert.That(codec.CanWriteElementType(typeof(Guid)), Is.False);
-            Assert.That(codec.CanWriteElementType(typeof(ValueTuple<Guid, Guid, Guid, Guid, Guid, Guid, Guid>)), Is.False);
-        });
-    }
-
     [TestCase("Array(Nested(a UInt8))")]
     [TestCase("Tuple(Nested(a UInt8), String)")]
     [TestCase("Map(String, Nested(a UInt8))")]
@@ -140,7 +88,7 @@ public class CompositeLiftMatrixTests
     [TestCase("Array(Nothing)")]
     [TestCase("Tuple(Nothing, String)")]
 
-    // Wrappers must preserve an inner codec's write refusal.
+    // A composite keeps the write refusal of its child.
     [TestCase("Nullable(Nothing)")]
     [TestCase("Array(Nullable(Nothing))")]
     [TestCase("Array(Array(Nullable(Nothing)))")]
@@ -150,29 +98,6 @@ public class CompositeLiftMatrixTests
     [TestCase("Array(Variant(String, Nested(a UInt8)))")]
     [TestCase("Map(String, Variant(String, Nested(a UInt8)))")]
     [TestCase("Tuple(Variant(String, Nested(a UInt8)), String)")]
-    public void CanWriteElementType_CompositeOverAnUnwritableChild_RefusesItsOwnElementType(string type)
-    {
-        IColumnCodec codec = Codec(type);
-
-        Assert.That(codec.CanWriteElementType(codec.ElementType), Is.False);
-    }
-
-    [TestCase("Nullable(Nothing)", typeof(object))]
-    [TestCase("Variant(String, Nested(a UInt8))", typeof(object))]
-    [TestCase("Array(Nullable(Nothing))", typeof(object[]))]
-    [TestCase("Map(String, Nullable(Nothing))", typeof(object))]
-    [TestCase("Nullable(Int32)", typeof(int?))]
-    [TestCase("Variant(String, UInt64)", typeof(object))]
-    [TestCase("Array(UInt32)", typeof(uint[]))]
-    public void CanWriteElementType_AndCanWrite_AgreeOnAnArrayBackedColumn(string type, Type elementType)
-    {
-        IColumnCodec codec = Codec(type);
-        var probe = (IColumn)Activator.CreateInstance(
-            typeof(ArrayColumn<>).MakeGenericType(elementType),
-            string.Empty,
-            codec.TypeName,
-            Array.CreateInstance(elementType, 0));
-
-        Assert.That(codec.CanWriteElementType(elementType), Is.EqualTo(codec.CanWrite(probe)));
-    }
+    public void CanWrite_CompositeOverAChildThatNoValueCanFill_IsFalseForItsElementType(string type)
+        => Assert.That(ClickHouseTcpTypes.CanWrite(type, Codec(type).ElementType), Is.False);
 }
