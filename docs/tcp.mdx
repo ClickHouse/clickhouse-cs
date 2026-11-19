@@ -508,6 +508,45 @@ Always finish enumeration or dispose the enumerator so its connection returns to
 `Block.Column<T>` accesses the CLR type produced by the decoder. Use `Block.ReadAs<T>` or a
 specialized interface such as `IDateTimeColumn` when conversion is required.
 
+#### Converting a column with ReadAs {#read-as}
+
+`Block.ReadAs<T>` reads a column as another CLR type:
+
+```csharp
+await foreach (Block block in client.StreamAsync(
+    "SELECT recorded_at, status FROM events ORDER BY id"))
+{
+    // DateTime('UTC') decodes as uint seconds; ReadAs converts them.
+    ReadOnlySpan<DateTimeOffset> recordedAt = block.ReadAs<DateTimeOffset>("recorded_at").Values;
+
+    // An Int8 column read as a CLR enum (enum Status : sbyte) from its ordinal.
+    ReadOnlySpan<Status> status = block.ReadAs<Status>("status").Values;
+}
+```
+
+When the column already decodes to `T`, `ReadAs<T>` returns the column itself. Otherwise it returns a view.
+The first access to the view's `Values` or to its indexer converts the whole column one time, and both then
+read those values. The block keeps one view for each column and type, so a second call returns the same
+view. The view is valid only while the block is: the block releases the converted values when the
+enumeration advances. Reading one row of a view converts all of its rows, so read `Values` once into a local.
+
+A column reads as the types in the [reading tables](#type-map-reading). In addition, these rules apply to
+the whole column type, the same as in `QueryAsync<T>` POCO mapping:
+
+* **CLR enum from its ordinal.** An integer column, or an `Enum8`/`Enum16` column, reads as a CLR enum
+  whose underlying type is the column's .NET type. An ordinal that the enum does not name keeps its
+  value.
+* **Cast.** A column reads as a type that its values cast to, such as `object`, `IComparable`, or
+  `IReadOnlyList<string>` for `Array(String)`. A reference value keeps its object, and a value type is
+  boxed. The .NET cast also
+  accepts an array of other integers of the same size, so `Array(UInt32)` reads as `int[]`, and a
+  `UInt32` value above `int.MaxValue` then reads as a negative `int`.
+* **Nullable target.** A column that is not nullable reads as a nullable value type, for example
+  `UInt64` as `ulong?` or `DateTime` as `DateTimeOffset?`.
+* **Nullable column as a value type.** A `Nullable(T)` or `LowCardinality(Nullable(T))` column reads as a
+  value type that cannot hold null, for example `Nullable(Int32)` as `int`. The read throws an
+  `InvalidOperationException` at the first `NULL` value, which names the column, its type and the row.
+
 ### Inserting data {#inserting-data}
 
 Native inserts send data as columnar wire blocks. The SQL must be an `INSERT INTO ... VALUES`
@@ -960,7 +999,8 @@ logical batch may be retried.
 ## Supported data types {#supported-data-types}
 The tables below distinguish the type returned by the decoded `IColumn<T>` from additional types
 available through conversion via `Block.ReadAs<T>`, `QueryAsync<T>` POCO mapping, or inserts. You can ask the same
-resolver used by those operations whether a particular mapping is supported:
+resolver used by those operations whether a particular mapping is supported. `CanRead` gives the answer of
+`Block.ReadAs<T>`, including the [read rules](#read-as) for enums, casts and nullable types:
 
 ```csharp
 bool canRead = ClickHouseTcpTypes.CanRead("Array(Nullable(DateTime))", typeof(DateTime?[]));
@@ -973,7 +1013,8 @@ inner types.
 ### Type mapping: reading from ClickHouse {#type-map-reading}
 
 `Default .NET type` is the `T` exposed by `Block.Column<T>` and `IColumn<T>`. Types in the
-`Also readable as` column are available through `Block.ReadAs<T>` and POCO properties.
+`Also readable as` column are available through `Block.ReadAs<T>` and POCO properties. The
+[read rules](#read-as) for enums, casts and nullable types apply to every column type in addition.
 
 #### Integer types {#type-map-reading-integer}
 

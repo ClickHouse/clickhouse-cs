@@ -4,6 +4,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using ClickHouse.Driver.Tcp.Types.Codecs;
 
 namespace ClickHouse.Driver.Tcp.Types.Converters;
 
@@ -88,22 +89,31 @@ internal sealed class StringLeafReader<T, TConv> : ColumnReader<T>
     private static readonly MethodInfo ReadAtMethod =
         typeof(StringLeafReader<T, TConv>).GetMethod(nameof(ReadAt), BindingFlags.NonPublic | BindingFlags.Static);
 
+    private static readonly MethodInfo TextMethod =
+        typeof(StringLeafReader<T, TConv>).GetMethod(nameof(Text), BindingFlags.NonPublic | BindingFlags.Static);
+
     private StringLeafReader()
     {
     }
 
     /// <inheritdoc/>
-    public override BoundReader<T> Bind(IColumn column) => new Bound(ColumnSurface.Of<IStringColumn>(column));
+    public override BoundReader<T> Bind(IColumn column) => new Bound(Text(column));
 
     /// <inheritdoc/>
     [RequiresDynamicCode("Builds an expression tree, which the caller compiles.")]
     public override Expression Emit(Expression column, ParameterExpression row, EmitScope scope)
     {
-        ParameterExpression text = scope.Local(typeof(IStringColumn), "text", EmitScope.Surface<IStringColumn>(column));
+        ParameterExpression text = scope.Local(typeof(IStringColumn), "text", Expression.Call(TextMethod, Expression.Convert(column, typeof(IColumn))));
         ParameterExpression bytes = scope.Local(typeof(ReadOnlySpan<byte>), "bytes", Expression.Property(text, nameof(IStringColumn.Bytes)));
         ParameterExpression offsets = scope.Local(typeof(ReadOnlySpan<int>), "offsets", Expression.Property(text, nameof(IStringColumn.Offsets)));
         return Expression.Call(ReadAtMethod, bytes, offsets, row);
     }
+
+    // The column's bytes and offsets. A byte[] reading of a column without them fails with the message of the String
+    // codec's own byte[] reading (StringColumnCodec.RowBytes), which says where such a column comes from.
+    private static IStringColumn Text(IColumn column)
+        => column as IStringColumn
+            ?? (typeof(T) == typeof(byte[]) ? throw StringColumnCodec.NoWireBytes(column) : ColumnSurface.Of<IStringColumn>(column));
 
     // Reads one row. The offsets span has one more entry than the column has rows, so a row past the end fails on it.
     private static T ReadAt(ReadOnlySpan<byte> bytes, ReadOnlySpan<int> offsets, int row)

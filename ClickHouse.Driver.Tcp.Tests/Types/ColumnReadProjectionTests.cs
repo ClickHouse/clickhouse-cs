@@ -1005,7 +1005,7 @@ public class ColumnReadProjectionTests
     /// </summary>
     private static void AssertOffers(IColumnCodec codec, Type target, string type)
     {
-        Assert.That(ColumnProjection.Offers(codec, target), Is.True, $"{type} advertises {target} but does not project it");
+        Assert.That(LegacyColumnProjection.Offers(codec, target), Is.True, $"{type} advertises {target} but does not project it");
 
         if (codec.TryProjectRead(Expression.Parameter(codec.ElementType, "v"), target, out Expression projected))
         {
