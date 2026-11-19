@@ -1,0 +1,296 @@
+name: Upstream SQL tests
+
+# Runs a curated subset of the ClickHouse core SQL tests (tests/queries/0_stateless) through the HTTP client
+# (ClickHouse.Driver) and the native TCP client (ClickHouse.Driver.Tcp). See
+# tests/clickhouse-test-runner/README.md.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      clickhouse_version:
+        description: "ClickHouse version to try, with a server image and a v<version>-stable tag upstream, for example 26.11.1.10 (default: tests/clickhouse-test-runner/clickhouse-version)"
+        required: false
+        default: ""
+        type: string
+  schedule:
+    - cron: "0 3 * * *"
+  push:
+    branches: [main]
+    paths:
+      - "tests/clickhouse-test-runner/**"
+      - ".github/workflows/upstream-sql-tests.yml"
+      - "!tests/clickhouse-test-runner/**/*.md"
+  pull_request:
+    paths:
+      - "tests/clickhouse-test-runner/**"
+      - ".github/workflows/upstream-sql-tests.yml"
+      - "!tests/clickhouse-test-runner/**/*.md"
+
+# A new push to a pull request cancels the run of its old head. Nightly, manual and push runs each have a
+# group of their own, so that they do not cancel each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # Builds the shim once (scripts/build.sh), with the error code table of the selected version. The test jobs
+  # use the programs of this job.
+  build:
+    name: Build the shim
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache@v6
+        name: Cache NuGet
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            10.x
+
+      # The server version and the upstream tests are pinned together in
+      # tests/clickhouse-test-runner/clickhouse-version: the `.reference` files of another release do not
+      # match the output of the server. A new server release changes nothing here until a pull request
+      # bumps the pin. The `clickhouse_version` input of a manual run tries another version without a
+      # commit.
+      - name: Select the ClickHouse version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.clickhouse_version }}
+        run: |
+          version="${INPUT_VERSION:-$(tests/clickhouse-test-runner/scripts/pinned-version.sh)}"
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::clickhouse_version must be a full version such as 26.10.4.207 (got: '${version}')"
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          if [[ -z "${INPUT_VERSION}" ]]; then
+            echo "pinned=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      # Also generates ErrorCodes.g.cs from the same checkout, so that the shim knows the error names of the
+      # test hints of this version.
+      - name: Get the upstream tests of ClickHouse ${{ steps.version.outputs.version }}
+        env:
+          CLICKHOUSE_VERSION: ${{ steps.version.outputs.version }}
+        run: tests/clickhouse-test-runner/scripts/fetch-upstream.sh "${CLICKHOUSE_VERSION}"
+
+      # For the pinned version, the generated table must be the committed one.
+      - name: Check the committed error code table
+        if: steps.version.outputs.pinned == 'true'
+        run: |
+          file=tests/clickhouse-test-runner/ClickHouse.Driver.TestRunner/ErrorCodes.g.cs
+          if ! git diff --exit-code -- "${file}"; then
+            echo "::error::${file} does not match the pinned version. Run scripts/fetch-upstream.sh and commit the file."
+            exit 1
+          fi
+
+      - name: Build the shim
+        run: tests/clickhouse-test-runner/scripts/build.sh
+
+      # A tar file keeps the file modes, which an artifact does not.
+      - name: Pack the shim
+        run: tar -C tests/clickhouse-test-runner -cf "${RUNNER_TEMP}/shim.tar" .bin
+
+      - name: Upload the shim
+        uses: actions/upload-artifact@v7
+        with:
+          name: upstream-sql-tests-shim
+          path: ${{ runner.temp }}/shim.tar
+          if-no-files-found: error
+          # A re-run of the failed test jobs does not build again.
+          retention-days: 7
+
+  # The unit tests of the shim, and its live tests, which compare the output of the shim with the server's
+  # own TabSeparated output over both protocols. A job of its own, so that a failed live test does not stop
+  # the upstream tests.
+  harness-tests:
+    name: Unit and live tests of the harness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/cache@v6
+        name: Cache NuGet
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            10.x
+
+      # The shim writes DateTime values with the tz database of the system. tzdata-legacy has the old zone
+      # names that some tests use (US/Samoa, Asia/Calcutta).
+      - name: Install the time zone data
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tzdata tzdata-legacy
+
+      - name: Select the ClickHouse version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.clickhouse_version }}
+        run: |
+          version="${INPUT_VERSION:-$(tests/clickhouse-test-runner/scripts/pinned-version.sh)}"
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::clickhouse_version must be a full version such as 26.10.4.207 (got: '${version}')"
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      # See the upstream-sql-tests job.
+      - name: Start ClickHouse ${{ steps.version.outputs.version }}
+        env:
+          CLICKHOUSE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker run -d --name clickhouse -p 8123:8123 -p 9000:9000 \
+            --hostname "$(hostname)" \
+            --ulimit nofile=262144:262144 -e CLICKHOUSE_SKIP_USER_SETUP=1 \
+            "clickhouse/clickhouse-server:${CLICKHOUSE_VERSION}"
+          for _ in $(seq 1 60); do
+            if curl -fsS --data-binary 'SELECT 1' "localhost:8123/" > /dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs clickhouse
+          echo "::error::ClickHouse did not start"
+          exit 1
+
+      # The project builds with the analyzers of the repository and warnings as errors.
+      - name: Unit and live tests
+        env:
+          CLICKHOUSE_TEST_RUNNER_LIVE: "1"
+        run: >-
+          dotnet test tests/clickhouse-test-runner/ClickHouse.Driver.TestRunner.Tests/ClickHouse.Driver.TestRunner.Tests.csproj
+          --configuration Release
+
+  upstream-sql-tests:
+    name: Upstream SQL tests (${{ matrix.protocol }}, shard ${{ matrix.shard }})
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # http: ClickHouse.Driver (ADO.NET, RowBinary over HTTP). tcp: ClickHouse.Driver.Tcp (Native).
+        protocol: [http, tcp]
+        # Round-robin shards of the allowlist, about 1,260 (http) and 1,300 (tcp) tests each. With the
+        # server and the shim on 4 CPUs at -j 4, one shard took 143 s (http) and 128 s (tcp), so a shard
+        # takes a few minutes on a 4-vCPU runner. Change SHARD_TOTAL below together with this list.
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    env:
+      CLICKHOUSE_VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The shim is a framework-dependent .NET program.
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            10.x
+
+      # tests/clickhouse-test needs Python 3 and jinja2. For the tz database, see the harness-tests job.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-jinja2 tzdata tzdata-legacy
+
+      # The stock server configuration. CLICKHOUSE_SKIP_USER_SETUP keeps the `default` user of the image's
+      # users.xml: network access, access management and named-collection control (tests create users,
+      # roles and named collections). Without it, the image allows the user without a password only from
+      # localhost in the container.
+      #
+      # The server gets the host name of the runner: tests/clickhouse-test replaces its own host name with
+      # `localhost` in the output of each test, and some `.reference` files have `localhost` for hostName().
+      - name: Start ClickHouse ${{ needs.build.outputs.version }}
+        run: |
+          docker run -d --name clickhouse -p 8123:8123 -p 9000:9000 \
+            --hostname "$(hostname)" \
+            --ulimit nofile=262144:262144 -e CLICKHOUSE_SKIP_USER_SETUP=1 \
+            "clickhouse/clickhouse-server:${CLICKHOUSE_VERSION}"
+          for _ in $(seq 1 60); do
+            if curl -fsS --data-binary 'SELECT 1' "localhost:8123/" > /dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs clickhouse
+          echo "::error::ClickHouse did not start"
+          exit 1
+
+      - name: Get the upstream tests of ClickHouse ${{ needs.build.outputs.version }}
+        id: upstream
+        run: tests/clickhouse-test-runner/scripts/fetch-upstream.sh "${CLICKHOUSE_VERSION}"
+
+      - name: Download the shim
+        uses: actions/download-artifact@v8
+        with:
+          name: upstream-sql-tests-shim
+          path: ${{ runner.temp }}
+
+      - name: Unpack the shim
+        run: tar -C tests/clickhouse-test-runner -xf "${RUNNER_TEMP}/shim.tar"
+
+      # No RETRY_FAILED: no known client bug makes random tests fail, so a failed test fails the job. The
+      # runner writes the diff of a failed test to its output (upstream-tests.log), and the output of the
+      # test next to the test (<test>.<pid>.stdout and .stderr). `shell: bash` sets pipefail, so the exit
+      # code of the runner is the result of the step. The step timeout is shorter than the job timeout, so
+      # that the upload steps below also run after a hang.
+      - name: Run upstream SQL tests
+        shell: bash
+        timeout-minutes: 20
+        env:
+          CLICKHOUSE_TEST_RUNNER_PROTOCOL: ${{ matrix.protocol }}
+          CLICKHOUSE_CLIENT_CLI_LOG: ${{ github.workspace }}/upstream-run.log
+          SKIP_BUILD: "1"
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_TOTAL: 8
+        run: tests/clickhouse-test-runner/scripts/run-upstream-tests.sh -j 4 2>&1 | tee upstream-tests.log
+
+      - name: Get the error log of the server
+        if: failure()
+        run: docker cp clickhouse:/var/log/clickhouse-server/clickhouse-server.err.log . || true
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: upstream-sql-tests-${{ steps.upstream.outputs.ref }}-${{ matrix.protocol }}-shard-${{ matrix.shard }}
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            upstream-tests.log
+            upstream-run.log
+            clickhouse-server.err.log
+            tests/clickhouse-test-runner/.upstream/ClickHouse/tests/queries/**/*.stdout
+            tests/clickhouse-test-runner/.upstream/ClickHouse/tests/queries/**/*.stderr

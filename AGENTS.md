@@ -15,6 +15,7 @@ in it.**
 | The shared code in `ClickHouse.Driver.Common/` | Both client files. Both clients use this code, so run both test suites. |
 | The examples: `examples/` | [`examples/AGENTS.md`](examples/AGENTS.md) |
 | The benchmarks: `ClickHouse.Driver.Benchmark/` | This file only (see Benchmarks below). |
+| The upstream SQL test harness: `tests/clickhouse-test-runner/` | [`tests/clickhouse-test-runner/AGENTS.md`](tests/clickhouse-test-runner/AGENTS.md) |
 
 ## Repository Overview
 
