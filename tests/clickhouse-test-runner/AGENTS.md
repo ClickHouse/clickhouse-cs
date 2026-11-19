@@ -21,7 +21,9 @@ Do not hide it.
    test in its test project (read the `AGENTS.md` of the client first, as the root `AGENTS.md` says). Do not
    fix a client bug in a pull request that changes the harness: one change per pull request. Some logic
    exists in both clients (see the root `AGENTS.md`), so check the other client too. When someone files an
-   issue for a group, put it on the `Issue:` line of the group.
+   issue for a group, put it on the `Issue:` line of the group. Such a pull request does not start the
+   workflow of the harness: to check that the fix breaks no test of the allowlist, add the
+   `tests:run-core-sql` label (see the README, CI).
 3. **The default for a shim bug is a fix in the shim.** Make the shim copy `clickhouse-client` more exactly.
    Do not change the shim to hide a client bug, for example by another read method, a type-name workaround
    or a correction of a wrong value. The shim must use each client as a user does: `http` reads each value
