@@ -67,7 +67,7 @@ internal static class LeafTable
         // The byte-run leaves.
         Add("String")
             .Read<string>(static _ => StringLeafReader<string, Utf8Text>.Instance)
-            .Read<byte[]>(static _ => StringLeafReader<byte[], CopiedBytes>.Instance, conversion: true)
+            .Read<byte[]>(static _ => StringLeafReader<byte[], CopiedBytes>.Instance, conversion: true, needsColumn: true)
             .Write<string>(static _ => TextStringWriter.String)
             .Write<byte[]>(static _ => BytesStringWriter.Instance, conversion: true);
         Add("FixedString")
@@ -268,6 +268,12 @@ internal sealed class Leaf
     /// <returns>A <see cref="ColumnWriter{T}"/> of <paramref name="clrType"/>, or null.</returns>
     public ColumnWriter CreateWriter(IColumnCodec codec, Type clrType) => (ColumnWriter)Find(writes, codec, clrType)?.Create(codec);
 
+    /// <summary>Whether the read pair for <paramref name="clrType"/> needs the column (see <see cref="Derivation.NeedsColumn"/>).</summary>
+    /// <param name="codec">The codec of the instance.</param>
+    /// <param name="clrType">The CLR type to read as.</param>
+    /// <returns>Whether the pair needs the column; false when the leaf does not read as the type.</returns>
+    public bool ReadNeedsColumn(IColumnCodec codec, Type clrType) => Find(reads, codec, clrType)?.NeedsColumn ?? false;
+
     /// <summary>Why the leaf does not read as <paramref name="clrType"/>, in the style of the codec messages.</summary>
     /// <param name="node">The leaf type as written.</param>
     /// <param name="codec">The codec of the instance.</param>
@@ -289,10 +295,11 @@ internal sealed class Leaf
     /// <param name="create">Builds the reader for one instance of the leaf.</param>
     /// <param name="conversion">Whether the pair converts, rather than give the value that the column stores.</param>
     /// <param name="applies">Whether the pair applies to one instance, or null when it applies to every instance.</param>
+    /// <param name="needsColumn">Whether the reader needs the column (see <see cref="Derivation.NeedsColumn"/>).</param>
     /// <returns>This leaf.</returns>
-    public Leaf Read<T>(Func<IColumnCodec, ColumnReader<T>> create, bool conversion = false, Func<IColumnCodec, bool> applies = null)
+    public Leaf Read<T>(Func<IColumnCodec, ColumnReader<T>> create, bool conversion = false, Func<IColumnCodec, bool> applies = null, bool needsColumn = false)
     {
-        reads.Add(new LeafPair(typeof(T), conversion, applies, create));
+        reads.Add(new LeafPair(typeof(T), conversion, applies, create, needsColumn));
         return this;
     }
 
@@ -344,10 +351,12 @@ internal sealed class LeafPair
     /// <param name="isConversion">Whether the pair converts.</param>
     /// <param name="applies">Whether the pair applies to one instance, or null for every instance.</param>
     /// <param name="create">Builds the converter for one instance.</param>
-    public LeafPair(Type clrType, bool isConversion, Func<IColumnCodec, bool> applies, Func<IColumnCodec, object> create)
+    /// <param name="needsColumn">Whether a reader needs the column (see <see cref="Derivation.NeedsColumn"/>).</param>
+    public LeafPair(Type clrType, bool isConversion, Func<IColumnCodec, bool> applies, Func<IColumnCodec, object> create, bool needsColumn = false)
     {
         ClrType = clrType;
         IsConversion = isConversion;
+        NeedsColumn = needsColumn;
         this.applies = applies;
         this.create = create;
     }
@@ -357,6 +366,9 @@ internal sealed class LeafPair
 
     /// <summary>Whether the pair converts, rather than give or take the value that the decoded column stores.</summary>
     public bool IsConversion { get; }
+
+    /// <summary>Whether a reader of the pair needs the column (see <see cref="Derivation.NeedsColumn"/>).</summary>
+    public bool NeedsColumn { get; }
 
     /// <summary>Whether the pair applies to the instance that <paramref name="codec"/> describes.</summary>
     /// <param name="codec">The codec of the instance.</param>
