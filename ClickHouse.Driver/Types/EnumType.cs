@@ -36,20 +36,18 @@ internal class EnumType : ParameterizedType
 
     public override ParameterizedType Parse(SyntaxTreeNode node, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings)
     {
-        var parameters = node.ChildNodes
-            .Select(cn => cn.Value)
-            .Select(ParseEnumMember)
-            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-
         string typeName = TypeConverter.ExtractTypeName(node);
 
         switch (typeName)
         {
+            // The server types a bare Enum as Enum16 when an ordinal does not fit in Int8; this client reads it as
+            // Enum8 (issue #720).
             case "Enum":
+                return new Enum8Type(ParseEnumMembers(node, "Enum16", short.MinValue, short.MaxValue));
             case "Enum8":
-                return new Enum8Type(parameters);
+                return new Enum8Type(ParseEnumMembers(node, typeName, sbyte.MinValue, sbyte.MaxValue));
             case "Enum16":
-                return new Enum16Type(parameters);
+                return new Enum16Type(ParseEnumMembers(node, typeName, short.MinValue, short.MaxValue));
             default: throw new ArgumentOutOfRangeException($"Unsupported Enum type: {node.Value}");
         }
     }
@@ -83,10 +81,62 @@ internal class EnumType : ParameterizedType
 
     public override void Write(ExtendedBinaryWriter writer, object value) => throw new NotImplementedException();
 
-    private static KeyValuePair<string, int> ParseEnumMember(string value)
+    // A member may omit its ordinal. The server then numbers it like this: the first member's ordinal (1 when the
+    // first member has none) plus the member's position, counted from 0. After the first member, either every
+    // member declares an ordinal or none does. The server rejects a label or an ordinal that two members share in
+    // every definition, and, when a member omits its ordinal, an ordinal outside the range of the type. These checks
+    // run here only when a member omits its ordinal. A definition in which every member declares its ordinal is
+    // parsed as before: 26.3 accepts an ordinal outside the range there and wraps it, as the writers do.
+    private static Dictionary<string, int> ParseEnumMembers(SyntaxTreeNode node, string rangeName, int min, int max)
     {
+        var members = node.ChildNodes.Select(cn => ParseEnumMember(cn.Value)).ToList();
+
+        var omittedAfterFirst = members.Skip(1).Count(member => member.Ordinal is null);
+        if (omittedAfterFirst != 0 && omittedAfterFirst != members.Count - 1)
+            throw new FormatException($"Invalid enum definition: {node}. After the first member, either every member declares an ordinal or none does.");
+
+        var numbered = members.Exists(member => member.Ordinal is null);
+        long first = members.Count > 0 ? members[0].Ordinal ?? 1 : 1;
+        var values = new Dictionary<string, int>(members.Count);
+        var labelsByOrdinal = numbered ? new Dictionary<long, string>(members.Count) : null;
+        for (var i = 0; i < members.Count; i++)
+        {
+            var ordinal = members[i].Ordinal ?? first + i;
+            if (labelsByOrdinal != null)
+            {
+                if (values.ContainsKey(members[i].Label))
+                    throw new FormatException($"Invalid enum definition: {node}. The label '{members[i].Label}' is declared more than once.");
+
+                if (ordinal < min || ordinal > max)
+                {
+                    throw new FormatException(
+                        $"Invalid enum definition: {node}. The ordinal {ordinal.ToString(CultureInfo.InvariantCulture)} of '{members[i].Label}' is out of the {rangeName} " +
+                        $"range [{min.ToString(CultureInfo.InvariantCulture)}, {max.ToString(CultureInfo.InvariantCulture)}].");
+                }
+
+                if (!labelsByOrdinal.TryAdd(ordinal, members[i].Label))
+                {
+                    throw new FormatException(
+                        $"Invalid enum definition: {node}. The ordinal {ordinal.ToString(CultureInfo.InvariantCulture)} of '{members[i].Label}' " +
+                        $"is also the ordinal of '{labelsByOrdinal[ordinal]}'.");
+                }
+            }
+
+            values.Add(members[i].Label, (int)ordinal);
+        }
+
+        return values;
+    }
+
+    private static (string Label, int? Ordinal) ParseEnumMember(string value)
+    {
+        // The '=' that separates the ordinal is outside the quoted label, which can contain '=' itself.
+        var labelEnd = value.Length > 0 && value[0] == '\'' ? ClosingQuoteIndex(value) : -1;
+        if (labelEnd > 0 && labelEnd == value.Length - 1)
+            return (Regex.Unescape(value[1..^1]), null);
+
         var separatorIndex = value.LastIndexOf('=');
-        if (separatorIndex < 0)
+        if (separatorIndex <= labelEnd)
             throw new FormatException($"Invalid enum member definition: {value}");
 
         var rawLabel = value[..separatorIndex].Trim();
@@ -97,8 +147,21 @@ internal class EnumType : ParameterizedType
             rawLabel = rawLabel[1..^1];
         }
 
-        return new KeyValuePair<string, int>(
-            Regex.Unescape(rawLabel),
-            Convert.ToInt32(rawValue, CultureInfo.InvariantCulture));
+        return (Regex.Unescape(rawLabel), Convert.ToInt32(rawValue, CultureInfo.InvariantCulture));
+    }
+
+    // Skips a backslash escape and a doubled quote, both of which the server accepts inside a label.
+    // Returns -1 when the label is not closed.
+    private static int ClosingQuoteIndex(string value)
+    {
+        for (var i = 1; i < value.Length; i++)
+        {
+            if (value[i] == '\\' || (value[i] == '\'' && i + 1 < value.Length && value[i + 1] == '\''))
+                i++;
+            else if (value[i] == '\'')
+                return i;
+        }
+
+        return -1;
     }
 }

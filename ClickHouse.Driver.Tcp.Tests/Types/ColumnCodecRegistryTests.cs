@@ -205,6 +205,8 @@ public class ColumnCodecRegistryTests
     [TestCase("Enum('A' = 1, 'B' = 200)", "Enum16('A' = 1, 'B' = 200)")]
     [TestCase("Enum('A' = -129)", "Enum16('A' = -129)")]
     [TestCase("enum('a' = 1)", "Enum8('a' = 1)")]
+    [TestCase("Enum('A', 'B')", "Enum8('A', 'B')")]
+    [TestCase("Enum('A' = 127, 'B')", "Enum16('A' = 127, 'B')")]
     public void Resolve_BareEnum_PicksTheWidthTheServerWould(string written, string expectedTypeName)
         => Assert.That(ColumnCodecRegistry.Default.Resolve(written, ResolveContext.ForWrite).TypeName, Is.EqualTo(expectedTypeName));
 
@@ -215,7 +217,6 @@ public class ColumnCodecRegistryTests
     /// <summary>
     /// Verifies the exception type for valid server forms the client intentionally does not support.
     /// </summary>
-    [TestCase("Enum8('a', 'b')", typeof(FormatException), TestName = "Enum members with implicit ordinals")]
     [TestCase("DateTime64", typeof(FormatException), TestName = "DateTime64 with no scale, which the server defaults to 3")]
     [TestCase("Decimal", typeof(FormatException), TestName = "Decimal with no precision, which the server defaults to (10, 0)")]
     [TestCase("Decimal(4)", typeof(FormatException), TestName = "Decimal with no scale, which the server defaults to 0")]

@@ -80,12 +80,16 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
     public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(T), typeof(string) };
 
     /// <summary>
-    /// Builds an enum codec by parsing the <c>'label' = ordinal</c> members from the type node's arguments.
+    /// Builds an enum codec by parsing the <c>'label' = ordinal</c> (or <c>'label'</c>) members from the type node's
+    /// arguments.
     /// </summary>
     /// <param name="node">The parsed <c>Enum8</c>/<c>Enum16</c> type node.</param>
     /// <param name="parseOrdinal">Parses and range-checks a member's ordinal into the underlying type.</param>
     /// <returns>The codec.</returns>
-    /// <exception cref="FormatException">A member is malformed or an ordinal is out of the underlying type's range.</exception>
+    /// <exception cref="FormatException">
+    /// A member is malformed, members mix the two forms (see <see cref="EnumColumnCodec.ParseMembers"/>), or an ordinal
+    /// is out of the underlying type's range.
+    /// </exception>
     public static EnumColumnCodec<T> Create(TypeNode node, Func<long, string, T> parseOrdinal)
     {
         var labelToOrdinal = new Dictionary<string, T>(StringComparer.Ordinal);
@@ -94,9 +98,8 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
         T nullPlaceholder = default;
         bool haveMember = false;
 
-        foreach (TypeNode argument in node.Arguments)
+        foreach ((string label, long ordinal) in EnumColumnCodec.ParseMembers(node))
         {
-            (string label, long ordinal) = EnumColumnCodec.ParseMember(argument.Name, node);
             T value = parseOrdinal(ordinal, node.Name);
             if (!labelToOrdinal.TryAdd(label, value))
             {
@@ -200,17 +203,20 @@ internal sealed class EnumColumnCodec<T> : IColumnCodec
 /// <summary>Creates bare enums and parses enum members.</summary>
 internal static class EnumColumnCodec
 {
-    /// <summary>Builds the codec for a bare <c>Enum</c>, whose width comes from the declared ordinals.</summary>
+    /// <summary>
+    /// Builds the codec for a bare <c>Enum</c>, whose width comes from the members' ordinals, assigned ones included.
+    /// </summary>
     /// <param name="node">The parsed <c>Enum</c> type node.</param>
     /// <returns>An <c>Enum8</c> or <c>Enum16</c> codec, named for the width chosen.</returns>
-    /// <exception cref="FormatException">A member is malformed, or no member is declared.</exception>
+    /// <exception cref="FormatException">
+    /// A member is malformed, members mix the two forms, an ordinal is out of the Int16 range, or no member is declared.
+    /// </exception>
     public static IColumnCodec Create(TypeNode node)
     {
         // Match the server: use Enum8 when every ordinal fits, otherwise Enum16.
         bool fitsInt8 = true;
-        foreach (TypeNode argument in node.Arguments)
+        foreach ((_, long ordinal) in ParseMembers(node))
         {
-            (_, long ordinal) = ParseMember(argument.Name, node);
             if (ordinal is < sbyte.MinValue or > sbyte.MaxValue)
             {
                 fitsInt8 = false;
@@ -221,8 +227,46 @@ internal static class EnumColumnCodec
         return fitsInt8 ? Enum8ColumnCodec.Create(sized) : Enum16ColumnCodec.Create(sized);
     }
 
-    /// <summary>Parses a single <c>'label' = ordinal</c> member token into its label and ordinal.</summary>
-    internal static (string Label, long Ordinal) ParseMember(string token, TypeNode node)
+    /// <summary>
+    /// Parses the members of an enum type node. A member may omit its ordinal; the server then numbers it with the
+    /// first member's ordinal (1 when the first member has none) plus the member's position, counted from 0.
+    /// </summary>
+    /// <param name="node">The parsed <c>Enum</c>, <c>Enum8</c> or <c>Enum16</c> type node.</param>
+    /// <returns>Each member's label and ordinal, in declaration order.</returns>
+    /// <exception cref="FormatException">
+    /// A member is malformed, or, after the first member, some members declare an ordinal and some do not.
+    /// </exception>
+    internal static List<(string Label, long Ordinal)> ParseMembers(TypeNode node)
+    {
+        var members = new List<(string Label, long Ordinal)>(node.Arguments.Count);
+        long first = 1;
+        int omittedAfterFirst = 0;
+        for (int i = 0; i < node.Arguments.Count; i++)
+        {
+            (string label, long? ordinal) = ParseMember(node.Arguments[i].Name, node);
+            if (i == 0)
+            {
+                first = ordinal ?? first;
+            }
+            else if (ordinal is null)
+            {
+                omittedAfterFirst++;
+            }
+
+            members.Add((label, ordinal ?? first + i));
+        }
+
+        if (omittedAfterFirst != 0 && omittedAfterFirst != members.Count - 1)
+        {
+            throw new FormatException(
+                $"Malformed enum type '{node}': after the first member, either every member declares an ordinal or none does.");
+        }
+
+        return members;
+    }
+
+    /// <summary>Parses a single <c>'label' = ordinal</c> or <c>'label'</c> member token into its label and ordinal.</summary>
+    private static (string Label, long? Ordinal) ParseMember(string token, TypeNode node)
     {
         // Scan the quoted label because it may contain escaped separators.
         int open = token.IndexOf('\'');
@@ -237,6 +281,11 @@ internal static class EnumColumnCodec
         }
 
         string rest = token.Substring(afterLabel).Trim();
+        if (rest.Length == 0 && open == 0)
+        {
+            return (label, null);
+        }
+
         if (rest.Length == 0 || rest[0] != '=')
         {
             throw new FormatException($"Malformed enum member '{token}' in type '{node}': expected '= ordinal' after the label.");
