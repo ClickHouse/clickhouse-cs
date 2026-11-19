@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -260,7 +262,131 @@ public class TupleColumnCodecTests
 
     [Test]
     public void Resolve_TooManyElements_ThrowsNotSupported()
-        => Assert.Throws<NotSupportedException>(() => Resolve("Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32)"));
+        => Assert.That(
+            () => Resolve(IntTuple(TupleShape.MaxElements + 1)),
+            Throws.TypeOf<NotSupportedException>().With.Message.Contains("has 257 elements; this client supports at most 256."));
+
+    [Test]
+    public void Resolve_MaxElements_ElementTypeHasEveryElement()
+    {
+        IColumnCodec codec = Resolve(IntTuple(TupleShape.MaxElements));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TupleShape.TryGetElements(codec.ElementType, out Type[] elements), Is.True);
+            Assert.That(elements, Is.EqualTo(Enumerable.Repeat(typeof(int), TupleShape.MaxElements)));
+        });
+    }
+
+    // Past seven elements the element type is the type that C# gives the tuple literal, with the elements after the
+    // seventh in TRest.
+    private static IEnumerable<TestCaseData> WideElementTypes()
+    {
+        yield return new TestCaseData(IntTuple(8), typeof((int, int, int, int, int, int, int, int))).SetName("{m}(8)");
+        yield return new TestCaseData(
+            "Tuple(a Int32, b String, c Int32, d Int32, e Int32, f Int32, g Int32, h Nullable(Int64), i Array(String))",
+            typeof((int, string, int, int, int, int, int, long?, string[]))).SetName("{m}(9, named)");
+        yield return new TestCaseData(IntTuple(15), typeof((int, int, int, int, int, int, int, int, int, int, int, int, int, int, int))).SetName("{m}(15)");
+        yield return new TestCaseData(
+            "Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, Tuple(String, UInt8))",
+            typeof((int, int, int, int, int, int, int, (string, byte)))).SetName("{m}(8, the eighth a tuple)");
+    }
+
+    [TestCaseSource(nameof(WideElementTypes))]
+    public void Resolve_MoreThanSevenElements_ElementTypeIsTheTypeOfTheCSharpLiteral(string type, Type expected)
+        => Assert.That(Resolve(type).ElementType, Is.EqualTo(expected));
+
+    [Test]
+    public void Values_MoreThanSevenElements_MaterializesEveryRow()
+    {
+        // The read column keeps one child for each element and the names of all of them; its rows nest the elements
+        // after the seventh, at one level (9) and at two levels (15).
+        const string nine = "Tuple(a Int32, b String, c Int32, d Int32, e Int32, f Int32, g Int32, h Nullable(Int64), i Array(String))";
+        var nineRows = new (int, string, int, int, int, int, int, long?, string[])[]
+        {
+            (1, "a", 3, 4, 5, 6, 7, 8L, new[] { "nine" }),
+            (-1, string.Empty, -3, -4, -5, -6, -7, null, Array.Empty<string>()),
+        };
+        string fifteen = IntTuple(15);
+        var fifteenRows = new (int, int, int, int, int, int, int, int, int, int, int, int, int, int, int)[]
+        {
+            (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15),
+            (-1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12, -13, -14, -15),
+        };
+
+        using IColumn readNine = DecodedColumns.Of("c", nine, nineRows);
+        using IColumn readFifteen = DecodedColumns.Of("c", fifteen, fifteenRows);
+        var typedNine = (IColumn<(int, string, int, int, int, int, int, long?, string[])>)readNine;
+        var typedFifteen = (IColumn<(int, int, int, int, int, int, int, int, int, int, int, int, int, int, int)>)readFifteen;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(new[] { typedNine[0], typedNine[1] }, Is.EqualTo(nineRows), "the indexer, before Values");
+            Assert.That(typedNine.Values.ToArray(), Is.EqualTo(nineRows));
+            Assert.That(typedNine[1], Is.EqualTo(nineRows[1]), "the indexer, after Values");
+            Assert.That(readNine.GetValue(0), Is.EqualTo(nineRows[0]));
+            Assert.That(((ITupleColumn)readNine).Children, Has.Count.EqualTo(9));
+            Assert.That(((ITupleColumn)readNine).FieldNames, Is.EqualTo(new[] { "a", "b", "c", "d", "e", "f", "g", "h", "i" }));
+            Assert.That(typedFifteen.Values.ToArray(), Is.EqualTo(fifteenRows));
+            Assert.That(typedFifteen[1].Item15, Is.EqualTo(-15));
+            Assert.That(((ITupleColumn)readFifteen).Children, Has.Count.EqualTo(15));
+            Assert.That(((ITupleColumn)readFifteen).FieldNames, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task WriteColumn_MoreThanSevenElementsSlicedRange_WritesOnlyThatSliceOfEachChild()
+    {
+        const string type = "Tuple(Int32, String, Int32, Int32, Int32, Int32, Int32, LowCardinality(String), Int64)";
+        IColumnCodec codec = Resolve(type);
+        using IColumn full = DecodedColumns.Of("c", type, new (int, string, int, int, int, int, int, string, long)[]
+        {
+            (1, "a", 1, 1, 1, 1, 1, "x", 1L),
+            (2, "bb", 2, 2, 2, 2, 2, "y", 2L),
+            (3, "ccc", 3, 3, 3, 3, 3, "x", 3L),
+            (4, "d", 4, 4, 4, 4, 4, "z", 4L),
+        });
+
+        byte[] bytes = await CodecTestHarness.WriteStoredAsync(codec, full, start: 1, length: 2, prefix: true);
+        using ClickHouseBinaryReader reader = CodecTestHarness.ReaderOver(bytes);
+        await codec.ReadStatePrefixAsync(reader, CodecTestHarness.None);
+        using IColumn read = await codec.ReadColumnAsync(reader, "c", type, 2, CodecTestHarness.None);
+
+        Assert.That(
+            ((IColumn<(int, string, int, int, int, int, int, string, long)>)read).Values.ToArray(),
+            Is.EqualTo(new (int, string, int, int, int, int, int, string, long)[] { (2, "bb", 2, 2, 2, 2, 2, "y", 2L), (3, "ccc", 3, 3, 3, 3, 3, "x", 3L) }));
+    }
+
+    [Test]
+    public void WritesFromStorage_MoreThanSevenElements_TrueOnlyForTheReadColumn()
+    {
+        string type = IntTuple(9);
+        IColumnCodec codec = Resolve(type);
+        var rows = new (int, int, int, int, int, int, int, int, int)[] { (1, 2, 3, 4, 5, 6, 7, 8, 9) };
+        using IColumn decoded = DecodedColumns.Of("c", type, rows);
+        var flat = new ArrayColumn<(int, int, int, int, int, int, int, int, int)>("c", type, rows);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codec.WritesFromStorage(decoded), Is.True, "the column that a query of the type reads");
+            Assert.That(codec.WritesFromStorage(flat), Is.False, "a column of tuple values");
+        });
+    }
+
+    [Test]
+    public void Constructor_MoreThanSevenElementsChildOfAnotherType_ThrowsInvalidCast()
+    {
+        // The column of the elements after the seventh casts its children too; the cast fails there for child 9.
+        IColumn[] children = Enumerable.Range(0, 8)
+            .Select(i => (IColumn)new ArrayColumn<int>("c", "Int32", new[] { i }))
+            .Append(new ArrayColumn<string>("c", "String", new[] { "x" }))
+            .ToArray();
+
+        Assert.Throws<InvalidCastException>(
+            () => _ = new TupleColumn<int, int, int, int, int, int, int, ValueTuple<int, int>>("c", IntTuple(9), children, null, ownsChildren: false));
+    }
+
+    private static string IntTuple(int count) => "Tuple(" + string.Join(", ", Enumerable.Repeat("Int32", count)) + ")";
 
     [Test]
     public void Resolve_UnsupportedElement_ThrowsNotSupported()

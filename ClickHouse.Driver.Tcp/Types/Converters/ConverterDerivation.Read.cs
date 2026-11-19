@@ -17,18 +17,7 @@ internal sealed partial class ConverterDerivation
         typeof(TupleReader<,,,,>),
         typeof(TupleReader<,,,,,>),
         typeof(TupleReader<,,,,,,>),
-    };
-
-    private static readonly Type[] ValueTupleDefinitions =
-    {
-        null,
-        typeof(ValueTuple<>),
-        typeof(ValueTuple<,>),
-        typeof(ValueTuple<,,>),
-        typeof(ValueTuple<,,,>),
-        typeof(ValueTuple<,,,,>),
-        typeof(ValueTuple<,,,,,>),
-        typeof(ValueTuple<,,,,,,>),
+        typeof(TupleReader<,,,,,,,>),
     };
 
     /// <summary>
@@ -170,12 +159,11 @@ internal sealed partial class ConverterDerivation
     {
         (string Name, TypeNode Type)[] elements = NamedElementParser.Split(node);
         int arity = elements.Length;
-        if (!clrType.IsGenericType || clrType.GetGenericTypeDefinition() != ValueTupleDefinitions[arity])
+        if (!TupleShape.TryGetElements(clrType, out Type[] arguments) || arguments.Length != arity)
         {
             return Refuse(node, root, $"'{node}' cannot be read as {clrType}. It reads as a ValueTuple of {arity} element(s).");
         }
 
-        Type[] arguments = clrType.GetGenericArguments();
         var fields = new object[arity];
         bool needsColumn = false;
         for (int i = 0; i < arity; i++)
@@ -190,7 +178,32 @@ internal sealed partial class ConverterDerivation
             needsColumn |= field.NeedsColumn;
         }
 
-        return Derivation.Of(Activator.CreateInstance(TupleReaderDefinitions[arity].MakeGenericType(arguments), fields), needsColumn);
+        return Derivation.Of(NestTuple(TupleReaderDefinitions, clrType, fields, 0), needsColumn);
+    }
+
+    /// <summary>
+    /// The tuple reader or writer of <paramref name="tupleType"/>, over the converters of its elements: the definition for
+    /// the number of type arguments, closed over them. The eighth type argument (<c>TRest</c>) takes the converter of the
+    /// elements after the seventh, built the same way.
+    /// </summary>
+    /// <param name="definitions">The open generic converter definitions indexed by the number of type arguments.</param>
+    /// <param name="tupleType">The <see cref="ValueTuple"/> type.</param>
+    /// <param name="fields">The converters of all the elements of the whole tuple, in order.</param>
+    /// <param name="start">The position in <paramref name="fields"/> of the first element of <paramref name="tupleType"/>.</param>
+    /// <returns>The converter.</returns>
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private static object NestTuple(Type[] definitions, Type tupleType, object[] fields, int start)
+    {
+        Type[] arguments = tupleType.GetGenericArguments();
+        var converters = new object[arguments.Length];
+        for (int i = 0; i < arguments.Length; i++)
+        {
+            converters[i] = i == TupleShape.RestIndex
+                ? NestTuple(definitions, arguments[i], fields, start + i)
+                : fields[start + i];
+        }
+
+        return Activator.CreateInstance(definitions[arguments.Length].MakeGenericType(arguments), converters);
     }
 
     // Variant, Dynamic, Nested, QBit, the geo types and Tuple() read only as their canonical type, through the indexer of

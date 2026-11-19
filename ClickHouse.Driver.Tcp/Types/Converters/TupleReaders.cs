@@ -8,9 +8,10 @@ using System.Runtime.CompilerServices;
 namespace ClickHouse.Driver.Tcp.Types.Converters;
 
 /// <summary>
-/// <c>Tuple(...)</c> of 1 to 7 elements read as a <c>ValueTuple</c> of the same arity. Each field child reads its child
-/// column (<see cref="ITupleColumn.Children"/>, by position), and the reader builds one tuple for each row. The
-/// derivation closes one subclass for each arity.
+/// <c>Tuple(...)</c> read as a <c>ValueTuple</c> of the same number of elements (<see cref="TupleShape"/>). Each field reads
+/// its child column (<see cref="ITupleColumn.Children"/>, by position), and the reader builds one tuple for each row. The
+/// derivation closes one subclass for each of 1 to 7 fields. A tuple of more than 7 elements has 8 fields: the eighth
+/// reads <c>TRest</c> from the children after the seventh (<see cref="TupleTailColumn"/>).
 /// </summary>
 /// <typeparam name="T">The <c>ValueTuple</c> type.</typeparam>
 internal abstract class TupleReaderBase<T> : ColumnReader<T>
@@ -22,11 +23,19 @@ internal abstract class TupleReaderBase<T> : ColumnReader<T>
     private static readonly MethodInfo ChildMethod =
         typeof(TupleReaderBase<T>).GetMethod(nameof(Child), BindingFlags.NonPublic | BindingFlags.Static);
 
+    private static readonly MethodInfo TailMethod =
+        typeof(TupleReaderBase<T>).GetMethod(nameof(Tail), BindingFlags.NonPublic | BindingFlags.Static);
+
     private readonly ColumnReader[] fields;
 
     /// <summary>Initializes the reader over one reader for each field.</summary>
     /// <param name="fields">The field readers, in tuple order. Their value types are the type arguments of <typeparamref name="T"/>.</param>
     protected TupleReaderBase(params ColumnReader[] fields) => this.fields = fields;
+
+    /// <summary>The number of elements of <typeparamref name="T"/>, with the elements of <c>TRest</c>.</summary>
+    protected static int Width { get; } = TupleShape.TryGetElements(typeof(T), out Type[] elements)
+        ? elements.Length
+        : throw new InvalidOperationException($"{typeof(T)} is not a ValueTuple type.");
 
     /// <inheritdoc/>
     [RequiresDynamicCode("Builds an expression tree, which the caller compiles.")]
@@ -35,12 +44,15 @@ internal abstract class TupleReaderBase<T> : ColumnReader<T>
         ParameterExpression tuple = scope.Local(
             typeof(ITupleColumn),
             "tuple",
-            Expression.Call(SurfaceMethod, Expression.Convert(column, typeof(IColumn)), Expression.Constant(fields.Length)));
+            Expression.Call(SurfaceMethod, Expression.Convert(column, typeof(IColumn)), Expression.Constant(Width)));
         var values = new Expression[fields.Length];
         var types = new Type[fields.Length];
         for (int i = 0; i < fields.Length; i++)
         {
-            ParameterExpression child = scope.Local(typeof(IColumn), "field", Expression.Call(ChildMethod, tuple, Expression.Constant(i)));
+            Expression field = i == TupleShape.RestIndex
+                ? Expression.Call(TailMethod, tuple)
+                : Expression.Call(ChildMethod, tuple, Expression.Constant(i));
+            ParameterExpression child = scope.Local(typeof(IColumn), "field", field);
             values[i] = fields[i].Emit(child, row, scope);
             types[i] = fields[i].ValueType;
         }
@@ -97,6 +109,11 @@ internal abstract class TupleReaderBase<T> : ColumnReader<T>
             ArrayPool<TField>.Shared.Return(values, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<TField>());
         }
     }
+
+    /// <summary>The children after the seventh, as the column of the eighth field (<c>TRest</c>).</summary>
+    /// <param name="tuple">The tuple column.</param>
+    /// <returns>The view.</returns>
+    protected static IColumn Tail(ITupleColumn tuple) => new TupleTailColumn(tuple, TupleShape.RestIndex);
 
     private static IColumn Child(ITupleColumn tuple, int index) => tuple.Children[index];
 }
@@ -640,6 +657,127 @@ internal sealed class TupleReader<T1, T2, T3, T4, T5, T6, T7> : TupleReaderBase<
                 Release(v5);
                 Release(v6);
                 Release(v7);
+            }
+        }
+    }
+}
+
+/// <summary>A tuple of more than seven elements (see <see cref="TupleReaderBase{T}"/>).</summary>
+/// <typeparam name="T1">The CLR type of field 1.</typeparam>
+/// <typeparam name="T2">The CLR type of field 2.</typeparam>
+/// <typeparam name="T3">The CLR type of field 3.</typeparam>
+/// <typeparam name="T4">The CLR type of field 4.</typeparam>
+/// <typeparam name="T5">The CLR type of field 5.</typeparam>
+/// <typeparam name="T6">The CLR type of field 6.</typeparam>
+/// <typeparam name="T7">The CLR type of field 7.</typeparam>
+/// <typeparam name="TRest">The <see cref="ValueTuple"/> of the elements after the seventh.</typeparam>
+internal sealed class TupleReader<T1, T2, T3, T4, T5, T6, T7, TRest> : TupleReaderBase<ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>>
+    where TRest : struct
+{
+    private readonly ColumnReader<T1> f1;
+    private readonly ColumnReader<T2> f2;
+    private readonly ColumnReader<T3> f3;
+    private readonly ColumnReader<T4> f4;
+    private readonly ColumnReader<T5> f5;
+    private readonly ColumnReader<T6> f6;
+    private readonly ColumnReader<T7> f7;
+    private readonly ColumnReader<TRest> rest;
+
+    /// <summary>Initializes the reader over the field readers.</summary>
+    /// <param name="f1">Reads field 1.</param>
+    /// <param name="f2">Reads field 2.</param>
+    /// <param name="f3">Reads field 3.</param>
+    /// <param name="f4">Reads field 4.</param>
+    /// <param name="f5">Reads field 5.</param>
+    /// <param name="f6">Reads field 6.</param>
+    /// <param name="f7">Reads field 7.</param>
+    /// <param name="rest">Reads the elements after the seventh, from the children after the seventh.</param>
+    public TupleReader(ColumnReader<T1> f1, ColumnReader<T2> f2, ColumnReader<T3> f3, ColumnReader<T4> f4, ColumnReader<T5> f5, ColumnReader<T6> f6, ColumnReader<T7> f7, ColumnReader<TRest> rest)
+        : base(f1, f2, f3, f4, f5, f6, f7, rest)
+    {
+        this.f1 = f1;
+        this.f2 = f2;
+        this.f3 = f3;
+        this.f4 = f4;
+        this.f5 = f5;
+        this.f6 = f6;
+        this.f7 = f7;
+        this.rest = rest;
+    }
+
+    /// <inheritdoc/>
+    public override BoundReader<ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>> Bind(IColumn column)
+    {
+        ITupleColumn tuple = TupleSurface(column, Width);
+        return new Bound(
+            f1.Bind(tuple.Children[0]),
+            f2.Bind(tuple.Children[1]),
+            f3.Bind(tuple.Children[2]),
+            f4.Bind(tuple.Children[3]),
+            f5.Bind(tuple.Children[4]),
+            f6.Bind(tuple.Children[5]),
+            f7.Bind(tuple.Children[6]),
+            rest.Bind(Tail(tuple)));
+    }
+
+    private sealed class Bound : BoundReader<ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>>
+    {
+        private readonly BoundReader<T1> b1;
+        private readonly BoundReader<T2> b2;
+        private readonly BoundReader<T3> b3;
+        private readonly BoundReader<T4> b4;
+        private readonly BoundReader<T5> b5;
+        private readonly BoundReader<T6> b6;
+        private readonly BoundReader<T7> b7;
+        private readonly BoundReader<TRest> bRest;
+
+        public Bound(BoundReader<T1> b1, BoundReader<T2> b2, BoundReader<T3> b3, BoundReader<T4> b4, BoundReader<T5> b5, BoundReader<T6> b6, BoundReader<T7> b7, BoundReader<TRest> bRest)
+        {
+            this.b1 = b1;
+            this.b2 = b2;
+            this.b3 = b3;
+            this.b4 = b4;
+            this.b5 = b5;
+            this.b6 = b6;
+            this.b7 = b7;
+            this.bRest = bRest;
+        }
+
+        public override void Fill(int start, Span<ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>> destination)
+        {
+            T1[] v1 = null;
+            T2[] v2 = null;
+            T3[] v3 = null;
+            T4[] v4 = null;
+            T5[] v5 = null;
+            T6[] v6 = null;
+            T7[] v7 = null;
+            TRest[] vRest = null;
+            try
+            {
+                v1 = Read(b1, start, destination.Length);
+                v2 = Read(b2, start, destination.Length);
+                v3 = Read(b3, start, destination.Length);
+                v4 = Read(b4, start, destination.Length);
+                v5 = Read(b5, start, destination.Length);
+                v6 = Read(b6, start, destination.Length);
+                v7 = Read(b7, start, destination.Length);
+                vRest = Read(bRest, start, destination.Length);
+                for (int i = 0; i < destination.Length; i++)
+                {
+                    destination[i] = new ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>(v1[i], v2[i], v3[i], v4[i], v5[i], v6[i], v7[i], vRest[i]);
+                }
+            }
+            finally
+            {
+                Release(v1);
+                Release(v2);
+                Release(v3);
+                Release(v4);
+                Release(v5);
+                Release(v6);
+                Release(v7);
+                Release(vRest);
             }
         }
     }
