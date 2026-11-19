@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Numerics;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Numerics;
@@ -27,21 +28,21 @@ public class BoxFreeWriteAllocationTests
     private static readonly Guid Uuid = new("2ee6b16f-1b03-4b1e-a1a5-99f7ae6a1c2c");
 
     /// <summary>
-    /// Runs <paramref name="write"/> once to settle JIT and stream growth, then measures the bytes allocated
-    /// over <see cref="Values"/> further iterations.
+    /// Runs <paramref name="write"/> <paramref name="iterations"/> times (by default <see cref="Values"/>) to settle
+    /// JIT and stream growth, then measures the bytes allocated over as many further iterations.
     /// </summary>
-    private static long Measure(Action<ExtendedBinaryWriter> write)
+    private static long Measure(Action<ExtendedBinaryWriter> write, int iterations = Values)
     {
         using var stream = new MemoryStream();
         using var writer = new ExtendedBinaryWriter(stream);
 
-        for (var i = 0; i < Values; i++)
+        for (var i = 0; i < iterations; i++)
             write(writer);
         writer.Flush();
 
         stream.Position = 0;
         var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < Values; i++)
+        for (var i = 0; i < iterations; i++)
             write(writer);
         writer.Flush();
         return GC.GetAllocatedBytesForCurrentThread() - before;
@@ -107,6 +108,40 @@ public class BoxFreeWriteAllocationTests
         TestContext.Out.WriteLine($"coerced={PerValue(allocated)} (bytes/value)");
         Assert.That(allocated, Is.GreaterThan(Values * widening.Length * 12L),
             $"a coerced element array is expected to still box; saw only {PerValue(allocated)} B/value");
+    }
+
+    // Each array is written fewer times than Values, as it has many elements.
+    private const int ArrayWrites = 200;
+
+    // Scale 9 with 2 integer digits, so Array(Decimal(18, 16)). The mantissas exceed 31 bits, so converting one
+    // to ClickHouseDecimal allocates.
+    private static readonly decimal[] Decimals = Enumerable.Range(0, 1000).Select(i => 12.345678901m + (i * 0.000000001m)).ToArray();
+
+    private static readonly object[] DynamicDecimalArrayCases =
+    [
+        new object[] { Decimals, "Array(Decimal(18, 16))" },
+        new object[] { Decimals.Select(d => new ClickHouseDecimal(d)).ToArray(), "Array(Decimal(18, 16))" },
+    ];
+
+    /// <summary>
+    /// Dynamic infers the Decimal type of these arrays from their elements, and then writes them through the
+    /// typed path of <see cref="ArrayType"/>. The inference must not box or convert the elements. The difference
+    /// to writing the array as its inferred type directly is the cost of the inference and the type header, which
+    /// must not grow with the number of elements.
+    /// </summary>
+    [Test]
+    [TestCaseSource(nameof(DynamicDecimalArrayCases))]
+    public void Write_DecimalArrayToDynamic_AllocatesNothingPerElementToInferType(Array array, string inferredType)
+    {
+        var dynamic = TypeConverter.ParseClickHouseType("Dynamic", TypeSettings.Default);
+        var inferred = TypeConverter.ParseClickHouseType(inferredType, TypeSettings.Default);
+
+        var perWrite = (Measure(writer => dynamic.Write(writer, array), ArrayWrites)
+            - Measure(writer => inferred.Write(writer, array), ArrayWrites)) / ArrayWrites;
+
+        TestContext.Out.WriteLine($"{array.GetType().Name} inference={perWrite} (bytes/array)");
+        Assert.That(perWrite, Is.LessThan(array.Length),
+            $"inferring the type of a {array.GetType().Name} must not allocate per element, saw {perWrite} B for {array.Length} elements");
     }
 
     /// <summary>

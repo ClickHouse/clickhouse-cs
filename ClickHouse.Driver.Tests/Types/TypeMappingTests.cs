@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Numerics;
@@ -211,6 +212,74 @@ public class TypeMappingTests
     {
         var value = new ClickHouseDecimal(mantissa, scale);
         Assert.Throws<ArgumentOutOfRangeException>(() => TypeConverter.InferDecimalType(value));
+    }
+
+    // The integers on both sides of each power of ten and each power of two that has at most 76 digits: where a
+    // digit count found without formatting the number can be off by one.
+    private static IEnumerable<BigInteger> DigitBoundaryIntegers()
+    {
+        for (var n = 0; n <= 76; n++)
+        {
+            yield return BigInteger.Pow(10, n) - 1;
+            if (n < 76)
+                yield return BigInteger.Pow(10, n);
+        }
+
+        // 2^252 is the largest power of two with 76 digits.
+        for (var n = 0; n <= 252; n++)
+        {
+            yield return BigInteger.Pow(2, n) - 1;
+            yield return BigInteger.Pow(2, n);
+        }
+    }
+
+    [Test]
+    public void InferDecimalType_IntegerAtDigitBoundary_KeepsEveryIntegerDigit()
+    {
+        Assert.Multiple(() =>
+        {
+            foreach (var magnitude in DigitBoundaryIntegers())
+            {
+                var digits = magnitude.ToString(CultureInfo.InvariantCulture).Length;
+                foreach (var mantissa in new[] { magnitude, -magnitude })
+                {
+                    var type = (DecimalType)TypeConverter.InferDecimalType(new ClickHouseDecimal(mantissa, 0));
+                    Assert.That(type.Precision - type.Scale, Is.EqualTo(digits), $"integer digits of {mantissa}");
+                }
+
+                // With 80 trailing fractional zeros, the mantissa has more digits than the powers of ten searched.
+                if (!magnitude.IsZero)
+                {
+                    var type = (DecimalType)TypeConverter.InferDecimalType(new ClickHouseDecimal(magnitude * BigInteger.Pow(10, 80), 80));
+                    Assert.That(type.Precision - type.Scale, Is.EqualTo(digits), $"integer digits of {magnitude} at scale 80");
+                }
+            }
+        });
+    }
+
+    // A decimal is read from its bits rather than converted to ClickHouseDecimal, so both must infer one type.
+    [Test]
+    public void InferCommonDecimalType_DecimalAtDigitBoundary_MatchesClickHouseDecimal()
+    {
+        var maxMantissa = new BigInteger(decimal.MaxValue);
+        Assert.Multiple(() =>
+        {
+            foreach (var magnitude in DigitBoundaryIntegers().Where(m => m <= maxMantissa))
+            {
+                var bits = decimal.GetBits((decimal)magnitude);
+                foreach (byte scale in new byte[] { 0, 9, 28 })
+                {
+                    foreach (var negative in new[] { false, true })
+                    {
+                        var value = new decimal(bits[0], bits[1], bits[2], negative, scale);
+                        Assert.That(
+                            TypeConverter.InferCommonDecimalType(new[] { value }).ToString(),
+                            Is.EqualTo(TypeConverter.InferDecimalType(value).ToString()),
+                            $"type of {value.ToString(CultureInfo.InvariantCulture)}");
+                    }
+                }
+            }
+        });
     }
 
     private static IEnumerable<TestCaseData> NonZeroBoundMultidimCases()
