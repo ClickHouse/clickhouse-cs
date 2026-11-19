@@ -75,7 +75,14 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
 
     public ushort Port
     {
-        get => (ushort)GetIntOrDefault("Port", Protocol == "https" ? 8443 : 8123);
+        get
+        {
+            var port = GetIntOrDefault("Port", Protocol == "https" ? 8443 : 8123);
+            return port is >= ushort.MinValue and <= ushort.MaxValue
+                ? (ushort)port
+                : throw new ArgumentException($"Connection-string key 'Port' has value '{this["Port"]}', which is not a port number.");
+        }
+
         set => this["Port"] = value;
     }
 
@@ -145,9 +152,12 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
     {
         get
         {
-            return TryGetValue("Timeout", out var value) && value is string @string && double.TryParse(@string, NumberStyles.Any, CultureInfo.InvariantCulture, out var timeout)
+            if (!TryGetValue("Timeout", out var value))
+                return TimeSpan.FromMinutes(2);
+
+            return value is string @string && double.TryParse(@string, NumberStyles.Any, CultureInfo.InvariantCulture, out var timeout)
                 ? TimeSpan.FromSeconds(timeout)
-                : TimeSpan.FromMinutes(2);
+                : throw new ArgumentException($"Connection-string key 'Timeout' has value '{value}', which is not a number of seconds.");
         }
         set => this["Timeout"] = value.TotalSeconds;
     }
@@ -194,12 +204,20 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
         set => this["AcceptEncoding"] = value;
     }
 
+    // A present value that cannot be read throws instead of falling back to the default: 'Compression=yes'
+    // reading as false would silently turn off a feature that is on by default.
     private bool GetBooleanOrDefault(string name, bool @default)
     {
-        if (TryGetValue(name, out var value))
-            return "true".Equals(value as string, StringComparison.OrdinalIgnoreCase);
-        else
+        if (!TryGetValue(name, out var value))
             return @default;
+
+        return value switch
+        {
+            string s when bool.TryParse(s, out var parsed) => parsed,
+            "1" => true,
+            "0" => false,
+            _ => throw new ArgumentException($"Connection-string key '{name}' has value '{value}', which is not a boolean. Use true, false, 1, or 0."),
+        };
     }
 
     private string GetStringOrDefault(string name, string @default)
@@ -212,18 +230,24 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
 
     private int GetIntOrDefault(string name, int @default)
     {
-        if (TryGetValue(name, out object o) && o is string s && int.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out int @int))
-            return @int;
-        else
+        if (!TryGetValue(name, out object o))
             return @default;
+
+        return o is string s && int.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out int @int)
+            ? @int
+            : throw new ArgumentException($"Connection-string key '{name}' has value '{o}', which is not an integer.");
     }
 
+    // Enum.TryParse also accepts a number that no member declares, so check that the result is defined.
     private T GetEnumOrDefault<T>(string name, T @default)
         where T : struct, Enum
     {
-        if (TryGetValue(name, out var value) && value is string s && Enum.TryParse<T>(s, ignoreCase: true, out var result))
-            return result;
-        return @default;
+        if (!TryGetValue(name, out var value))
+            return @default;
+
+        return value is string s && Enum.TryParse<T>(s, ignoreCase: true, out var result) && Enum.IsDefined(result)
+            ? result
+            : throw new ArgumentException($"Connection-string key '{name}' has value '{value}', which is not one of: {string.Join(", ", Enum.GetNames<T>())}.");
     }
 
     /// <summary>
