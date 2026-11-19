@@ -52,6 +52,9 @@ internal sealed class FixedStringColumnCodec : IColumnCodec, ISpanWritableCodec<
     /// <inheritdoc/>
     public Type ElementType => typeof(byte[]);
 
+    /// <summary>The number of bytes in each value: the <c>N</c> of <c>FixedString(N)</c>.</summary>
+    internal int Size => size;
+
     /// <summary>
     /// The placeholder for a null row is <c>N</c> zero bytes, so the values stream stays aligned at a
     /// <c>Nullable(FixedString(N))</c> null position — the width every row occupies.
