@@ -439,7 +439,31 @@ var options = new InsertOptions
 * The client automatically fetches table structure via `SELECT * FROM <table> WHERE 1=0` before inserting. Provided values must match the target column types. To skip this query, use [`InsertOptions.ColumnTypes` or `InsertOptions.UseSchemaCache`](#skip-schema-query).
 * When `MaxDegreeOfParallelism > 1`, batches are uploaded in parallel. Sessions are not compatible with parallel insertion; either disable sessions or set `MaxDegreeOfParallelism = 1`.
 * Use `RowBinaryFormat.RowBinaryWithDefaults` in `InsertOptions.Format` if you want the server to apply DEFAULT values for columns not provided.
+* Column names must be passed as raw names, with one column name per collection element. Do not include backticks or pass a comma-separated SQL fragment; the driver escapes the name and adds the delimiters.
 </Note>
+
+For example, pass column names like this:
+
+```csharp
+var columns = new[] { "field.id", "@value" };
+
+await client.InsertBinaryAsync(
+    "my_table",
+    columns,
+    rows);
+```
+
+Do not pass pre-quoted names or a comma-separated column list:
+
+```csharp
+// Incorrect:
+var columns = new[] { "`field.id`, `@value`" };
+
+// Incorrect:
+var columns = new[] { "`field.id`", "`@value`" };
+```
+
+The driver treats each collection element as one raw column name, escapes embedded backslashes and backticks, and encloses the name before sending the SQL.
 
 #### POCO inserts {#poco-insert}
 

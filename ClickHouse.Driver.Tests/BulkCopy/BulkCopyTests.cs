@@ -322,16 +322,30 @@ public class BulkCopyTests : AbstractConnectionTestFixture
     {
         var targetTable = CreateTableName();
 
-        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (`field.id` Nullable(UInt8), `@value` Nullable(UInt8)) ENGINE Memory");
+        await connection.ExecuteStatementAsync(
+            $"CREATE TABLE {targetTable} (`field.id` Nullable(UInt8), `@value` Nullable(UInt8)) ENGINE Memory");
 
         using var bulkCopy = new ClickHouseBulkCopy(connection)
         {
             DestinationTableName = targetTable,
-            ColumnNames = new[] { "`field.id`, `@value`" }
+            ColumnNames = new[] { "field.id", "@value" }
         };
-        await bulkCopy.WriteToServerAsync(Enumerable.Repeat(new object[] { 5, 5 }, 5));
 
-        using var reader = await connection.ExecuteReaderAsync($"SELECT * FROM {targetTable}");
+        await bulkCopy.WriteToServerAsync(
+            Enumerable.Repeat(new object[] { 5, 5 }, 5));
+
+        using var reader = await connection.ExecuteReaderAsync(
+            $"SELECT `field.id`, `@value` FROM {targetTable}");
+
+        var rows = 0;
+        while (await reader.ReadAsync())
+        {
+            Assert.That(reader.GetValue(0), Is.EqualTo((byte)5));
+            Assert.That(reader.GetValue(1), Is.EqualTo((byte)5));
+            rows++;
+        }
+
+        Assert.That(rows, Is.EqualTo(5));
     }
 
     [Test]
