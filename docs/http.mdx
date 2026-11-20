@@ -575,6 +575,10 @@ await foreach (var reading in client.QueryAsync<SensorReading>(
 }
 ```
 
+When the query fails after the server has started to send rows, `QueryAsync<T>` throws a
+`ClickHouseServerException`, with the limits described in
+[Errors after the first rows](#ado-net-reader-mid-stream-errors).
+
 ##### Registration {#poco-read-registration}
 
 `RegisterPocoType<T>()` sets up both the insert and read mappings and validates both up front. `RegisterBinaryInsertType<T>()` is unchanged and remains insert-only for backwards compatibility.
@@ -1431,6 +1435,32 @@ column whose cell is not NULL. It returns `false`, with `value` set to `0`, for 
 any column that is not an enum. The ordinal is the
 signed value from the wire, so it can be negative, and an `Enum16` ordinal can be larger than a
 byte.
+
+#### Errors after the first rows {#ado-net-reader-mid-stream-errors}
+
+A query can fail after the server has started to send rows, for example when a function throws on a
+later row. The server then writes an exception block into the response body. When the response has
+the `X-ClickHouse-Exception-Tag` header, `Read()` throws a `ClickHouseServerException` with the
+server's error code and message:
+
+- At each row boundary, the reader compares the next bytes with the start of the block, as the
+  server writes it. When they match, `Read()` throws before it decodes a row from the block.
+- When the response ends with the block, `Read()` throws. This also applies when a proxy or a load
+  balancer ends the response cleanly, so a failed query is not reported as a complete result.
+
+Limits:
+
+- If the block does not start at a row boundary, or is not written the way the server writes it,
+  `Read()` can return rows decoded from the bytes of the block before it throws. These rows are not
+  data of the result.
+- When the reader finds the block only at the end of the response, it parses it from the last 4 KiB
+  received. A longer block can lose the server's error code and message.
+- While the bytes of a row received so far are the same as the start of the block, `Read()` waits
+  for more bytes, or for the end of the response, before it returns that row. For example, a
+  `UInt8` value `13` (`\r`, the first byte of the block) that is the last byte received so far is
+  returned only when the server sends more data or ends the response.
+
+[POCO reads](#poco-read) use the same checks.
 
 ## Best practices {#best-practices}
 
