@@ -1186,39 +1186,55 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// </summary>
     private static async Task<HttpResponseMessage> HandleError(HttpResponseMessage response, string query, Activity activity)
     {
-        if (response.IsSuccessStatusCode)
+        // ClickHouse can send progress headers with HTTP 200 before a long-running query finishes.
+        // If it later fails, the final exception is reported in X-ClickHouse-Exception-Code while
+        // the status remains 200. Don't treat that response as a successful insert or query.
+        var hasExceptionCodeHeader = response.Headers.Contains("X-ClickHouse-Exception-Code");
+        if (response.IsSuccessStatusCode && !hasExceptionCodeHeader)
         {
             activity?.SetSuccess();
             return response;
         }
 
         var error = await ReadErrorBodyAsync(response).ConfigureAwait(false);
+        var exceptionCode = TryGetExceptionCodeHeader(response);
         var ex = string.IsNullOrWhiteSpace(error)
-            ? CreateEmptyBodyException(response, query)
-            : ClickHouseServerException.FromServerResponse(error, query);
+            ? CreateEmptyBodyException(response, query, exceptionCode)
+            : exceptionCode.HasValue
+                ? new ClickHouseServerException(error, query, exceptionCode.Value)
+                : ClickHouseServerException.FromServerResponse(error, query);
         activity?.SetException(ex);
         throw ex;
     }
 
     /// <summary>
-    /// Builds an exception for a non-success HTTP response whose body is empty or whitespace-only.
-    /// This happens when an upstream component (a ClickHouse Cloud edge, a load balancer, a proxy)
-    /// fails the request before it reaches a ClickHouse node, so there is no server error body to
-    /// parse. Surface the HTTP status line — and the <c>X-ClickHouse-Exception-Code</c> header when
-    /// present — so the caller still gets actionable diagnostics instead of a blank message.
+    /// Builds an exception for an error response whose body is empty or whitespace-only. This can
+    /// happen when an upstream component fails a request before it reaches a ClickHouse node, or when
+    /// ClickHouse reports an exception code after sending progress headers. Surface the HTTP status
+    /// line and the <c>X-ClickHouse-Exception-Code</c> header when present.
     /// </summary>
-    private static ClickHouseServerException CreateEmptyBodyException(HttpResponseMessage response, string query)
+    private static ClickHouseServerException CreateEmptyBodyException(
+        HttpResponseMessage response,
+        string query,
+        int? exceptionCode = null)
     {
-        var exceptionCode = TryGetExceptionCodeHeader(response);
+        exceptionCode ??= TryGetExceptionCodeHeader(response);
 
-        var message = new StringBuilder("ClickHouse server returned HTTP ")
+        var reportsExceptionWithSuccessStatus = response.IsSuccessStatusCode &&
+            response.Headers.Contains("X-ClickHouse-Exception-Code");
+        var message = new StringBuilder(
+            reportsExceptionWithSuccessStatus
+                ? "ClickHouse server reported an exception with HTTP "
+                : "ClickHouse server returned HTTP ")
             .Append(((int)response.StatusCode).ToString(CultureInfo.InvariantCulture));
         if (!string.IsNullOrWhiteSpace(response.ReasonPhrase))
         {
             message.Append(" (").Append(response.ReasonPhrase).Append(')');
         }
 
-        message.Append(" with an empty response body.");
+        message.Append(reportsExceptionWithSuccessStatus
+            ? " and an empty error body."
+            : " with an empty response body.");
         if (exceptionCode.HasValue)
         {
             message.Append(" X-ClickHouse-Exception-Code: ")
