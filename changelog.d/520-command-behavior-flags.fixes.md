@@ -1,0 +1,1 @@
+* Fixed `CommandBehavior.SchemaOnly` and `CommandBehavior.SingleRow` when combined with other ADO.NET behavior flags.
