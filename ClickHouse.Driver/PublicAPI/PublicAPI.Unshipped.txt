@@ -270,3 +270,6 @@ ClickHouse.Driver.InsertQueryPlacement.Body = 0 -> ClickHouse.Driver.InsertQuery
 ClickHouse.Driver.InsertQueryPlacement.Url = 1 -> ClickHouse.Driver.InsertQueryPlacement
 ClickHouse.Driver.Copy.ClickHouseBulkCopySerializationException.ClickHouseBulkCopySerializationException(int rowIndex, object[] row, System.Exception innerException) -> void
 ClickHouse.Driver.Copy.ClickHouseBulkCopySerializationException.RowIndex.get -> int
+ClickHouse.Driver.ADO.ClickHouseCommand.ExecuteReaderAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<ClickHouse.Driver.ADO.Readers.ClickHouseDataReader>
+ClickHouse.Driver.ADO.ClickHouseCommand.ExecuteReaderAsync(System.Data.CommandBehavior behavior, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<ClickHouse.Driver.ADO.Readers.ClickHouseDataReader>
+ClickHouse.Driver.ADO.ClickHouseCommand.ExecuteReader(System.Data.CommandBehavior behavior = System.Data.CommandBehavior.Default) -> ClickHouse.Driver.ADO.Readers.ClickHouseDataReader

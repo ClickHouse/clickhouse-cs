@@ -1,10 +1,11 @@
-﻿using System;
-using System.Data;
-using System.Linq;
-using System.Threading.Tasks;
-using ClickHouse.Driver.ADO.Readers;
+﻿using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Utility;
-using NUnit.Framework;
+using System;
+using System.Data;
+using System.Data.Common;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace ClickHouse.Driver.Tests.ADO;
 
@@ -286,5 +287,70 @@ public class DataReaderTests : AbstractConnectionTestFixture
             ClassicAssert.IsTrue(reader.IsDBNull(2));
         });
         ClassicAssert.IsFalse(reader.Read());
+    }
+
+    [Test]
+    public async Task ExecuteReaderAsync_ReturnsTypedClickHouseDataReader()
+    {
+        using var command = connection.CreateCommand();
+
+        command.CommandText =
+            "SELECT CAST('Active', 'Enum8(''Active'' = 1, ''Inactive'' = 2)') AS value";
+
+        using var reader = await command.ExecuteReaderAsync();
+
+        ClassicAssert.IsTrue(reader.Read());
+
+        Assert.That(
+            reader.TryGetEnumOrdinal(0, out var ordinal),
+            Is.True);
+
+        Assert.That(ordinal, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task ExecuteReaderAsync_WithCommandBehavior_ReturnsTypedReader()
+    {
+        using var command = connection.CreateCommand();
+
+        command.CommandText = "SELECT toUInt64(42) AS value";
+
+        using var reader = await command.ExecuteReaderAsync(
+            CommandBehavior.Default,
+            CancellationToken.None);
+
+        ClassicAssert.IsTrue(reader.Read());
+
+        Assert.That(reader.GetUInt64(0), Is.EqualTo(42));
+    }
+
+    [Test]
+    public async Task ExecuteReaderAsync_ThroughDbCommand_ReturnsDbDataReader()
+    {
+        using var command = connection.CreateCommand();
+
+        command.CommandText = "SELECT toInt32(42)";
+
+        DbCommand dbCommand = command;
+
+        using var reader = await dbCommand.ExecuteReaderAsync();
+
+        ClassicAssert.IsTrue(reader.Read());
+
+        Assert.That(reader.GetInt32(0), Is.EqualTo(42));
+    }
+
+    [Test]
+    public void ExecuteReader_ReturnsTypedClickHouseDataReader()
+    {
+        using var command = connection.CreateCommand();
+
+        command.CommandText = "SELECT toUInt64(42) AS value";
+
+        using var reader = command.ExecuteReader();
+
+        ClassicAssert.IsTrue(reader.Read());
+
+        Assert.That(reader.GetUInt64(0), Is.EqualTo(42));
     }
 }

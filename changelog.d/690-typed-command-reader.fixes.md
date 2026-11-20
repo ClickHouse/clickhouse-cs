@@ -1,0 +1,1 @@
+* Fixed `ClickHouseCommand.ExecuteReader` and `ExecuteReaderAsync` to return `ClickHouseDataReader` when invoked on a `ClickHouseCommand` instance, allowing callers to use `TryGetEnumOrdinal` and other ClickHouse-specific reader members without an explicit cast. (#690)
