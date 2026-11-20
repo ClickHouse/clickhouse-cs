@@ -66,6 +66,23 @@ public class ConnectionPoolLoggingTests
     }
 
     [Test]
+    public async Task RentAsync_SessionTagOnAPoolFullOfIdleConnections_LogsTheConnectionItCloses()
+    {
+        var connections = new FakeConnectionFactory();
+        ClickHouseTcpClientOptions options = Options(maxPoolSize: 1) with { UseTls = true, Host = "service.example" };
+        await using var pool = new ConnectionPool(options, connections, new ControlledTimeProvider());
+
+        await using (await pool.RentAsync(None))
+        {
+        }
+
+        await using IConnectionLease session = await pool.RentAsync("user-42", None);
+
+        string message = Log.WithEventId(3008).Single().Message;
+        Assert.That(message, Does.Contain("MaxPoolSize 1").And.Contain("replica tag user-42"));
+    }
+
+    [Test]
     public async Task RentAsync_AfterALeaseIsReturned_LogsTheReuse()
     {
         var connections = new FakeConnectionFactory();

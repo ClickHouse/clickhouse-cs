@@ -327,6 +327,22 @@ public class ClickHouseTcpConnectionStringBuilderTests
         });
     }
 
+    [Test]
+    public void ToOptions_ReplicaTagKey_CarriesTheTagAndDefaultsToNone()
+    {
+        ClickHouseTcpClientOptions tagged = new ClickHouseTcpConnectionStringBuilder("Host=db.example;UseTls=true;ReplicaTag=etl-1").ToOptions();
+        ClickHouseTcpClientOptions untagged = new ClickHouseTcpConnectionStringBuilder("Host=db.example;UseTls=true").ToOptions();
+        var builder = new ClickHouseTcpConnectionStringBuilder { ReplicaTag = "etl-2" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tagged.ReplicaTag, Is.EqualTo("etl-1"));
+            Assert.That(untagged.ReplicaTag, Is.Null);
+            Assert.That(builder.ReplicaTag, Is.EqualTo("etl-2"));
+            Assert.That(builder.ConnectionString, Does.Contain("ReplicaTag=etl-2"));
+        });
+    }
+
     // The switch must round-trip through configuration-facing connection strings.
     [Test]
     public void ToOptions_SendJsonAndDynamicSerializationSettings_CarriesTheKeyAndDefaultsToOn()

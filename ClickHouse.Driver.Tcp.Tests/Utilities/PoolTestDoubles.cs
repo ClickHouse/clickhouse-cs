@@ -80,6 +80,7 @@ internal sealed class ControlledTimeProvider : TimeProvider
 internal sealed class FakeConnectionFactory : IConnectionFactory
 {
     private readonly List<ClickHouseTcpConnection> created = [];
+    private readonly List<string> createdTags = [];
     private readonly object gate = new();
     private int disposeCount;
 
@@ -140,6 +141,18 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
         }
     }
 
+    /// <summary>The replica tag each connection was opened with, in the order of <see cref="Created"/>.</summary>
+    public IReadOnlyList<string> CreatedTags
+    {
+        get
+        {
+            lock (gate)
+            {
+                return [.. createdTags];
+            }
+        }
+    }
+
     /// <summary>The connections opened so far, in order.</summary>
     public IReadOnlyList<ClickHouseTcpConnection> Created
     {
@@ -153,7 +166,7 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
     }
 
     /// <inheritdoc/>
-    public async ValueTask<ClickHouseTcpConnection> CreateAsync(CancellationToken cancellationToken)
+    public async ValueTask<ClickHouseTcpConnection> CreateAsync(string replicaTag, CancellationToken cancellationToken)
     {
         if (BeforeCreate is not null)
         {
@@ -174,6 +187,7 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
         lock (gate)
         {
             created.Add(connection);
+            createdTags.Add(replicaTag);
         }
 
         return connection;

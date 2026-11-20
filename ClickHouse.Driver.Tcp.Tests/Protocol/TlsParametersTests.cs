@@ -27,6 +27,8 @@ public class TlsParametersTests
 {
     private const string ServerName = "clickhouse.test.invalid";
 
+    private const string StickyServerName = "etl.sticky.clickhouse.test.invalid";
+
     private static readonly byte[] Payload = Encoding.UTF8.GetBytes("ping");
 
     [OneTimeTearDown]
@@ -343,6 +345,161 @@ public class TlsParametersTests
     }
 
     [Test]
+    public async Task WrapAsync_NoReplicaTag_SendsTheServerNameAsSni()
+    {
+        using X509Certificate2 authority = TestCertificates.CreateAuthority();
+        using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, ServerName);
+        var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            CaCertificates = TlsParameters.LoadCaCertificates(TestCertificates.WritePemFile(authority)),
+        };
+        var exchange = new TlsExchange();
+
+        await RoundTripThroughTlsAsync(server, tls, exchange: exchange);
+
+        Assert.That(exchange.ServerNameSent, Is.EqualTo(ServerName));
+    }
+
+    [Test]
+    public async Task WrapAsync_ReplicaTagAndCertificateNamingOnlyTheServer_SendsTheStickyNameAndCompletesHandshake()
+    {
+        // A certificate for the service host, which also names *.host. A wildcard matches one label, so neither name
+        // covers the two extra labels of the sticky name.
+        using X509Certificate2 authority = TestCertificates.CreateAuthority();
+        using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, ServerName);
+        var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            CaCertificates = TlsParameters.LoadCaCertificates(TestCertificates.WritePemFile(authority)),
+        };
+        var exchange = new TlsExchange();
+
+        byte[] echoed = await RoundTripThroughTlsAsync(server, tls, replicaTag: "etl", exchange: exchange);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(echoed, Is.EqualTo(Payload));
+            Assert.That(exchange.ServerNameSent, Is.EqualTo(StickyServerName));
+        });
+    }
+
+    [Test]
+    public async Task WrapAsync_ReplicaTagAndCertificateNamingTheStickyName_CompletesHandshake()
+    {
+        using X509Certificate2 authority = TestCertificates.CreateAuthority();
+        using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, "*.sticky." + ServerName);
+        var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            CaCertificates = TlsParameters.LoadCaCertificates(TestCertificates.WritePemFile(authority)),
+        };
+
+        Assert.That(await RoundTripThroughTlsAsync(server, tls, replicaTag: "etl"), Is.EqualTo(Payload));
+    }
+
+    [Test]
+    public void WrapAsync_ReplicaTagAndCertificateNamingAnotherHost_ThrowsAuthenticationException()
+    {
+        // The tag replaces the name match, so it must still refuse a certificate for neither name.
+        using X509Certificate2 authority = TestCertificates.CreateAuthority();
+        using X509Certificate2 server = TestCertificates.IssueServerCertificate(authority, "someone.else.invalid");
+        var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            CaCertificates = TlsParameters.LoadCaCertificates(TestCertificates.WritePemFile(authority)),
+        };
+
+        Assert.ThrowsAsync<AuthenticationException>(async () => await RoundTripThroughTlsAsync(server, tls, replicaTag: "etl"));
+    }
+
+    [Test]
+    public void WrapAsync_ReplicaTagAndUnrelatedAuthorityNamingTheServer_ThrowsAuthenticationException()
+    {
+        // The name matches, so the only fault is the chain: the callback must not accept it because the name is right.
+        using X509Certificate2 trusted = TestCertificates.CreateAuthority();
+        using X509Certificate2 other = TestCertificates.CreateAuthority();
+        using X509Certificate2 server = TestCertificates.IssueServerCertificate(other, ServerName);
+        var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            CaCertificates = TlsParameters.LoadCaCertificates(TestCertificates.WritePemFile(trusted)),
+        };
+
+        Assert.ThrowsAsync<AuthenticationException>(async () => await RoundTripThroughTlsAsync(server, tls, replicaTag: "etl"));
+    }
+
+    [Test]
+    public void WrapAsync_ReplicaTagAndSelfSignedCertificateNamingTheServer_ThrowsAuthenticationException()
+    {
+        // The same fault under the host's trust store rather than pinned authorities.
+        using X509Certificate2 server = TestCertificates.CreateSelfSignedServerCertificate(ServerName);
+        var tls = new TlsParameters { TargetHost = ServerName };
+
+        Assert.ThrowsAsync<AuthenticationException>(async () => await RoundTripThroughTlsAsync(server, tls, replicaTag: "etl"));
+    }
+
+    [Test]
+    public async Task WrapAsync_ReplicaTagAndValidationTurnedOff_SendsTheStickyNameAndCompletesHandshake()
+    {
+        using X509Certificate2 server = TestCertificates.CreateSelfSignedServerCertificate("someone.else.invalid");
+        var tls = new TlsParameters { TargetHost = ServerName, AllowInvalidCertificates = true };
+        var exchange = new TlsExchange();
+
+        byte[] echoed = await RoundTripThroughTlsAsync(server, tls, replicaTag: "etl", exchange: exchange);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(echoed, Is.EqualTo(Payload));
+            Assert.That(exchange.ServerNameSent, Is.EqualTo(StickyServerName));
+        });
+    }
+
+    [Test]
+    public void BuildAuthenticationOptions_ReplicaTag_TheHookSeesTheStickyNameAndTheNameCheck()
+    {
+        // The hook runs last, so it can replace the name check. It must see what it would replace.
+        string observedHost = null;
+        RemoteCertificateValidationCallback observedCallback = null;
+        using var tls = new TlsParameters
+        {
+            TargetHost = ServerName,
+            Configure = options =>
+            {
+                observedHost = options.TargetHost;
+                observedCallback = options.RemoteCertificateValidationCallback;
+            },
+        };
+
+        tls.BuildAuthenticationOptions("etl");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observedHost, Is.EqualTo(StickyServerName));
+            Assert.That(observedCallback, Is.Not.Null);
+        });
+    }
+
+    [Test]
+    public void BuildAuthenticationOptions_ReplicaTagAndNameMismatchWithoutACertificate_TheCallbackRefuses()
+    {
+        // The name fallback needs a certificate to match against. Without one, the mismatch stands.
+        using var tls = new TlsParameters { TargetHost = ServerName };
+        RemoteCertificateValidationCallback check = tls.BuildAuthenticationOptions("etl").RemoteCertificateValidationCallback;
+
+        Assert.That(check(this, null, null, SslPolicyErrors.RemoteCertificateNameMismatch), Is.False);
+    }
+
+    [Test]
+    public void BuildAuthenticationOptions_NoReplicaTag_SetsNoValidationCallback()
+    {
+        // Without a tag .NET's own name match applies, as it did before tags existed.
+        using var tls = new TlsParameters { TargetHost = ServerName };
+
+        Assert.That(tls.BuildAuthenticationOptions().RemoteCertificateValidationCallback, Is.Null);
+    }
+
+    [Test]
     public async Task WrapAsync_HandshakeFails_DisposesTheInnerStream()
     {
         // WrapAsync takes ownership of the inner stream the moment it wraps it. If it did not close it on the
@@ -496,11 +653,13 @@ public class TlsParametersTests
     private static async Task<byte[]> RoundTripThroughTlsAsync(
         X509Certificate2 serverCertificate,
         TlsParameters tls,
-        X509Certificate2 intermediate = null)
+        X509Certificate2 intermediate = null,
+        string replicaTag = null,
+        TlsExchange exchange = null)
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
-        Task server = RunTlsEchoServerAsync(listener, serverCertificate, intermediate);
+        Task server = RunTlsEchoServerAsync(listener, serverCertificate, intermediate, exchange);
 
         try
         {
@@ -509,7 +668,7 @@ public class TlsParametersTests
 
             // WrapAsync owns the NetworkStream from here, and disposing the returned stream closes both.
             using Stream encrypted = await TlsParameters.WrapAsync(
-                new NetworkStream(socket, ownsSocket: false), tls.BuildAuthenticationOptions(), CancellationToken.None);
+                new NetworkStream(socket, ownsSocket: false), tls.BuildAuthenticationOptions(replicaTag), CancellationToken.None);
             await encrypted.WriteAsync(Payload);
             await encrypted.FlushAsync();
 
@@ -527,7 +686,7 @@ public class TlsParametersTests
         }
     }
 
-    private static async Task RunTlsEchoServerAsync(TcpListener listener, X509Certificate2 certificate, X509Certificate2 intermediate)
+    private static async Task RunTlsEchoServerAsync(TcpListener listener, X509Certificate2 certificate, X509Certificate2 intermediate, TlsExchange exchange)
     {
         using TcpClient accepted = await listener.AcceptTcpClientAsync();
         using var ssl = new SslStream(accepted.GetStream(), leaveInnerStreamOpen: false);
@@ -546,12 +705,25 @@ public class TlsParametersTests
 
         await ssl.AuthenticateAsServerAsync(options);
 
+        // On the server side this is the SNI the client sent.
+        if (exchange is not null)
+        {
+            exchange.ServerNameSent = ssl.TargetHostName;
+        }
+
         // This server echoes one known payload, so it can wait for all of it rather than echo a short read back
         // and leave the client comparing fewer bytes than it sent.
         var buffer = new byte[Payload.Length];
         await ssl.ReadExactlyAsync(buffer);
         await ssl.WriteAsync(buffer);
         await ssl.FlushAsync();
+    }
+
+    // What the echo server saw of one exchange. Written before the server echoes, so it is set once the client has read
+    // the echo back.
+    private sealed class TlsExchange
+    {
+        internal string ServerNameSent { get; set; }
     }
 
     // Reports whether the stream it wraps was disposed, which is how the ownership contract is observed.
