@@ -4,6 +4,10 @@ using ClickHouse.Driver.ADO;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+using ClickHouse.Driver.Tests.Utilities;
 
 namespace ClickHouse.Driver.Tests.DependencyInjection;
 
@@ -127,5 +131,84 @@ public class RegistrationTests
         using var connection = services.GetRequiredService<IClickHouseConnection>();
         Assert.That(connection.Database, Is.EqualTo("factory_db"));
     }
+
+    [Test]
+    public async Task AddClickHouseDataSource_DisposeAsyncDisposesOwnedResources()
+    {
+        const string connectionString = "Host=localhost;Port=1234";
+    
+        var handler = new TrackingHandler(new HttpClientHandler());
+        var httpClient = new HttpClient(handler);
+    
+        var services = new ServiceCollection()
+            .AddClickHouseDataSource(connectionString, httpClient)
+            .BuildServiceProvider();
+    
+        var dataSource = services.GetRequiredService<ClickHouseDataSource>();
+    
+        await services.DisposeAsync();
+    
+        Assert.That(handler.IsDisposed, Is.True);
+    
+        Assert.ThrowsAsync<ObjectDisposedException>(
+            async () => await dataSource.GetClient().ExecuteScalarAsync("SELECT 1"));
+    }
+    
+    [Test]
+    public void AddClickHouseDataSource_DisposeDisposesOwnedResources()
+    {
+        const string connectionString = "Host=localhost;Port=1234";
+    
+        var handler = new TrackingHandler(new HttpClientHandler());
+        var httpClient = new HttpClient(handler);
+    
+        var services = new ServiceCollection()
+            .AddClickHouseDataSource(connectionString, httpClient)
+            .BuildServiceProvider();
+    
+        var dataSource = services.GetRequiredService<ClickHouseDataSource>();
+    
+        services.Dispose();
+    
+        Assert.That(handler.IsDisposed, Is.True);
+    
+        Assert.ThrowsAsync<ObjectDisposedException>(
+            async () => await dataSource.GetClient().ExecuteScalarAsync("SELECT 1"));
+    }
+
+    [Test]
+    public async Task AddClickHouseDataSource_DisposeAsyncDisposesDefaultClient()
+    {
+        const string connectionString = "Host=localhost;Port=1234";
+    
+        var services = new ServiceCollection()
+            .AddClickHouseDataSource(connectionString)
+            .BuildServiceProvider();
+    
+        var dataSource = services.GetRequiredService<ClickHouseDataSource>();
+    
+        await services.DisposeAsync();
+    
+        Assert.ThrowsAsync<ObjectDisposedException>(
+            async () => await dataSource.GetClient().ExecuteScalarAsync("SELECT 1"));
+    }
+
+    [Test]
+    public void AddClickHouseDataSource_DisposeDisposesDefaultClient()
+    {
+        const string connectionString = "Host=localhost;Port=1234";
+    
+        var services = new ServiceCollection()
+            .AddClickHouseDataSource(connectionString)
+            .BuildServiceProvider();
+    
+        var dataSource = services.GetRequiredService<ClickHouseDataSource>();
+    
+        services.Dispose();
+    
+        Assert.ThrowsAsync<ObjectDisposedException>(
+            async () => await dataSource.GetClient().ExecuteScalarAsync("SELECT 1"));
+    }
+
 #endif
 }
