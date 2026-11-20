@@ -424,6 +424,36 @@ public class ResponseDecompressionTests
         });
     }
 
+    [TestCaseSource(nameof(DecodableCodecs))]
+    public async Task FromHttpResponseAsync_WithCompressedExceptionBlockAfterLastRow_ReturnsOnlyTheRows(string contentEncoding)
+    {
+        // The block as the server writes it, starting at a row boundary of the decoded body.
+        const string tag = "PU1FNUFH98";
+        var body = BuildRowBinaryResult(1, 2, 3)
+            .Concat(Encoding.UTF8.GetBytes($"\r\n__exception__\r\n{tag}\r\nCode: 395. boom compressed\n27 {tag}\r\n__exception__\r\n"))
+            .ToArray();
+
+        using var response = CreateResponse(Encode(contentEncoding, body), contentEncoding);
+        response.Headers.Add("X-ClickHouse-Exception-Tag", tag);
+
+        using var reader = await ClickHouseDataReader.FromHttpResponseAsync(
+            response, TypeSettings.Default, pocoRegistry: null, readBufferSize: 64, readValueConverter: null);
+
+        var values = new List<int>();
+        var ex = Assert.Throws<ClickHouseServerException>(() =>
+        {
+            while (reader.Read())
+                values.Add(reader.GetInt32(0));
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(values, Is.EqualTo(new[] { 1, 2, 3 }));
+            Assert.That(ex.Message, Is.EqualTo("Code: 395. boom compressed"));
+            Assert.That(ex.ErrorCode, Is.EqualTo(395));
+        });
+    }
+
     [Test]
     public async Task FromHttpResponseAsync_WhenTheReaderIsDisposedTwice_IsHarmless()
     {

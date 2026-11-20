@@ -419,4 +419,56 @@ public class ExceptionTagAwareStreamTests
 
         Assert.That(result, Is.Null); // Should not match wrong token
     }
+
+    [TestCase("\r\n__exception__\r\nPU1FNUFH98\r\nCode: 395.", ExpectedResult = "Full")]
+    [TestCase("\r\n__exception__\r\nPU1FNUFH98", ExpectedResult = "Full")]
+    [TestCase("\r", ExpectedResult = "Partial")]
+    [TestCase("\r\n__exc", ExpectedResult = "Partial")]
+    [TestCase("\r\n__exception__\r\nPU1F", ExpectedResult = "Partial")]
+    [TestCase("\r\n__exception__\r\nWRONGTOKEN", ExpectedResult = "None")]
+    [TestCase("__exception__\r\nPU1FNUFH98", ExpectedResult = "None")]
+    [TestCase("\r__exception__\r\nPU1FNUFH98", ExpectedResult = "None")]
+    [TestCase("\r\n__exception__PU1FNUFH98", ExpectedResult = "None")]
+    [TestCase("\r\r", ExpectedResult = "None")]
+    public string MatchOpeningMarker_BytesAtARowBoundary_ReturnsHowFarTheyMatchTheMarker(string bytes)
+    {
+        using var stream = new ExceptionTagAwareStream(new MemoryStream(), TestToken);
+        var data = Encoding.UTF8.GetBytes(bytes);
+
+        return stream.MatchOpeningMarker(data[0], data.AsSpan(1)).ToString();
+    }
+
+    [TestCase("rows\r\n__exception__\r\nPU1FNUFH98\r\nboom\n5 PU1FNUFH98\r\n__exception__\r\n", ExpectedResult = true)]
+    [TestCase("5 PU1FNUFH98__exception__", ExpectedResult = true)]
+    [TestCase("5 PU1FNUFH98\n__exception__\n", ExpectedResult = true)]
+    [TestCase("rows__exception__\r\n", ExpectedResult = false)]
+    [TestCase("5 WRONGTOKEN\r\n__exception__\r\n", ExpectedResult = false)]
+    [TestCase("5 PU1FNUFH98\r\n__exception__\r\n\0", ExpectedResult = false)]
+    [TestCase("5 PU1FNUFH98\r\n\r\n__exception__\r\n", ExpectedResult = false)]
+    [TestCase("", ExpectedResult = false)]
+    public bool EndsWithClosingMarker_AfterReadingTheBytes_TellsIfTheyEndWithTheClosingMarker(string bytes)
+    {
+        var data = Encoding.UTF8.GetBytes(bytes);
+        using var stream = new ExceptionTagAwareStream(new MemoryStream(data), TestToken);
+        _ = stream.Read(new byte[data.Length + 1], 0, data.Length + 1);
+
+        return stream.EndsWithClosingMarker();
+    }
+
+    [Test]
+    public void EndsWithClosingMarker_MarkerAcrossTheEndOfTheRingBuffer_ReturnsTrue()
+    {
+        // 4100 bytes in reads of 1025: the last read wraps, so the closing marker is split across the end of the
+        // 4096-byte ring buffer.
+        var closing = Encoding.UTF8.GetBytes($"{TestToken}\r\n__exception__\r\n");
+        var data = new byte[4100];
+        closing.CopyTo(data, data.Length - closing.Length);
+        using var stream = new ExceptionTagAwareStream(new MemoryStream(data), TestToken);
+        var buffer = new byte[1025];
+        while (stream.Read(buffer, 0, buffer.Length) > 0)
+        {
+        }
+
+        Assert.That(stream.EndsWithClosingMarker(), Is.True);
+    }
 }

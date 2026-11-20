@@ -6,22 +6,39 @@ namespace ClickHouse.Driver.Formats;
 
 /// <summary>
 /// Stream wrapper that records recently-read bytes in a ring buffer and can detect
-/// ClickHouse mid-stream exception markers when parsing failures occur.
+/// ClickHouse mid-stream exception markers in them, or in bytes given to it.
 /// </summary>
 internal sealed class ExceptionTagAwareStream : Stream
 {
     private const string ExceptionPrefix = "__exception__";
     private const int BufferCapacity = 4096; // 4KB ring buffer
+    private const int MaxSeparatorLength = 2; // "\r\n"
 
     private readonly Stream innerStream;
     private readonly bool leaveOpen;
     private readonly byte[] exceptionPrefixBytes; // "__exception__"
     private readonly byte[] tagBytes;             // exception tag/token
+    private readonly byte[] openingMarkerBytes;   // "\r\n__exception__\r\n<tag>", as the server writes it
 
     // Ring buffer for recent bytes
     private readonly byte[] recentBytes = new byte[BufferCapacity];
     private int writePosition;
     private int bytesRecorded;
+
+    /// <summary>
+    /// Result of <see cref="MatchOpeningMarker"/>.
+    /// </summary>
+    internal enum MarkerMatch
+    {
+        /// <summary>The bytes are not the opening marker.</summary>
+        None,
+
+        /// <summary>The bytes match the opening marker as far as they go, but end before it does.</summary>
+        Partial,
+
+        /// <summary>The bytes start with the opening marker.</summary>
+        Full,
+    }
 
     /// <param name="innerStream">The stream reads are pulled from and recorded off.</param>
     /// <param name="exceptionTag">The per-query token the server brackets a mid-stream exception with.</param>
@@ -36,6 +53,7 @@ internal sealed class ExceptionTagAwareStream : Stream
 
         exceptionPrefixBytes = Encoding.UTF8.GetBytes(ExceptionPrefix);
         tagBytes = Encoding.UTF8.GetBytes(exceptionTag);
+        openingMarkerBytes = Encoding.UTF8.GetBytes("\r\n" + ExceptionPrefix + "\r\n" + exceptionTag);
     }
 
     public override bool CanRead => innerStream.CanRead;
@@ -125,8 +143,15 @@ internal sealed class ExceptionTagAwareStream : Stream
         if (bytesRecorded < exceptionPrefixBytes.Length + tagBytes.Length)
             return null;
 
-        byte[] buffer = GetLinearBuffer();
+        return TryParseMidStreamException(GetLinearBuffer());
+    }
 
+    /// <summary>
+    /// Parses the first exception block in <paramref name="buffer"/>.
+    /// </summary>
+    /// <returns>ClickHouseServerException if the buffer has an opening marker, null otherwise</returns>
+    internal ClickHouseServerException TryParseMidStreamException(byte[] buffer)
+    {
         // Opening marker: "__exception__" <optional CR/LF> "<tag>".
         int markerIndex = FindDelimitedMarker(buffer, exceptionPrefixBytes, tagBytes, 0, out int messageStart);
         if (markerIndex < 0)
@@ -134,6 +159,77 @@ internal sealed class ExceptionTagAwareStream : Stream
 
         return ParseExceptionFormat(buffer, messageStart);
     }
+
+    /// <summary>
+    /// The length of the opening marker that <see cref="MatchOpeningMarker"/> compares.
+    /// </summary>
+    internal int OpeningMarkerLength => openingMarkerBytes.Length;
+
+    /// <summary>
+    /// Tells if <paramref name="first"/> followed by <paramref name="following"/> starts with the opening marker of the
+    /// exception block exactly as the server writes it: "\r\n__exception__\r\n&lt;tag&gt;". Unlike
+    /// <see cref="TryExtractMidStreamException"/>, this does not accept other separators: it only lets the reader
+    /// stop before the block, while the checks at the end of the body still find a block written another way.
+    /// </summary>
+    /// <returns>
+    /// <see cref="MarkerMatch.Partial"/> when the bytes match as far as they go but end before the marker does.
+    /// </returns>
+    internal MarkerMatch MatchOpeningMarker(byte first, ReadOnlySpan<byte> following)
+    {
+        if (first != openingMarkerBytes[0])
+            return MarkerMatch.None;
+
+        var rest = openingMarkerBytes.AsSpan(1);
+        int count = Math.Min(rest.Length, following.Length);
+        if (!following.Slice(0, count).SequenceEqual(rest.Slice(0, count)))
+            return MarkerMatch.None;
+
+        return count == rest.Length ? MarkerMatch.Full : MarkerMatch.Partial;
+    }
+
+    /// <summary>
+    /// Tells if the last bytes read are the closing marker of the exception block: "&lt;tag&gt;\r\n__exception__\r\n",
+    /// where the check also accepts each "\r\n" shorter or absent. Unlike <see cref="TryExtractMidStreamException"/>,
+    /// this does not need the opening marker, which a long message pushes out of the ring buffer. Does not allocate.
+    /// </summary>
+    internal bool EndsWithClosingMarker()
+    {
+        int offset = SkipSeparatorFromEnd(0);
+        if (!RecordedBytesEndWith(exceptionPrefixBytes, ref offset))
+            return false;
+
+        offset = SkipSeparatorFromEnd(offset);
+        return RecordedBytesEndWith(tagBytes, ref offset);
+    }
+
+    // offset counts bytes back from the last byte recorded. Skips at most MaxSeparatorLength CR/LF bytes.
+    private int SkipSeparatorFromEnd(int offset)
+    {
+        int end = Math.Min(offset + MaxSeparatorLength, bytesRecorded);
+        while (offset < end && RecordedByteFromEnd(offset) is (byte)'\r' or (byte)'\n')
+            offset++;
+        return offset;
+    }
+
+    // Tells if pattern ends offset bytes back from the last byte recorded; if so, moves offset back past it.
+    private bool RecordedBytesEndWith(byte[] pattern, ref int offset)
+    {
+        if (bytesRecorded - offset < pattern.Length)
+            return false;
+
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            if (RecordedByteFromEnd(offset + i) != pattern[pattern.Length - 1 - i])
+                return false;
+        }
+
+        offset += pattern.Length;
+        return true;
+    }
+
+    // offset 0 is the last byte recorded; offset must be less than bytesRecorded.
+    private byte RecordedByteFromEnd(int offset)
+        => recentBytes[(writePosition - 1 - offset + BufferCapacity) % BufferCapacity];
 
     private byte[] GetLinearBuffer()
     {
