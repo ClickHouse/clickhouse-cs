@@ -26,6 +26,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 {
     private const int DefaultBufferSize = ClickHouseDefaults.ReadBufferSize;
     private const string ExceptionTagHeader = "X-ClickHouse-Exception-Tag";
+    private const int MaxExceptionBlockSize = 16 * 1024; // The server's MAX_EXCEPTION_SIZE
 
     private readonly HttpResponseMessage httpResponse; // Used to dispose at the end of reader
     private readonly ExtendedBinaryReader reader;
@@ -103,9 +104,10 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             // one per scalar the reader decodes, which is the difference between recording a few bytes
             // millions of times and recording a 64 KiB block a few times. The ring buffer then holds the
             // last bytes received rather than the last bytes consumed — equivalent for this purpose,
-            // because TryExtractMidStreamException is only consulted once a read has failed with an
-            // IOException, by which point the transport is drained and the server's trailing marker has
-            // been recorded.
+            // because TryExtractMidStreamException is only consulted once the body has ended (cleanly, or
+            // with an IOException), by which point the transport is drained and the server's trailing
+            // marker has been recorded. A block that starts at a row boundary is detected in the read
+            // buffer instead (see HasNextRow).
             // It must stay *above* the decompressor, though: the server writes its exception marker into
             // the response body, so the marker only exists in the decoded plaintext.
             // leaveOpen: true because the stream below is owned by either httpResponse (uncompressed) or
@@ -123,6 +125,10 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
             // PeekableStreamWrapper chain does not propagate Dispose to inner streams).
             // Its Read may return fewer bytes than requested; the ExtendedBinaryReader below loops to
             // satisfy exact-count reads.
+            // For a tagged response the buffer must be able to hold the opening marker of the exception
+            // block, which HasNextRow looks for in it.
+            if (exceptionStream != null)
+                readBufferSize = Math.Max(readBufferSize, exceptionStream.OpeningMarkerLength);
             buffered = new PooledReadBufferStream(bufferedInner, readBufferSize, leaveOpen: true);
 
             reader = new ExtendedBinaryReader(buffered);
@@ -628,9 +634,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
         try
         {
-            // PeekChar is inside the try: a mid-stream failure truncates the body at a row
+            // HasNextRow is inside the try: a mid-stream failure truncates the body at a row
             // boundary too, so the end-of-stream probe can itself hit the truncation.
-            if (reader.PeekChar() == -1)
+            if (!HasNextRow())
             {
                 hasCurrentRow = false;
                 return false;
@@ -700,9 +706,9 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         hasCurrentRow = false;
         try
         {
-            // PeekChar is inside the try: a mid-stream failure truncates the body at a row
+            // HasNextRow is inside the try: a mid-stream failure truncates the body at a row
             // boundary too, so the end-of-stream probe can itself hit the truncation.
-            if (reader.PeekChar() == -1)
+            if (!HasNextRow())
                 return false; // End of stream reached
 
             // Built on the first row rather than in the ctor: the POCO fast path materializes straight
@@ -728,6 +734,87 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
                 throw serverEx;
             throw;
         }
+    }
+
+    /// <summary>
+    /// Peeks at the first byte of the next row. Returns false at the end of the body. When the server tagged the
+    /// response, throws the server's in-band exception if its block starts here or ends the body, so that the block
+    /// is not decoded as rows and a body that ends with it is not reported as a complete result.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool HasNextRow()
+    {
+        var next = reader.PeekChar();
+        if (next == -1)
+        {
+            if (exceptionTagStream != null)
+                ThrowIfBodyEndsWithExceptionBlock();
+            return false;
+        }
+
+        // The block opens with "\r\n" (see ExceptionTagAwareStream.MatchOpeningMarker). Both bytes are tested here,
+        // so that a row that only starts with '\r' costs no call. -1: the second byte is not buffered yet.
+        if (next == '\r' && exceptionTagStream != null && pooledReadBuffer.NextBufferedByte is '\n' or -1)
+            ThrowIfExceptionBlockStartsHere((byte)next);
+        return true;
+    }
+
+    // The server breaks the body after the exception block, but something between it and the client (for example a
+    // proxy that re-frames the response) can end it cleanly. And a block that does not start at a row boundary is
+    // decoded as rows until the body ends.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ThrowIfBodyEndsWithExceptionBlock()
+    {
+        if (!exceptionTagStream.EndsWithClosingMarker())
+            return;
+
+        // The closing marker carries the tag, so the server reported an error even when a long message has pushed
+        // the opening marker out of the ring buffer.
+        throw exceptionTagStream.TryExtractMidStreamException()
+            ?? ClickHouseServerException.FromMidStreamException("Unknown error (could not parse exception message)");
+    }
+
+    // first is the byte PeekChar took from pooledReadBuffer, so the bytes still buffered there are the ones after it.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ThrowIfExceptionBlockStartsHere(byte first)
+    {
+        var buffered = pooledReadBuffer.Peek(0);
+        var match = exceptionTagStream.MatchOpeningMarker(first, buffered);
+
+        // The buffered bytes end inside the marker: read more, but only while the bytes still match it. So a row
+        // whose bytes received so far look like the start of the marker is returned only when the next bytes arrive.
+        while (match == ExceptionTagAwareStream.MarkerMatch.Partial)
+        {
+            var more = pooledReadBuffer.Peek(buffered.Length + 1);
+            if (more.Length == buffered.Length)
+                return; // End of the body (the buffer holds the whole marker, see FromHttpResponseAsync)
+            buffered = more;
+            match = exceptionTagStream.MatchOpeningMarker(first, buffered);
+        }
+
+        if (match == ExceptionTagAwareStream.MarkerMatch.Full)
+            throw ReadExceptionBlock();
+    }
+
+    // Reads the rest of the body, which is the exception block, and parses it. The server writes at most
+    // MaxExceptionBlockSize bytes, then ends the body without its terminating chunk. Never returns null: the bytes
+    // read start with the opening marker.
+    private ClickHouseServerException ReadExceptionBlock()
+    {
+        using var block = new MemoryStream();
+        var chunk = new byte[1024];
+        try
+        {
+            int read;
+            while (block.Length < MaxExceptionBlockSize && (read = reader.BaseStream.Read(chunk.AsSpan())) > 0)
+                block.Write(chunk, 0, read);
+        }
+        catch (IOException)
+        {
+            // The body was broken after the block; what was read is all there is.
+        }
+
+        return exceptionTagStream.TryParseMidStreamException(block.ToArray());
     }
 
     // Runs at most once per reader, so it is kept out of Read() to leave that method small enough for the

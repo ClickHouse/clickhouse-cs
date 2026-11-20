@@ -131,6 +131,43 @@ internal sealed class PooledReadBufferStream : Stream
         return buffer[position++];
     }
 
+    /// <summary>
+    /// The next byte if it is buffered, without consuming it; -1 if the buffer has no unread bytes. Never reads from
+    /// the inner stream.
+    /// </summary>
+    internal int NextBufferedByte => position < filled ? buffer[position] : -1;
+
+    /// <summary>
+    /// Returns the buffered bytes that are not read yet, without consuming them.
+    /// </summary>
+    /// <remarks>
+    /// When fewer than <paramref name="minimumCount"/> bytes are buffered, first moves them to the start of the buffer
+    /// and reads from the inner stream until there are <paramref name="minimumCount"/>, the inner stream ends, or the
+    /// buffer is full. So the result is shorter than <paramref name="minimumCount"/> only at end of stream, or when
+    /// <paramref name="minimumCount"/> is larger than the buffer. A <paramref name="minimumCount"/> of 0 never reads.
+    /// </remarks>
+    internal ReadOnlySpan<byte> Peek(int minimumCount)
+    {
+        ThrowIfDisposed();
+        int unread = filled - position;
+        if (unread < minimumCount)
+        {
+            Buffer.BlockCopy(buffer, position, buffer, 0, unread);
+            position = 0;
+            filled = unread;
+
+            while (filled < minimumCount && filled < buffer.Length)
+            {
+                int read = inner.Read(buffer, filled, buffer.Length - filled);
+                if (read == 0)
+                    break;
+                filled += read;
+            }
+        }
+
+        return buffer.AsSpan(position, filled - position);
+    }
+
     public override void Flush()
     {
         // Nothing to flush on a read stream.
@@ -155,6 +192,7 @@ internal sealed class PooledReadBufferStream : Stream
         {
             var toReturn = buffer;
             buffer = null;
+            position = filled = 0; // NextBufferedByte then reports -1 instead of reading the returned buffer
             if (toReturn != null)
                 ArrayPool<byte>.Shared.Return(toReturn);
             if (!leaveOpen)
