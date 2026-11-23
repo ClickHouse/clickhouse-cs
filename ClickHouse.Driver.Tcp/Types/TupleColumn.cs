@@ -685,11 +685,12 @@ internal sealed class TupleColumn<T1, T2, T3, T4, T5, T6, T7, TRest> : TupleColu
         {
             if (cache is null)
             {
-                ReadOnlySpan<TRest> restValues = rest.Values;
+                // The indexer of the rest column builds each TRest from the children and keeps nothing. Values of the
+                // rest column would keep a second array of the elements after the seventh, and each level one more.
                 var decoded = new ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>[RowCount];
                 for (int i = 0; i < RowCount; i++)
                 {
-                    decoded[i] = new ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>(item1[i], item2[i], item3[i], item4[i], item5[i], item6[i], item7[i], restValues[i]);
+                    decoded[i] = new ValueTuple<T1, T2, T3, T4, T5, T6, T7, TRest>(item1[i], item2[i], item3[i], item4[i], item5[i], item6[i], item7[i], rest[i]);
                 }
 
                 cache = decoded;

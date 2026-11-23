@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Tests.Utilities;
@@ -332,6 +334,68 @@ public class TupleColumnCodecTests
             Assert.That(((ITupleColumn)readFifteen).Children, Has.Count.EqualTo(15));
             Assert.That(((ITupleColumn)readFifteen).FieldNames, Is.Empty);
         });
+    }
+
+    [Test]
+    public void Values_MaxElements_AllocatesOnlyTheResultArray()
+    {
+        // A row of Values holds all 256 elements, so the result array has the flat size. No nesting level of TRest
+        // keeps a second array of the elements after it.
+        const int rows = 1000;
+        int width = TupleShape.MaxElements;
+        Type tupleType = TupleShape.Of(Enumerable.Repeat(typeof(long), width).ToArray());
+        using IColumn warmUp = WideInt64Column(tupleType, width, rows);
+        using IColumn measured = WideInt64Column(tupleType, width, rows);
+
+        var arguments = new object[] { warmUp, measured, 0L };
+        var mismatch = (string)typeof(TupleColumnCodecTests)
+            .GetMethod(nameof(MeasureFirstValues), BindingFlags.NonPublic | BindingFlags.Static)
+            .MakeGenericMethod(tupleType)
+            .Invoke(null, arguments);
+        long allocated = (long)arguments[2];
+        long resultBytes = (long)rows * width * sizeof(long);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(mismatch, Is.Null, "the values");
+            Assert.That(allocated, Is.LessThan(2 * resultBytes), $"bytes allocated by the first Values; the result array has {resultBytes} bytes");
+        });
+    }
+
+    // Element e of row r is r * width + e.
+    private static IColumn WideInt64Column(Type tupleType, int width, int rows)
+    {
+        IColumn[] children = Enumerable.Range(0, width)
+            .Select(element => (IColumn)new ArrayColumn<long>("c", "Int64", Enumerable.Range(0, rows).Select(row => ((long)row * width) + element).ToArray()))
+            .ToArray();
+        string typeName = "Tuple(" + string.Join(", ", Enumerable.Repeat("Int64", width)) + ")";
+        return (IColumn)TupleColumns.ConstructorFor(tupleType).Invoke(new object[] { "c", typeName, children, null, true });
+    }
+
+    // Reflection cannot return the ReadOnlySpan of Values, so this method reads it as IColumn<T> for the tuple type.
+    // It gives the bytes that the first Values of the measured column allocates, and the first wrong element or null.
+    private static string MeasureFirstValues<T>(IColumn warmUp, IColumn measured, out long allocated)
+        where T : struct, ITuple
+    {
+        _ = ((IColumn<T>)warmUp).Values;
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        ReadOnlySpan<T> values = ((IColumn<T>)measured).Values;
+        allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        for (int row = 0; row < values.Length; row++)
+        {
+            ITuple tuple = values[row];
+            for (int element = 0; element < tuple.Length; element++)
+            {
+                long expected = ((long)row * tuple.Length) + element;
+                if (!Equals(tuple[element], expected))
+                {
+                    return $"row {row}, element {element}: {tuple[element]}, expected {expected}";
+                }
+            }
+        }
+
+        return values.Length == measured.RowCount ? null : $"{values.Length} rows, expected {measured.RowCount}";
     }
 
     [Test]
