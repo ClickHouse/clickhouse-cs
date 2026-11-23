@@ -62,11 +62,12 @@ Take the server from `ExampleConfig`, which resolves environment variables over 
   those would produce a duplicate.
 - `ExampleConfig.HttpBuilder()` to *change* one of those five. It returns a fresh builder each call.
 
-Seven examples are exempt, because configuration is their subject, they use a separate endpoint, or
+Nine examples are exempt, because configuration is their subject, they use a separate endpoint, or
 they start their own server:
 `Core_002_ConnectionStringConfiguration`, `Core_003_DependencyInjection`,
-`Auth_001_JwtAuthentication`, `Tables_003_CreateTableCloud`, `Testing_001_Testcontainers`,
-`Tcp_003_Tls`, `Tcp_005_Testcontainers`. A literal connection string inside a comment,
+`Auth_001_JwtAuthentication`, `Auth_002_TokenRefresh`, `Tables_003_CreateTableCloud`,
+`Testing_001_Testcontainers`, `Tcp_003_Tls`, `Tcp_005_Testcontainers` (Observability),
+`Tcp_005_TokenRefresh` (Connection). A literal connection string inside a comment,
 shown to teach the reader what one looks like, is also fine.
 
 Ask `ExampleConfig` for the endpoint with `HttpEndpoint` or `TcpEndpoint` when an example has to name
@@ -75,12 +76,14 @@ them, so an example reading one could print an endpoint it did not connect to.
 
 ## Examples deliberately left out of `RunAllExamples`
 
-Three need infrastructure the CI server does not have, so they are registered nowhere and run only
+Five need infrastructure the CI server does not have, so they are registered nowhere and run only
 by explicit filter:
 
 - `Tables_002_CreateTableCluster` — needs a ClickHouse cluster.
 - `Tables_003_CreateTableCloud` — needs ClickHouse Cloud credentials.
 - `Auth_001_JwtAuthentication` — needs a JWT.
+- `Auth_002_TokenRefresh` and `Tcp_005_TokenRefresh` — need an OAuth 2.0 identity provider and a
+  ClickHouse Cloud service that accepts its tokens.
 
 Their class names are also in `ExampleRunner._optIn`, which is what keeps `--http` and `--tcp` from
 running them: those select by reflection, so leaving an example out of `RunAllExamples` does not on

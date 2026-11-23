@@ -200,9 +200,11 @@ Connection-string values for `TimeSpan` properties are expressed in seconds.
 | Port | `int?` | `null` | `Port` | Native-protocol port; when omitted, uses 9000 without TLS or 9440 with TLS |
 | Username | `string` | `"default"` | `Username` | Authentication username |
 | Password | `string` | `""` | `Password` | Authentication password |
+| BearerToken | `string` | `null` | `BearerToken` | JWT sent in the handshake instead of `Username`/`Password`; see [JWT authentication](#jwt-authentication) |
+| CredentialsProvider | `ClickHouseCredentialsProvider` | `null` | — | Gives the credentials of each new connection, for tokens that expire and passwords that rotate; see [Token refresh](#jwt-token-refresh) |
 | Database | `string` | `"default"` | `Database` | Default database for operations |
 | QuotaKey | `string` | `""` | `QuotaKey` | Key used with a ClickHouse keyed quota |
-| DialTimeout | `TimeSpan` | 30 seconds | `DialTimeout` | Timeout for the socket connection, TLS negotiation, and native-protocol handshake |
+| DialTimeout | `TimeSpan` | 30 seconds | `DialTimeout` | Timeout for the socket connection, TLS negotiation, and native-protocol handshake; also covers the wait for the `CredentialsProvider` and a second connect after a rejection |
 | ReadTimeout | `TimeSpan` | 5 minutes | `ReadTimeout` | Maximum time for each transport read during an operation; zero disables the timeout |
 
 ### Data format and serialization {#data-format-serialization}
@@ -239,14 +241,112 @@ connections between them.
 | ConfigureTls | `Action<SslClientAuthenticationOptions>` | `null` | — | Adjusts TLS options before each handshake, after the other TLS properties are applied; available only through `ClickHouseTcpClientOptions` |
 
 <Warning>
-Without TLS, the password and all query data travel over the network without encryption. Keep
-`TlsAllowInvalidCertificates` set to `false` outside local development.
+Without TLS, the password or token and all query data travel over the network without encryption.
+Keep `TlsAllowInvalidCertificates` set to `false` outside local development.
 </Warning>
 
 The secure native protocol is a separate server endpoint rather than an in-band upgrade. A TLS
 client must connect to a secure native port; it does not fall back to plaintext. `ConfigureTls` is
 applied last and can override certificate and hostname validation, so review custom callbacks
 carefully.
+
+### JWT authentication {#jwt-authentication}
+
+ClickHouse Cloud can authenticate a connection with a
+[JSON Web Token (JWT)](/concepts/features/security/external-authenticators/jwt). Set `BearerToken`
+to send the token in the native-protocol handshake instead of `Username` and `Password`. The server
+runs the queries of the connection as an ephemeral user named `JWT::<subject>::<claims_hash>`.
+
+```csharp
+var options = new ClickHouseTcpClientOptions
+{
+    Host = "your-service.clickhouse.cloud",
+    UseTls = true,
+    BearerToken = jwt,
+};
+await using var client = new ClickHouseTcpClient(options);
+```
+
+Or in the connection string:
+
+```text
+Host=your-service.clickhouse.cloud;UseTls=true;BearerToken=eyJhbGciOiJSUzI1NiIs...
+```
+
+The client takes the credentials of a new connection from the first of these that is set:
+
+1. The credentials from `CredentialsProvider` (see [Token refresh](#jwt-token-refresh)).
+2. `BearerToken`. An empty string counts as not set.
+3. `Username` and `Password`.
+
+A connection authenticates once, when it opens, so there is no per-query token. `ToString()` of the
+options does not show the token. `ClickHouseTcpConnectionStringBuilder.ConnectionString` contains it
+in clear text, as it contains `Password`. Use TLS: the handshake sends the token as it sends a
+password.
+
+A JWT expires at the time in its `exp` claim. The client keeps the `BearerToken` that it was created
+with, and the pool can open a new connection after the token expires. To give new connections new
+tokens, set a `CredentialsProvider`.
+
+#### Token refresh {#jwt-token-refresh}
+
+Set `ClickHouseTcpClientOptions.CredentialsProvider` to give the client new credentials when they
+expire or when the server rejects them. It is the same delegate as in the HTTP client
+(see [Token refresh](./http#jwt-token-refresh)): it returns
+`ClickHouseCredentials.CreateBearer(token, expiresAt)` or
+`ClickHouseCredentials.CreateBasic(username, password)`, or `null` to use `BearerToken` or
+`Username` and `Password` of the options. The provider has no connection string key.
+
+```csharp
+var options = new ClickHouseTcpClientOptions
+{
+    Host = "your-service.clickhouse.cloud",
+    UseTls = true,
+    CredentialsProvider = async (request, cancellationToken) =>
+    {
+        // GetTokenAsync is your code: it gets a JWT and its expiry from your identity provider.
+        // request.Reason is Initial, Expiring or Rejected.
+        (string accessToken, DateTimeOffset expiresAt) = await GetTokenAsync(request.Reason, cancellationToken);
+        return ClickHouseCredentials.CreateBearer(accessToken, expiresAt);
+    },
+};
+await using var client = new ClickHouseTcpClient(options);
+```
+
+With Azure.Identity, call `TokenCredential.GetTokenAsync` in the provider and return
+`ClickHouseCredentials.CreateBearer(accessToken.Token, accessToken.ExpiresOn)`. The
+[token refresh example](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Tcp/Connection/Tcp_005_TokenRefresh.cs)
+does an OAuth 2.0 refresh-token grant with `HttpClient`.
+
+The client gets credentials when it opens a connection, and the connection keeps them:
+
+- **Caching.** The client caches credentials with a known expiry (`expiresAt`, else the `exp` claim
+  of a JWT) and gets new ones before they expire, with the same rules as the HTTP client. It calls
+  the provider for each new connection when the expiry is unknown. At most one call runs at a time.
+- **Pool.** The pool closes an idle connection whose credentials expire in 10 seconds or less, when
+  an operation asks for a connection and in the sweep. With a `CredentialsProvider`, the sweep runs
+  also when `MaxConnectionLifetime`, `IdleTimeout` and `MinPoolSize` are all zero: every 30
+  seconds, unless `SweepInterval` is set. An operation that runs is not interrupted.
+- **Rejection in the handshake.** When the server rejects the credentials (error 516,
+  `AUTHENTICATION_FAILED`), the client calls the provider with `Reason` set to `Rejected` and
+  connects once more. A second rejection fails the operation. Credentials from `BearerToken` or
+  `Username` and `Password` get no second connect.
+- **Rejection in an operation.** When an operation fails with error 516 on a connection that opened
+  with credentials from the provider, the client closes the connection and drops those credentials
+  from the cache, if they are still there. A new connection then gets new credentials. The
+  operation is not run again.
+- **Timeout.** `DialTimeout` covers the wait for the provider, the handshake, and the second
+  connect.
+- **Errors.** An exception from the provider fails the operation that needs the connection. When a
+  background refresh fails, the client logs a warning (category
+  `ClickHouse.Driver.Tcp.Connection`) and uses the cached credentials until they expire.
+
+A [session](#sessions) keeps its connection, and so the credentials that it opened with: it is not
+closed when they expire. ClickHouse Cloud can remove the user of a JWT after the token expires, and
+the queries of the session then fail. Keep a session shorter than the lifetime of its token.
+
+The client logs no token. The connection log and the OpenTelemetry `db.user` tag show `Username` of
+the options.
 
 ### Logging and debugging {#logging-debugging}
 
@@ -1624,7 +1724,7 @@ The TCP client is experimental and does not provide every feature of the HTTP cl
 ### HTTP-only features {#limitations-http-only}
 
 The TCP API is not an ADO.NET provider and cannot be used with ORMs. It also does not support
-CSV, JSONEachRow, Parquet, or raw stream input and output; bearer authentication or custom HTTP
+CSV, JSONEachRow, Parquet, or raw stream input and output; a per-query bearer token or custom HTTP
 headers; custom parameter type resolution, formatting, or read conversion; or a per-query database
 or role. Use the [HTTP client](./http) when an application needs
 one of those features.
