@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Runtime.CompilerServices;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
 using ClickHouse.Driver.Utility;
@@ -58,6 +59,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         Username = other.Username;
         Password = other.Password;
         BearerToken = other.BearerToken;
+        CredentialsProvider = other.CredentialsProvider;
         UseCompression = other.UseCompression;
         UseCustomDecimals = other.UseCustomDecimals;
         ReadStringsAsByteArrays = other.ReadStringsAsByteArrays;
@@ -157,6 +159,21 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Default: null
     /// </summary>
     public string BearerToken { get; init; }
+
+    /// <summary>
+    /// Gets or sets a provider of credentials: a token that expires (refresh it in the provider), or a
+    /// password that rotates. The client asks it for the credentials of each request, and caches
+    /// credentials that have a known expiry until shortly before they expire.
+    /// Precedence: a non-empty <see cref="QueryOptions.BearerToken"/> (or <see cref="ClickHouseCommand.BearerToken"/>),
+    /// then the provider, then <see cref="BearerToken"/>, then <see cref="Username"/> and <see cref="Password"/>.
+    /// A provider that returns <see langword="null"/> selects the static credentials.
+    /// When the server rejects the credentials from the provider (error 516), the client asks the
+    /// provider again and sends a query or a ping once more. A request with a streamed body is not sent again.
+    /// The provider has no connection string key: a connection that is made again from its
+    /// <see cref="ClickHouseConnection.ConnectionString"/> has no provider.
+    /// Default: null
+    /// </summary>
+    public ClickHouseCredentialsProvider CredentialsProvider { get; init; }
 
     /// <summary>
     /// Gets or sets whether to use compression for data transfer. This is the master switch: when false
@@ -509,6 +526,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
                Username == other.Username &&
                Password == other.Password &&
                BearerToken == other.BearerToken &&
+               ReferenceEquals(CredentialsProvider, other.CredentialsProvider) &&
                UseCompression == other.UseCompression &&
                UseCustomDecimals == other.UseCustomDecimals &&
                ReadStringsAsByteArrays == other.ReadStringsAsByteArrays &&
@@ -557,6 +575,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         hash.Add(Username);
         hash.Add(Password);
         hash.Add(BearerToken);
+        hash.Add(CredentialsProvider is null ? 0 : RuntimeHelpers.GetHashCode(CredentialsProvider));
         hash.Add(UseCompression);
         hash.Add(UseCustomDecimals);
         hash.Add(ReadStringsAsByteArrays);

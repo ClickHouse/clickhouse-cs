@@ -57,9 +57,10 @@ public class QueryOptions
     public string? SessionId { get; init; }
 
     /// <summary>
-    /// Gets or sets the bearer token for JWT authentication.
-    /// When set, Bearer authentication is used instead of Basic authentication
-    /// (Username and Password are ignored for the Authorization header).
+    /// Gets or sets the bearer token for JWT authentication of this query.
+    /// When set, Bearer authentication is used instead of the client's
+    /// <see cref="ClickHouseClientSettings.CredentialsProvider"/>, <see cref="ClickHouseClientSettings.BearerToken"/>,
+    /// and Username and Password. An empty string counts as not set.
     /// The token should be provided as-is (already encoded if required by your auth provider).
     /// Default: null
     /// </summary>
