@@ -67,6 +67,12 @@ public class RolesTests
     [OneTimeTearDown]
     public async Task Cleanup()
     {
+        // Setup ignores the fixture before it opens the connection outside local_single_node.
+        if (defaultConnection == null)
+        {
+            return;
+        }
+
         try
         {
             // Best-effort: a table that cannot be dropped must not fail an otherwise passing fixture

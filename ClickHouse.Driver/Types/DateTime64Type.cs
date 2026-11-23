@@ -51,7 +51,38 @@ internal class DateTime64Type : AbstractDateTimeType
     private Instant ReadInstant(ExtendedBinaryReader reader)
         => Instant.FromUnixTimeTicks(MathUtils.ShiftDecimalPlaces(reader.ReadInt64(), 7 - Scale));
 
-    // No range check: any coerced instant is representable, so 'original' is unused.
-    protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T original)
-        => writer.Write(ToClickHouseTicks(Instant.FromDateTimeOffset(dto)));
+    // Scales finer than a .NET tick reach the Int64 limit inside the DateTime range (DateTime64(9): 1677 to 2262),
+    // so check before scaling up: an unchecked multiply would wrap and write a different instant.
+    protected override void WriteChecked<T>(ExtendedBinaryWriter writer, DateTimeOffset dto, T value)
+    {
+        var instant = Instant.FromDateTimeOffset(dto);
+        if (Scale <= 7)
+        {
+            writer.Write(ToClickHouseTicks(instant));
+            return;
+        }
+
+        var factor = MathUtils.ToPower(10, Scale - 7);
+        var ticks = instant.ToUnixTimeTicks();
+        if (ticks > long.MaxValue / factor || ticks < long.MinValue / factor)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(value),
+                value,
+                $"Value is outside the range that ClickHouse {this} can store as an Int64 count of 10^-{Scale} s since the epoch ({DescribeInt64Range(factor)}).");
+        }
+
+        writer.Write(ticks * factor);
+    }
+
+    // The lower limit of DateTime64(8) is before DateTime.MinValue, so only its upper limit can be reached.
+    private static string DescribeInt64Range(long factor)
+    {
+        var minTicks = long.MinValue / factor;
+        var max = FormatUnixTicks(long.MaxValue / factor);
+        return minTicks < DateTime.MinValue.Ticks - DateTime.UnixEpoch.Ticks ? $"up to {max}" : $"{FormatUnixTicks(minTicks)} to {max}";
+    }
+
+    private static string FormatUnixTicks(long unixTicks)
+        => DateTime.UnixEpoch.AddTicks(unixTicks).ToString("yyyy-MM-dd HH:mm:ss.fffffff 'UTC'", CultureInfo.InvariantCulture);
 }

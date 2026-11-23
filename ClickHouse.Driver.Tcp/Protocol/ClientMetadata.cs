@@ -12,11 +12,14 @@ internal sealed class ClientMetadata
     /// <summary>Informational client identifier, pinned to the same value the handshake reports.</summary>
     public string ClientName => ClientHandshakeParameters.DefaultClientName;
 
-    /// <summary>Informational client major version.</summary>
+    /// <summary>Client major version, as the handshake reported it.</summary>
     public int VersionMajor { get; init; }
 
-    /// <summary>Informational client minor version.</summary>
+    /// <summary>Client minor version, as the handshake reported it.</summary>
     public int VersionMinor { get; init; }
+
+    /// <summary>Client patch version.</summary>
+    public int VersionPatch { get; init; }
 
     /// <summary>Username, echoed as the initiating user in ClientInfo. Empty for JWT authentication.</summary>
     required public string Username { get; init; }
@@ -31,6 +34,7 @@ internal sealed class ClientMetadata
     {
         VersionMajor = parameters.VersionMajor,
         VersionMinor = parameters.VersionMinor,
+        VersionPatch = parameters.VersionPatch,
         // For JWT authentication the Username field holds a marker, not a user name. clickhouse-go sends an
         // empty initial user for every initial query.
         Username = parameters.IsJwt ? string.Empty : parameters.Username,

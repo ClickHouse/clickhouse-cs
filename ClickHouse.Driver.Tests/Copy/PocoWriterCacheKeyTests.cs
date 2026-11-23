@@ -88,7 +88,8 @@ public class PocoWriterCacheKeyTests
         // The same hints nested inside a container type.
         yield return new TestCaseData("Array(JSON(a Int64))", "Array(JSON(a String))");
         yield return new TestCaseData("Map(String, JSON(a Int64))", "Map(String, JSON(a String))");
-        // Canonical "Json" spelling: a named tuple element is only matched by the registered type name.
+        // A named tuple element, in the JSON spelling the server reports and the registered Json spelling.
+        yield return new TestCaseData("Tuple(x JSON(a Int64))", "Tuple(x JSON(a String))");
         yield return new TestCaseData("Tuple(x Json(a Int64))", "Tuple(x Json(a String))");
         yield return new TestCaseData("Array(Array(JSON(a Int64)))", "Array(Array(JSON(a String)))");
         yield return new TestCaseData("Nullable(JSON(a Int64))", "Nullable(JSON(a String))");

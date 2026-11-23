@@ -9,6 +9,8 @@ namespace ClickHouse.Driver.Types;
 
 internal class DecimalType : ParameterizedType, ITypedWriter<decimal>, ITypedWriter<ClickHouseDecimal>, ITypedReader<decimal>, ITypedReader<ClickHouseDecimal>
 {
+    private const int MaxSystemDecimalScale = 28;
+
     private int scale;
 
     public virtual int Precision { get; init; }
@@ -82,10 +84,12 @@ internal class DecimalType : ParameterizedType, ITypedWriter<decimal>, ITypedWri
         return new ClickHouseDecimal(mantissa, Scale);
     }
 
+    // The value is built from the mantissa and the column scale directly. Dividing the mantissa by
+    // the exponent would give the same number but drop trailing zeros (70000 / 10000 is 7, not 7.0000).
     private decimal ReadDecimal(ExtendedBinaryReader reader) => Size switch
     {
-        4 => reader.ReadInt32() / (decimal)Exponent,
-        8 => reader.ReadInt64() / (decimal)Exponent,
+        4 => MakeDecimal(reader.ReadInt32(), Scale),
+        8 => MakeDecimal(reader.ReadInt64(), Scale),
         _ => ReadWideDecimal(reader),
     };
 
@@ -96,7 +100,21 @@ internal class DecimalType : ParameterizedType, ITypedWriter<decimal>, ITypedWri
         // A scale above 28 or a mantissa wider than 96 bits does not fit System.Decimal as stored,
         // but the value can still be exact once trailing zeros are dropped.
         ClickHouseDecimal.TrimToDecimalRange(ref mantissa, ref scale);
-        return (decimal)mantissa / (decimal)(scale == Scale ? Exponent : BigInteger.Pow(10, scale));
+        if (scale > MaxSystemDecimalScale)
+            throw new OverflowException("Value cannot be represented as System.Decimal");
+
+        var negative = mantissa.Sign < 0;
+        Span<int> bits = stackalloc int[4];
+        decimal.GetBits((decimal)BigInteger.Abs(mantissa), bits);
+        return new decimal(bits[0], bits[1], bits[2], negative, (byte)scale);
+    }
+
+    // Callers pass a scale of at most 28 (a Decimal32/Decimal64 has a scale of at most 18).
+    private static decimal MakeDecimal(long mantissa, int scale)
+    {
+        var negative = mantissa < 0;
+        var magnitude = negative ? unchecked((ulong)-mantissa) : (ulong)mantissa;
+        return new decimal((int)magnitude, (int)(magnitude >> 32), 0, negative, (byte)scale);
     }
 
     private BigInteger ReadMantissa(ExtendedBinaryReader reader)

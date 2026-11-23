@@ -248,6 +248,14 @@ public class SerialisationTests
         Assert.That(exception.Message, Is.EqualTo($"Got {size + 1} bytes, {size} expected"));
     }
 
+    // The number of values the *_OfManyValues_ShouldNotAllocate tests write or read.
+    private const int ManyValues = 5000;
+
+    // GC.GetAllocatedBytesForCurrentThread is not exact. With background GC enabled (the default), it has
+    // reported up to about 8 KB in a window where the thread allocated nothing. Every object takes at least
+    // 12 bytes, so code that allocates once per value reports at least this bound and fails.
+    private const int ManyValuesAllocationBound = ManyValues * 12;
+
     [Test]
     [TestCase("Int128")]
     [TestCase("Int256")]
@@ -255,13 +263,12 @@ public class SerialisationTests
     [TestCase("UInt256")]
     public void BigIntegerWrite_OfManyValues_ShouldNotAllocate(string clickHouseType)
     {
-        const int Count = 5000;
         var type = TypeConverter.ParseClickHouseType(clickHouseType, TypeSettings.Default);
         // Boxed once outside the measurement: the box belongs to the caller, the scratch buffers this
         // test guards against belonged to the write itself.
         var value = (object)((BigInteger.One << 100) - 12345);
 
-        using var stream = new MemoryStream((Count * 32) + (16 * 1024));
+        using var stream = new MemoryStream((ManyValues * 32) + (16 * 1024));
         using var writer = new ExtendedBinaryWriter(stream);
 
         // Warm up the JIT and let the writer's buffer settle so only the writes are measured.
@@ -270,12 +277,12 @@ public class SerialisationTests
         stream.Position = 0;
 
         var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < Count; i++)
+        for (var i = 0; i < ManyValues; i++)
             type.Write(writer, value);
         writer.Flush();
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        Assert.That(allocated, Is.Zero, $"Write should use a stack buffer; allocated {allocated} bytes for {Count} values");
+        Assert.That(allocated, Is.LessThan(ManyValuesAllocationBound), $"Write should use a stack buffer; allocated {allocated} bytes for {ManyValues} values");
     }
 
 #if NET8_0_OR_GREATER
@@ -289,22 +296,21 @@ public class SerialisationTests
         Assert.Multiple(() =>
         {
             var int128 = MeasureTypedRead<Int128>("Int128", size: 16);
-            Assert.That(int128, Is.Zero, $"Int128 read should use a stack buffer; allocated {int128} bytes");
+            Assert.That(int128, Is.LessThan(ManyValuesAllocationBound), $"Int128 read should use a stack buffer; allocated {int128} bytes");
 
             var uint128 = MeasureTypedRead<UInt128>("UInt128", size: 16);
-            Assert.That(uint128, Is.Zero, $"UInt128 read should use a stack buffer; allocated {uint128} bytes");
+            Assert.That(uint128, Is.LessThan(ManyValuesAllocationBound), $"UInt128 read should use a stack buffer; allocated {uint128} bytes");
         });
     }
 
-    // Reads Count values through the type's ITypedReader<T> and returns the bytes allocated doing so. The
-    // typed readers are explicit interface implementations, so the cast is what selects them over the base
-    // ITypedReader<BigInteger>.
+    // Reads ManyValues values through the type's ITypedReader<T> and returns the bytes allocated doing so.
+    // The typed readers are explicit interface implementations, so the cast is what selects them over the
+    // base ITypedReader<BigInteger>.
     private static long MeasureTypedRead<T>(string clickHouseType, int size)
     {
-        const int Count = 5000;
         var reader = (ITypedReader<T>)TypeConverter.ParseClickHouseType(clickHouseType, TypeSettings.Default);
 
-        using var stream = new MemoryStream(new byte[(Count + 1) * size]);
+        using var stream = new MemoryStream(new byte[(ManyValues + 1) * size]);
         using var binaryReader = new ExtendedBinaryReader(stream);
 
         // Warm up the JIT, then rewind so only the measured reads consume the buffer.
@@ -312,7 +318,7 @@ public class SerialisationTests
         stream.Position = 0;
 
         var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < Count; i++)
+        for (var i = 0; i < ManyValues; i++)
             _ = reader.ReadValue(binaryReader);
         return GC.GetAllocatedBytesForCurrentThread() - before;
     }
