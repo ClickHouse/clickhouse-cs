@@ -415,14 +415,23 @@ public class CredentialsProviderHttpTests
         var providerStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var (client, _) = CreateClient(async (_, token) =>
         {
-            using var registration = token.Register(() => tokenCancelled.TrySetResult(true));
             providerStarted.TrySetResult(true);
-            await Task.Delay(System.Threading.Timeout.Infinite, token);
+            try
+            {
+                await Task.Delay(System.Threading.Timeout.Infinite, token);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // Not a token.Register callback: the cancelled delay can resume this method inside Cancel(), before
+                // a callback registered earlier runs, and leaving a using scope would then remove that callback.
+                tokenCancelled.TrySetResult(true);
+                throw;
+            }
+
             return null;
         });
         var query = client.ExecuteNonQueryAsync("SELECT 1");
 
-        // The query can reach the provider after an await: dispose only when the provider call runs.
         await providerStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
         client.Dispose();
 

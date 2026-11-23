@@ -215,9 +215,19 @@ public class CredentialsProviderTests
             PoolTimeout = TimeSpan.FromSeconds(5),
             CredentialsProvider = async (_, cancellationToken) =>
             {
-                using CancellationTokenRegistration registration = cancellationToken.Register(() => providerCancelled.TrySetResult());
                 providerStarted.TrySetResult();
-                await Task.Delay(Timeout.Infinite, cancellationToken);
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // Not a cancellationToken.Register callback: the cancelled delay can resume this method inside
+                    // Cancel(), before a callback registered earlier runs, and leaving a using scope would then remove it.
+                    providerCancelled.TrySetResult();
+                    throw;
+                }
+
                 return null;
             },
         };
