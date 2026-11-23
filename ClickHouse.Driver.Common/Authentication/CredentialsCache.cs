@@ -24,10 +24,15 @@ namespace ClickHouse.Driver.Authentication;
 /// </remarks>
 internal sealed class CredentialsCache : IDisposable
 {
-    /// <summary>
-    /// The server error code for rejected credentials (<c>AUTHENTICATION_FAILED</c>).
-    /// </summary>
+    /// <summary>The server error code <c>AUTHENTICATION_FAILED</c>.</summary>
     internal const int AuthenticationFailedErrorCode = 516;
+
+    /// <summary>
+    /// The server error code <c>REQUIRED_PASSWORD</c>. The server sends it instead of
+    /// <see cref="AuthenticationFailedErrorCode"/> when HTTP Basic credentials of the user <c>default</c>, or of an
+    /// empty user name, are wrong.
+    /// </summary>
+    internal const int RequiredPasswordErrorCode = 194;
 
     internal static readonly TimeSpan ExpiredMargin = TimeSpan.FromSeconds(10);
     internal static readonly TimeSpan MaxRefreshWindow = TimeSpan.FromSeconds(60);
@@ -66,6 +71,14 @@ internal sealed class CredentialsCache : IDisposable
         this.onBackgroundRefreshFailed = onBackgroundRefreshFailed;
         this.utcNow = utcNow ?? (static () => DateTimeOffset.UtcNow);
     }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when a server error with this code means that the server rejected the
+    /// credentials of the request or the connection: <see cref="AuthenticationFailedErrorCode"/> or
+    /// <see cref="RequiredPasswordErrorCode"/>. Both clients use this rule.
+    /// </summary>
+    internal static bool IsRejection(int errorCode)
+        => errorCode is AuthenticationFailedErrorCode or RequiredPasswordErrorCode;
 
     /// <summary>
     /// Returns <see langword="true"/> when credentials with this effective expiry must no longer be used:

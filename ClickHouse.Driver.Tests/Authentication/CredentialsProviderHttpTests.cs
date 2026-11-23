@@ -20,13 +20,16 @@ namespace ClickHouse.Driver.Tests.Authentication;
 /// How the HTTP client uses <see cref="ClickHouseClientSettings.CredentialsProvider"/>. A fake handler
 /// answers each request, so that a rejection can be set up for chosen credentials. The rejection has the
 /// shape that the server sends for wrong credentials (HTTP 403, <c>X-ClickHouse-Exception-Code: 516</c>,
-/// a <c>Code: 516</c> body); <see cref="CredentialsProviderIntegrationTests"/> gets it from a real server.
+/// a <c>Code: 516</c> body; HTTP 401 and code 194 for the user <c>default</c> with HTTP Basic);
+/// <see cref="CredentialsProviderIntegrationTests"/> gets both from a real server.
 /// </summary>
 public class CredentialsProviderHttpTests
 {
     private const string RejectedToken = "rejected-token";
     private const string AuthenticationFailedBody =
         "Code: 516. DB::Exception: Authentication failed: password is incorrect, or there is no user with such name. (AUTHENTICATION_FAILED)";
+    private const string RequiredPasswordBody =
+        "Code: 194. DB::Exception: default: Authentication failed: password is incorrect, or there is no user with such name. (REQUIRED_PASSWORD)";
 
     /// <summary>
     /// A provider that records the reason of each call and returns the next credentials of a list (the last
@@ -48,19 +51,25 @@ public class CredentialsProviderHttpTests
         }
     }
 
-    private static HttpResponseMessage Respond(HttpRequestMessage request, bool rejectionHeader = true, List<ResponseDisposalTrackingHandler.DisposalTrackingContent> rejections = null)
+    /// <summary>
+    /// Rejects a bearer token <see cref="RejectedToken"/> and HTTP Basic credentials whose password is
+    /// <see cref="RejectedToken"/>, with <paramref name="code"/> 516 (HTTP 403) or 194 (HTTP 401).
+    /// </summary>
+    private static HttpResponseMessage Respond(HttpRequestMessage request, bool rejectionHeader = true, List<ResponseDisposalTrackingHandler.DisposalTrackingContent> rejections = null, int code = 516)
     {
         var authorization = request.Headers.Authorization;
-        var rejected = authorization?.Parameter == RejectedToken ||
-            authorization?.Parameter == Convert.ToBase64String(Encoding.UTF8.GetBytes($"user:{RejectedToken}"));
+        var rejected = authorization?.Scheme == "Bearer"
+            ? authorization.Parameter == RejectedToken
+            : authorization != null && Encoding.UTF8.GetString(Convert.FromBase64String(authorization.Parameter)).EndsWith(":" + RejectedToken, StringComparison.Ordinal);
         if (!rejected)
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(string.Empty) };
 
-        var content = new ResponseDisposalTrackingHandler.DisposalTrackingContent(new MemoryStream(Encoding.UTF8.GetBytes(AuthenticationFailedBody)));
+        var body = code == 194 ? RequiredPasswordBody : AuthenticationFailedBody;
+        var content = new ResponseDisposalTrackingHandler.DisposalTrackingContent(new MemoryStream(Encoding.UTF8.GetBytes(body)));
         rejections?.Add(content);
-        var response = new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = content };
+        var response = new HttpResponseMessage(code == 194 ? HttpStatusCode.Unauthorized : HttpStatusCode.Forbidden) { Content = content };
         if (rejectionHeader)
-            response.Headers.Add("X-ClickHouse-Exception-Code", "516");
+            response.Headers.Add("X-ClickHouse-Exception-Code", code.ToString(System.Globalization.CultureInfo.InvariantCulture));
         return response;
     }
 
@@ -86,9 +95,21 @@ public class CredentialsProviderHttpTests
 
     private static string[] Tokens(TrackingHandler handler) => handler.Requests.Select(r => r.Headers.Authorization?.Parameter).ToArray();
 
-    [TestCase(false, TestName = "ExecuteNonQueryAsync_QueryParametersAndProviderTokenRejected_SendsOnceMoreWithNewToken")]
-    [TestCase(true, TestName = "ExecuteNonQueryAsync_FormDataParametersAndProviderTokenRejected_SendsOnceMoreWithNewToken")]
-    public async Task ExecuteNonQueryAsync_ProviderTokenRejected_SendsOnceMoreWithNewToken(bool useFormDataParameters)
+    /// <summary>Counts the parameters it is asked to format, and leaves the formatting to the client.</summary>
+    private sealed class CountingFormatter : IParameterFormatter
+    {
+        public int Calls { get; private set; }
+
+        public string Format(object value, string typeName, string parameterName)
+        {
+            Calls++;
+            return null;
+        }
+    }
+
+    [TestCase(false, TestName = "ExecuteNonQueryAsync_QueryParametersAndProviderTokenRejected_SendsOneRequestAndNextCallGetsNewToken")]
+    [TestCase(true, TestName = "ExecuteNonQueryAsync_FormDataParametersAndProviderTokenRejected_SendsOneRequestAndNextCallGetsNewToken")]
+    public async Task ExecuteNonQueryAsync_ProviderTokenRejected_SendsOneRequestAndNextCallGetsNewToken(bool useFormDataParameters)
     {
         var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer(RejectedToken), ClickHouseCredentials.CreateBearer("new-token"));
         var rejections = new List<ResponseDisposalTrackingHandler.DisposalTrackingContent>();
@@ -96,59 +117,80 @@ public class CredentialsProviderHttpTests
         using var _ = client;
         var parameters = new ClickHouseParameterCollection();
         parameters.AddParameter("id", 42UL);
+        var formatter = new CountingFormatter();
 
-        await client.ExecuteNonQueryAsync("SELECT {id:UInt64}", parameters, new QueryOptions { QueryId = "rotation-query" });
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(
+            () => client.ExecuteNonQueryAsync("SELECT {id:UInt64}", parameters, new QueryOptions { QueryId = "rotation-query", ParameterFormatter = formatter }));
+        var requestsAfterRejection = handler.RequestCount;
+        await client.ExecuteNonQueryAsync("SELECT {id:UInt64}", parameters);
 
         Assert.Multiple(() =>
         {
+            Assert.That(ex.ErrorCode, Is.EqualTo(516));
+            Assert.That(ex.Message, Does.Contain(AuthenticationFailedBody));
+            Assert.That(requestsAfterRejection, Is.EqualTo(1));
+            // The rejected request was built once: its parameter was formatted once.
+            Assert.That(formatter.Calls, Is.EqualTo(1));
+            Assert.That(handler.Requests[0].RequestUri.Query, Does.Contain("query_id=rotation-query"));
+            if (!useFormDataParameters)
+                Assert.That(handler.Requests[0].RequestUri.Query, Does.Contain("param_id=42"));
             Assert.That(Tokens(handler), Is.EqualTo(new[] { RejectedToken, "new-token" }));
             Assert.That(provider.Reasons, Is.EqualTo(new[] { ClickHouseCredentialsRefreshReason.Initial, ClickHouseCredentialsRefreshReason.Rejected }));
-            Assert.That(handler.Requests.Select(r => r.Headers.GetValues("User-Agent").Count()), Is.All.GreaterThan(0));
-            Assert.That(handler.Requests[1].RequestUri, Is.EqualTo(handler.Requests[0].RequestUri));
-            Assert.That(handler.Requests[1].RequestUri.Query, Does.Contain("query_id=rotation-query"));
-            if (!useFormDataParameters)
-                Assert.That(handler.Requests[1].RequestUri.Query, Does.Contain("param_id=42"));
             Assert.That(rejections.Single().IsDisposed, Is.True);
         });
     }
 
-    [Test]
-    public async Task ExecuteNonQueryAsync_RejectionCodeOnlyInTheBody_SendsOnceMoreWithNewCredentials()
+    private static IEnumerable<TestCaseData> Rejections()
     {
-        var provider = new ScriptedProvider(ClickHouseCredentials.CreateBasic("user", RejectedToken), ClickHouseCredentials.CreateBasic("user", "rotated"));
-        var (client, handler) = CreateClient(provider.InvokeAsync, r => Respond(r, rejectionHeader: false));
+        yield return new TestCaseData(ClickHouseCredentials.CreateBearer(RejectedToken), 516, true)
+            .SetName("ExecuteNonQueryAsync_BearerTokenRejectedWith516_ThrowsAndNextCallGetsNewCredentials");
+        yield return new TestCaseData(ClickHouseCredentials.CreateBasic("user", RejectedToken), 516, false)
+            .SetName("ExecuteNonQueryAsync_PasswordRejectedWith516OnlyInTheBody_ThrowsAndNextCallGetsNewCredentials");
+        yield return new TestCaseData(ClickHouseCredentials.CreateBasic("default", RejectedToken), 194, true)
+            .SetName("ExecuteNonQueryAsync_DefaultUserPasswordRejectedWith194_ThrowsAndNextCallGetsNewCredentials");
+        yield return new TestCaseData(ClickHouseCredentials.CreateBasic("default", RejectedToken), 194, false)
+            .SetName("ExecuteNonQueryAsync_DefaultUserPasswordRejectedWith194OnlyInTheBody_ThrowsAndNextCallGetsNewCredentials");
+    }
+
+    [TestCaseSource(nameof(Rejections))]
+    public async Task ExecuteNonQueryAsync_ServerRejectsProviderCredentials_ThrowsAndNextCallGetsNewCredentials(ClickHouseCredentials rejected, int code, bool rejectionHeader)
+    {
+        // Credentials without an expiry are not cached, but the next provider call must still say that the
+        // server rejected the last ones: a provider that caches a password reads its store again only then.
+        var provider = new ScriptedProvider(rejected, ClickHouseCredentials.CreateBasic("user", "rotated"));
+        var (client, handler) = CreateClient(provider.InvokeAsync, r => Respond(r, rejectionHeader, code: code));
         using var _ = client;
 
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(() => client.ExecuteNonQueryAsync("SELECT 1"));
+        var requestsAfterRejection = handler.RequestCount;
         await client.ExecuteNonQueryAsync("SELECT 1");
 
         Assert.Multiple(() =>
         {
-            Assert.That(handler.Requests.Select(r => r.Headers.Authorization?.Scheme), Is.All.EqualTo("Basic"));
-            Assert.That(Tokens(handler)[1], Is.EqualTo(Convert.ToBase64String(Encoding.UTF8.GetBytes("user:rotated"))));
-            Assert.That(provider.Reasons[1], Is.EqualTo(ClickHouseCredentialsRefreshReason.Rejected));
+            Assert.That(ex.ErrorCode, Is.EqualTo(code));
+            Assert.That(requestsAfterRejection, Is.EqualTo(1));
+            Assert.That(handler.Requests[1].Headers.Authorization?.ToString(), Is.EqualTo("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("user:rotated"))));
+            Assert.That(provider.Reasons, Is.EqualTo(new[] { ClickHouseCredentialsRefreshReason.Initial, ClickHouseCredentialsRefreshReason.Rejected }));
         });
     }
 
     [Test]
-    public void ExecuteNonQueryAsync_NewTokenRejectedToo_ThrowsAfterOneRetry()
+    public void ExecuteNonQueryAsync_EveryCallRejected_SendsOneRequestPerCall()
     {
         var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer(RejectedToken));
         var (client, handler) = CreateClient(provider.InvokeAsync);
         using var _ = client;
 
-        var ex = Assert.ThrowsAsync<ClickHouseServerException>(() => client.ExecuteNonQueryAsync("SELECT 1"));
-        Assert.ThrowsAsync<ClickHouseServerException>(() => client.ExecuteNonQueryAsync("SELECT 1"));
+        for (var i = 0; i < 3; i++)
+            Assert.ThrowsAsync<ClickHouseServerException>(() => client.ExecuteNonQueryAsync("SELECT 1"));
 
         Assert.Multiple(() =>
         {
-            Assert.That(ex.ErrorCode, Is.EqualTo(516));
-            Assert.That(ex.Message, Does.Contain("AUTHENTICATION_FAILED"));
-            Assert.That(handler.RequestCount, Is.EqualTo(4));
-            // The second rejection counts too: the next query asks for new credentials again.
+            Assert.That(handler.RequestCount, Is.EqualTo(3));
+            // The second rejection counts too: the third query asks for new credentials again.
             Assert.That(provider.Reasons, Is.EqualTo(new[]
             {
                 ClickHouseCredentialsRefreshReason.Initial,
-                ClickHouseCredentialsRefreshReason.Rejected,
                 ClickHouseCredentialsRefreshReason.Rejected,
                 ClickHouseCredentialsRefreshReason.Rejected,
             }));
@@ -156,26 +198,31 @@ public class CredentialsProviderHttpTests
     }
 
     [Test]
-    public void ExecuteNonQueryAsync_OtherServerErrorWithProviderToken_ThrowsWithoutRetry()
+    public async Task ExecuteNonQueryAsync_OtherServerErrorWithProviderToken_ThrowsAndKeepsTheCachedToken()
     {
-        var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer("token"));
+        var expiresAt = DateTimeOffset.UtcNow.AddHours(1);
+        var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer("token", expiresAt), ClickHouseCredentials.CreateBearer("other-token", expiresAt));
+        var requests = 0;
         var (client, handler) = CreateClient(
             provider.InvokeAsync,
-            _ => new HttpResponseMessage(HttpStatusCode.NotFound)
-            {
-                Content = new StringContent("Code: 60. DB::Exception: Unknown table expression identifier 'missing'. (UNKNOWN_TABLE)"),
-                Headers = { { "X-ClickHouse-Exception-Code", "60" } },
-            });
+            r => ++requests == 1
+                ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                {
+                    Content = new StringContent("Code: 60. DB::Exception: Unknown table expression identifier 'missing'. (UNKNOWN_TABLE)"),
+                    Headers = { { "X-ClickHouse-Exception-Code", "60" } },
+                }
+                : Respond(r));
         using var _ = client;
 
         var ex = Assert.ThrowsAsync<ClickHouseServerException>(() => client.ExecuteNonQueryAsync("SELECT * FROM missing"));
+        await client.ExecuteNonQueryAsync("SELECT 1");
 
         Assert.Multiple(() =>
         {
             Assert.That(ex.ErrorCode, Is.EqualTo(60));
             Assert.That(ex.Message, Does.Contain("UNKNOWN_TABLE"));
-            Assert.That(handler.RequestCount, Is.EqualTo(1));
-            Assert.That(provider.Reasons, Has.Count.EqualTo(1));
+            Assert.That(Tokens(handler), Is.EqualTo(new[] { "token", "token" }));
+            Assert.That(provider.Reasons, Is.EqualTo(new[] { ClickHouseCredentialsRefreshReason.Initial }));
         });
     }
 
@@ -194,35 +241,27 @@ public class CredentialsProviderHttpTests
         });
     }
 
-    [Test]
-    public async Task PingAsync_ProviderTokenRejected_SendsOnceMoreWithNewToken()
+    [TestCase(516, TestName = "PingAsync_ProviderTokenRejectedWith516_ReturnsFalseAndNextPingGetsNewToken")]
+    [TestCase(194, TestName = "PingAsync_ProviderTokenRejectedWith194_ReturnsFalseAndNextPingGetsNewToken")]
+    public async Task PingAsync_ProviderTokenRejected_ReturnsFalseAndNextPingGetsNewToken(int code)
     {
-        var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer(RejectedToken), ClickHouseCredentials.CreateBearer("new-token"));
-        var (client, handler) = CreateClient(provider.InvokeAsync);
+        var expiresAt = DateTimeOffset.UtcNow.AddHours(1);
+        var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer(RejectedToken, expiresAt), ClickHouseCredentials.CreateBearer("new-token", expiresAt));
+        var (client, handler) = CreateClient(provider.InvokeAsync, r => Respond(r, code: code));
         using var _ = client;
 
-        var alive = await client.PingAsync();
+        var first = await client.PingAsync();
+        var requestsAfterRejection = handler.RequestCount;
+        // The rejected token was cached (it has an expiry); the next ping must not use it again.
+        var second = await client.PingAsync();
 
         Assert.Multiple(() =>
         {
-            Assert.That(alive, Is.True);
+            Assert.That(first, Is.False);
+            Assert.That(second, Is.True);
+            Assert.That(requestsAfterRejection, Is.EqualTo(1));
             Assert.That(Tokens(handler), Is.EqualTo(new[] { RejectedToken, "new-token" }));
-        });
-    }
-
-    [Test]
-    public async Task PingAsync_NewTokenRejectedToo_ReturnsFalseAfterOneRetry()
-    {
-        var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer(RejectedToken));
-        var (client, handler) = CreateClient(provider.InvokeAsync);
-        using var _ = client;
-
-        var alive = await client.PingAsync();
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(alive, Is.False);
-            Assert.That(handler.RequestCount, Is.EqualTo(2));
+            Assert.That(provider.Reasons, Is.EqualTo(new[] { ClickHouseCredentialsRefreshReason.Initial, ClickHouseCredentialsRefreshReason.Rejected }));
         });
     }
 
@@ -242,6 +281,7 @@ public class CredentialsProviderHttpTests
             LoggerFactory = loggerFactory,
         });
 
+        Assert.ThrowsAsync<ClickHouseServerException>(() => client.ExecuteNonQueryAsync("SELECT 1"));
         await client.ExecuteNonQueryAsync("SELECT 1");
 
         var messages = loggerFactory.Loggers.Values.SelectMany(l => l.Logs).Select(e => e.Message + e.Exception).ToList();
@@ -267,7 +307,8 @@ public class CredentialsProviderHttpTests
     {
         var expiresAt = DateTimeOffset.UtcNow.AddHours(1);
         var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer(RejectedToken, expiresAt), ClickHouseCredentials.CreateBearer("new-token", expiresAt));
-        var (client, handler) = CreateClient(provider.InvokeAsync);
+        var rejections = new List<ResponseDisposalTrackingHandler.DisposalTrackingContent>();
+        var (client, handler) = CreateClient(provider.InvokeAsync, r => Respond(r, rejections: rejections));
         using var _ = client;
 
         var ex = Assert.ThrowsAsync<ClickHouseServerException>(() => send(client, new MemoryStream(Encoding.UTF8.GetBytes("1\n"))));
@@ -281,6 +322,7 @@ public class CredentialsProviderHttpTests
             Assert.That(requestsAfterRejection, Is.EqualTo(1));
             Assert.That(Tokens(handler), Is.EqualTo(new[] { RejectedToken, "new-token" }));
             Assert.That(provider.Reasons, Is.EqualTo(new[] { ClickHouseCredentialsRefreshReason.Initial, ClickHouseCredentialsRefreshReason.Rejected }));
+            Assert.That(rejections.Single().IsDisposed, Is.True);
         });
     }
 
@@ -387,6 +429,29 @@ public class CredentialsProviderHttpTests
         await command.ExecuteNonQueryAsync();
 
         Assert.That(handler.Requests.Single().Headers.Authorization?.ToString(), Is.EqualTo("Bearer provider-token"));
+    }
+
+    [Test]
+    public async Task Command_ProviderTokenRejected_ThrowsAfterOneRequestAndNextCommandGetsNewToken()
+    {
+        var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer(RejectedToken), ClickHouseCredentials.CreateBearer("new-token"));
+        var (client, handler) = CreateClient(provider.InvokeAsync);
+        using var _ = client;
+        using var connection = client.CreateConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1";
+
+        var ex = Assert.ThrowsAsync<ClickHouseServerException>(() => command.ExecuteNonQueryAsync());
+        var requestsAfterRejection = handler.RequestCount;
+        await command.ExecuteNonQueryAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.ErrorCode, Is.EqualTo(516));
+            Assert.That(requestsAfterRejection, Is.EqualTo(1));
+            Assert.That(Tokens(handler), Is.EqualTo(new[] { RejectedToken, "new-token" }));
+            Assert.That(provider.Reasons, Is.EqualTo(new[] { ClickHouseCredentialsRefreshReason.Initial, ClickHouseCredentialsRefreshReason.Rejected }));
+        });
     }
 
     [Test]

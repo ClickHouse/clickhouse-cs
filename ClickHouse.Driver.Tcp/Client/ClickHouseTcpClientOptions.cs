@@ -108,9 +108,9 @@ public sealed record ClickHouseTcpClientOptions
     /// <para>
     /// Each connection keeps the credentials it opened with. The pool does not hand out a connection whose
     /// credentials expire in 10 seconds or less. If the server rejects the credentials during the handshake (error
-    /// 516, <c>AUTHENTICATION_FAILED</c>), the client calls the provider once more, with
-    /// <see cref="ClickHouseCredentialsRefreshReason.Rejected"/>, and connects again. If an operation fails with
-    /// error 516, the next connection gets new credentials; the operation is not run again.
+    /// 516, <c>AUTHENTICATION_FAILED</c>, or 194, <c>REQUIRED_PASSWORD</c>), the client calls the provider once
+    /// more, with <see cref="ClickHouseCredentialsRefreshReason.Rejected"/>, and connects again. If an operation fails
+    /// with one of these errors, the next connection gets new credentials; the operation is not run again.
     /// </para>
     /// <para>
     /// A session (<c>OpenSessionAsync</c>) keeps its connection, and so the credentials that it opened with: it is not

@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Authentication;
 using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Tcp.Client;
 using ClickHouse.Driver.Tcp.Compression;
@@ -210,9 +211,9 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     internal ConnectionCredentials Credentials { get; set; }
 
     /// <summary>
-    /// Whether an operation on this connection failed with server error 516 (<c>AUTHENTICATION_FAILED</c>). Like any
-    /// server exception during an operation, it also terminated the connection. The pool reads it to invalidate
-    /// <see cref="Credentials"/>.
+    /// Whether an operation on this connection failed with a server error that rejects the credentials
+    /// (<see cref="CredentialsCache.IsRejection"/>). Like any server exception during an operation, it also
+    /// terminated the connection. The pool reads it to invalidate <see cref="Credentials"/>.
     /// </summary>
     internal bool CredentialsRejected => credentialsRejected;
 
@@ -1364,7 +1365,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     private async ValueTask<ClickHouseTcpServerException> ReadServerExceptionAsync(CancellationToken cancellationToken)
     {
         ClickHouseTcpServerException exception = await ClickHouseTcpServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
-        if (exception.Code == ClickHouseErrorCode.AuthenticationFailed)
+        if (CredentialsCache.IsRejection(exception.RawCode))
         {
             credentialsRejected = true;
         }

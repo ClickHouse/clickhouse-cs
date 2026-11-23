@@ -65,6 +65,6 @@ internal static partial class PoolLog
     [LoggerMessage(
         EventId = 3008,
         Level = LogLevel.Information,
-        Message = "Closing a returned connection rather than pooling it: the server rejected its credentials (error 516) after {UsageCount} operations; the next connection gets new credentials")]
+        Message = "Closing a returned connection rather than pooling it: the server rejected its credentials after {UsageCount} operations; the next connection gets new credentials")]
     public static partial void CredentialsRejected(ILogger logger, int usageCount);
 }

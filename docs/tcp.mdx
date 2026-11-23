@@ -328,13 +328,17 @@ The client gets credentials when it opens a connection, and the connection keeps
   also when `MaxConnectionLifetime`, `IdleTimeout` and `MinPoolSize` are all zero: every 30
   seconds, unless `SweepInterval` is set. An operation that runs is not interrupted.
 - **Rejection in the handshake.** When the server rejects the credentials (error 516,
-  `AUTHENTICATION_FAILED`), the client calls the provider with `Reason` set to `Rejected` and
-  connects once more. A second rejection fails the operation. Credentials from `BearerToken` or
-  `Username` and `Password` get no second connect.
-- **Rejection in an operation.** When an operation fails with error 516 on a connection that opened
-  with credentials from the provider, the client closes the connection and drops those credentials
-  from the cache, if they are still there. A new connection then gets new credentials. The
-  operation is not run again.
+  `AUTHENTICATION_FAILED`, or error 194, `REQUIRED_PASSWORD`), the client calls the provider with
+  `Reason` set to `Rejected` and connects once more. The handshake comes before the client sends a
+  query, so the second connect does not run anything twice. A second rejection fails the operation,
+  and the next connection calls the provider again. Credentials from `BearerToken` or `Username`
+  and `Password` get no second connect.
+- **Rejection in an operation.** When an operation fails with error 516 or 194 on a connection that
+  opened with credentials from the provider, the client closes the connection and drops those
+  credentials from the cache, if they are still there. A new connection then gets new credentials.
+  The operation is not run again: it can have written data before the error. Retry it in your code
+  only when it is safe to repeat (see [Retrying operations](#error-handling-retries)); the codes
+  are `ClickHouseErrorCode.AuthenticationFailed` and `ClickHouseErrorCode.RequiredPassword`.
 - **Timeout.** `DialTimeout` covers the wait for the provider, the handshake, and the second
   connect.
 - **Errors.** An exception from the provider fails the operation that needs the connection. When a

@@ -167,8 +167,10 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Precedence: a non-empty <see cref="QueryOptions.BearerToken"/> (or <see cref="ClickHouseCommand.BearerToken"/>),
     /// then the provider, then <see cref="BearerToken"/>, then <see cref="Username"/> and <see cref="Password"/>.
     /// A provider that returns <see langword="null"/> selects the static credentials.
-    /// When the server rejects the credentials from the provider (error 516), the client asks the
-    /// provider again and sends a query or a ping once more. A request with a streamed body is not sent again.
+    /// When the server rejects the credentials from the provider (error 516, or 194 for the user
+    /// <c>default</c> with a password), the request fails with the server error, and the next request gets
+    /// new credentials, with <see cref="ClickHouseCredentialsRefreshReason.Rejected"/>. The client does not
+    /// send a request again.
     /// The provider has no connection string key: a connection that is made again from its
     /// <see cref="ClickHouseConnection.ConnectionString"/> has no provider.
     /// Default: null

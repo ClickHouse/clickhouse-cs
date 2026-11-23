@@ -51,6 +51,7 @@ public class ClickHouseTcpConnectionTests
     }
 
     [TestCase(516, true, TestName = "PingAsync_ServerReportsAuthenticationFailed_RecordsRejectedCredentials")]
+    [TestCase(194, true, TestName = "PingAsync_ServerReportsRequiredPassword_RecordsRejectedCredentials")]
     [TestCase(60, false, TestName = "PingAsync_ServerReportsAnotherError_DoesNotRecordRejectedCredentials")]
     public async Task PingAsync_ServerException_CredentialsRejected(int code, bool expected)
     {

@@ -203,7 +203,7 @@ When the client calls the provider:
 - **Credentials with a known expiry are cached.** The expiry is `expiresAt`. If you do not give it, the client reads the `exp` claim of a JWT (it does not check the signature). From 60 seconds before the expiry (or half the lifetime, if that is shorter), the client uses the cached credentials and gets new ones in the background (`Reason` is `Expiring`). From 10 seconds before the expiry, requests wait for the new credentials.
 - **Credentials without a known expiry are not cached.** The client calls the provider for each request. This suits a password that rotates, and a provider that has its own cache.
 - **At most one call at a time.** Requests that need new credentials wait for the same call. The client gives the provider a token that it cancels when the client is disposed. A request that is cancelled stops waiting, but does not cancel the call.
-- **After a rejection.** When the server rejects credentials from the provider (error 516, `AUTHENTICATION_FAILED`), the client calls the provider with `Reason` set to `Rejected`. A provider that has its own cache must not return the cached value for this reason. A SQL statement (`ExecuteScalarAsync`, `ExecuteReaderAsync`, `ExecuteNonQueryAsync`, `ExecuteRawResultAsync`, also an `INSERT ... VALUES` statement) and `PingAsync` are sent once more with the new credentials. A request with a streamed body (`InsertBinaryAsync`, `ClickHouseBulkCopy`, `InsertRawStreamAsync`, `PostStreamAsync`) cannot be sent again: it fails, and the next request uses the new credentials. A rejected per-query token, `BearerToken`, or `Username` and `Password` is not sent again.
+- **After a rejection.** When the server rejects credentials from the provider (error 516, `AUTHENTICATION_FAILED`, or error 194, `REQUIRED_PASSWORD`, which the server returns for a wrong password of the user `default` or of an empty user name), the request fails with that server error. The client does not send the request again (see [Retrying after an authentication error](#jwt-retry-after-rejection)). It drops the rejected credentials, unless newer credentials from the provider already replaced them, and the next provider call has `Reason` set to `Rejected`, also when the credentials have no known expiry. A provider that has its own cache must not return the cached value for this reason. A rejected per-query token, `BearerToken`, or `Username` and `Password` stays in use.
 
 When the provider fails:
 
@@ -214,6 +214,26 @@ When the provider fails:
 The client logs no token, and the OpenTelemetry `db.user` tag shows `Username` of the settings.
 
 With ADO.NET, use `new ClickHouseDataSource(settings)` or `new ClickHouseConnection(client)`: their connections share one client, and so one cache of credentials. `new ClickHouseConnection(settings)` makes a client for each connection, so each connection calls the provider and caches the credentials on its own. A connection string has no provider, so a connection made from `ClickHouseConnection.ConnectionString` uses the static credentials.
+
+#### Retrying after an authentication error {#jwt-retry-after-rejection}
+
+The client never sends a request again after an authentication error. The server can return error 516 after a query has written data: for example, when a materialized view of the table reads from `remote()` with credentials that the other server rejects. A second send would write the data twice. Retry in your code, for the operations that are safe to repeat. The next call gets new credentials from the provider:
+
+```csharp
+try
+{
+    return await client.ExecuteScalarAsync("SELECT count() FROM events");
+}
+catch (ClickHouseServerException ex) when (ex.ErrorCode is 516 or 194)
+{
+    // The client dropped the rejected credentials: this call asks the provider for new ones.
+    return await client.ExecuteScalarAsync("SELECT count() FROM events");
+}
+```
+
+- **A read** (`SELECT`) is safe to repeat.
+- **An insert** is safe to repeat only when the server deduplicates it: the table needs a deduplication window (for example the `non_replicated_deduplication_window` setting of a `MergeTree` table), and an `INSERT ... SELECT` needs the same `insert_deduplication_token` setting in both sends. Without them, an insert that is sent twice can store its rows twice.
+- **Other writes** (`ALTER`, `DELETE`, `CREATE`, `DROP`, ...): check that running the statement twice gives the same result before you retry it.
 
 ### HTTP client configuration {#http-client-configuration}
 

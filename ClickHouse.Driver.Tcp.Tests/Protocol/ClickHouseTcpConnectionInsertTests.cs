@@ -140,6 +140,7 @@ public class ClickHouseTcpConnectionInsertTests
     }
 
     [TestCase(516, true, TestName = "InsertAsync_ServerReportsAuthenticationFailed_RecordsRejectedCredentials")]
+    [TestCase(194, true, TestName = "InsertAsync_ServerReportsRequiredPassword_RecordsRejectedCredentials")]
     [TestCase(60, false, TestName = "InsertAsync_ServerReportsAnotherError_DoesNotRecordRejectedCredentials")]
     public async Task InsertAsync_ServerException_CredentialsRejected(int code, bool expected)
     {

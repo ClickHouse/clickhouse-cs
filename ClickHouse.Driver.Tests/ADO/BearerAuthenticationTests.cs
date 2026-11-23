@@ -140,7 +140,7 @@ public class BearerAuthenticationTests
     }
 
     [Test]
-    public async Task ExecuteScalarAsync_ProviderReturnsExpiredTokenFirst_SendsOnceMoreWithTheNextToken()
+    public async Task ExecuteScalarAsync_ProviderReturnsExpiredTokenFirst_ThrowsThenNextCallGetsTheNextToken()
     {
         var expiredToken = Environment.GetEnvironmentVariable("CLICKHOUSE_CLOUD_JWT_EXPIRED");
         if (string.IsNullOrEmpty(expiredToken))
@@ -148,8 +148,8 @@ public class BearerAuthenticationTests
             Assert.Ignore("Skipping the JWT refresh test: CLICKHOUSE_CLOUD_JWT_EXPIRED environment variable must be set");
         }
 
-        // The server rejects the expired token. The client then asks the provider again, with the reason Rejected,
-        // and sends the query once more.
+        // The server rejects the expired token, and the query fails: the client does not send it again. The next
+        // query asks the provider again, with the reason Rejected.
         var reasons = new ConcurrentQueue<ClickHouseCredentialsRefreshReason>();
         var settings = new ClickHouseClientSettings(connectionString)
         {
@@ -162,10 +162,12 @@ public class BearerAuthenticationTests
         };
         using var client = new ClickHouseClient(settings);
 
+        var rejection = Assert.ThrowsAsync<ClickHouseServerException>(() => client.ExecuteScalarAsync("SELECT currentUser()"));
         var user = await client.ExecuteScalarAsync("SELECT currentUser()");
 
         Assert.Multiple(() =>
         {
+            Assert.That(rejection.ErrorCode, Is.EqualTo(516));
             Assert.That(user, Does.Match(JwtUserNamePattern));
             Assert.That(reasons.ToArray(), Is.EqualTo(new[]
             {

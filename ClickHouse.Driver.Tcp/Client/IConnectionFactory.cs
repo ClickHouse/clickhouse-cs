@@ -35,8 +35,8 @@ internal interface IConnectionFactory : IDisposable
 /// <remarks>
 /// With a <see cref="ClickHouseTcpClientOptions.CredentialsProvider"/>, the factory gets the credentials for each
 /// connection from a <see cref="CredentialsCache"/> that it owns. If the server rejects them during the handshake
-/// (error 516), it invalidates them, gets new ones, and connects once more. If the server rejects the new ones too,
-/// it invalidates them as well and throws.
+/// (<see cref="CredentialsCache.IsRejection"/>), it invalidates them, gets new ones, and connects once more. If the
+/// server rejects the new ones too, it invalidates them as well and throws.
 /// </remarks>
 internal sealed class TcpConnectionFactory : IConnectionFactory
 {
@@ -97,7 +97,7 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
                 {
                     connection = await ConnectAsync(options.ToHandshakeParameters(used), linked.Token).ConfigureAwait(false);
                 }
-                catch (ClickHouseTcpServerException e) when (used is not null && e.Code == ClickHouseErrorCode.AuthenticationFailed)
+                catch (ClickHouseTcpServerException e) when (used is not null && CredentialsCache.IsRejection(e.RawCode))
                 {
                     // The handshake terminated the first connection. Connect once more with new credentials; a
                     // second rejection goes to the caller.
@@ -114,7 +114,7 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
                     {
                         connection = await ConnectAsync(options.ToHandshakeParameters(used), linked.Token).ConfigureAwait(false);
                     }
-                    catch (ClickHouseTcpServerException retryError) when (used is not null && retryError.Code == ClickHouseErrorCode.AuthenticationFailed)
+                    catch (ClickHouseTcpServerException retryError) when (used is not null && CredentialsCache.IsRejection(retryError.RawCode))
                     {
                         // Drop the rejected credentials from the cache, so that the next connect asks the provider
                         // again instead of sending them once more.

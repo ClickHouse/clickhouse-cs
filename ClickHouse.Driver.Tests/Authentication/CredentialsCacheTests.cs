@@ -349,6 +349,14 @@ public class CredentialsCacheTests
         Assert.That(provider.Reasons[1], Is.EqualTo(ClickHouseCredentialsRefreshReason.Rejected));
     }
 
+    [TestCase(516, true, TestName = "IsRejection_AuthenticationFailed_IsTrue")]
+    [TestCase(194, true, TestName = "IsRejection_RequiredPassword_IsTrue")]
+    [TestCase(767, false, TestName = "IsRejection_RequiredSecondFactor_IsFalse")]
+    [TestCase(60, false, TestName = "IsRejection_UnknownTable_IsFalse")]
+    [TestCase(-1, false, TestName = "IsRejection_NoErrorCode_IsFalse")]
+    public void IsRejection(int errorCode, bool expected)
+        => Assert.That(CredentialsCache.IsRejection(errorCode), Is.EqualTo(expected));
+
     [Test]
     public async Task Invalidate_OlderCredentialsWithoutExpiry_NextCallAsksWithReasonRejected()
     {

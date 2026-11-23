@@ -91,8 +91,9 @@ internal sealed class PooledConnection
         => !IsExpired(options) && Connection.IsReusable;
 
     /// <summary>
-    /// Whether an operation on this connection failed with server error 516 (<c>AUTHENTICATION_FAILED</c>), and the
-    /// connection authenticated with credentials from the <see cref="ClickHouseTcpClientOptions.CredentialsProvider"/>.
+    /// Whether an operation on this connection failed with a server error that rejects the credentials
+    /// (<see cref="Authentication.CredentialsCache.IsRejection"/>), and the connection authenticated with credentials from the
+    /// <see cref="ClickHouseTcpClientOptions.CredentialsProvider"/>.
     /// The pool then tells the provider's cache, so the next connection gets new credentials. A server exception
     /// terminates the connection, so <see cref="CanBeRented"/> is already false.
     /// </summary>

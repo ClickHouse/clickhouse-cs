@@ -22,6 +22,12 @@ namespace ClickHouse.Driver;
 /// expiry.
 /// </para>
 /// <para>
+/// When the server rejects the credentials from the provider, the operation fails with the server error, and the
+/// next call has <see cref="ClickHouseCredentialsRefreshReason.Rejected"/>. The HTTP client does not send a request
+/// again; the native TCP client connects once more only when the server rejects the credentials in the handshake,
+/// before it sends a query.
+/// </para>
+/// <para>
 /// An exception from the provider goes to the operation that waits for the credentials. When the client
 /// refreshes cached credentials in the background, it logs a failure as a warning and uses the cached
 /// credentials until they expire.

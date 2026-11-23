@@ -84,6 +84,7 @@ public class ClickHouseTcpConnectionQueryTests
     }
 
     [TestCase(516, true, TestName = "QueryAsync_ServerReportsAuthenticationFailed_RecordsRejectedCredentials")]
+    [TestCase(194, true, TestName = "QueryAsync_ServerReportsRequiredPassword_RecordsRejectedCredentials")]
     [TestCase(60, false, TestName = "QueryAsync_ServerReportsAnotherError_DoesNotRecordRejectedCredentials")]
     public async Task QueryAsync_ServerException_CredentialsRejected(int code, bool expected)
     {

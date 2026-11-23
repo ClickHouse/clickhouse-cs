@@ -28,6 +28,7 @@ public class CredentialsProviderTests
 {
     private const int Hello = 0;
     private const int AuthenticationFailed = 516;
+    private const int RequiredPassword = 194;
     private const string JwtMarker = " JWT AUTHENTICATION ";
 
     private static readonly CancellationToken None = CancellationToken.None;
@@ -74,10 +75,11 @@ public class CredentialsProviderTests
         });
     }
 
-    [Test]
-    public async Task CreateAsync_HandshakeRejectsTheProvidersCredentials_ConnectsOnceMoreWithNewCredentials()
+    [TestCase(AuthenticationFailed, TestName = "CreateAsync_HandshakeRejectsTheProvidersCredentialsWith516_ConnectsOnceMoreWithNewCredentials")]
+    [TestCase(RequiredPassword, TestName = "CreateAsync_HandshakeRejectsTheProvidersCredentialsWith194_ConnectsOnceMoreWithNewCredentials")]
+    public async Task CreateAsync_HandshakeRejectsTheProvidersCredentials_ConnectsOnceMoreWithNewCredentials(int code)
     {
-        await using var server = new HandshakeServer(AuthenticationFailed, Hello);
+        await using var server = new HandshakeServer(code, Hello);
         var reasons = new ConcurrentQueue<ClickHouseCredentialsRefreshReason>();
         using var logs = new CapturingLoggerFactory();
         ClickHouseTcpClientOptions options = Options(server) with
@@ -103,10 +105,11 @@ public class CredentialsProviderTests
         });
     }
 
-    [Test]
-    public async Task CreateAsync_HandshakeRejectsTheNewCredentialsToo_ThrowsAfterOneMoreConnect()
+    [TestCase(AuthenticationFailed, AuthenticationFailed, TestName = "CreateAsync_HandshakeRejectsTheNewCredentialsToo_ThrowsAfterOneMoreConnect")]
+    [TestCase(RequiredPassword, RequiredPassword, TestName = "CreateAsync_HandshakeRejectsTheNewCredentialsTooWith194_ThrowsAfterOneMoreConnect")]
+    public async Task CreateAsync_HandshakeRejectsTheNewCredentialsToo_ThrowsAfterOneMoreConnect(int first, int second)
     {
-        await using var server = new HandshakeServer(AuthenticationFailed, AuthenticationFailed, Hello);
+        await using var server = new HandshakeServer(first, second, Hello);
         int calls = 0;
         ClickHouseTcpClientOptions options = Options(server) with
         {
@@ -122,7 +125,7 @@ public class CredentialsProviderTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(thrown.RawCode, Is.EqualTo(AuthenticationFailed));
+            Assert.That(thrown.RawCode, Is.EqualTo(second));
             Assert.That(calls, Is.EqualTo(2));
             Assert.That(server.Hellos, Has.Count.EqualTo(2));
         });
@@ -130,10 +133,11 @@ public class CredentialsProviderTests
 
     // Credentials with a known expiry stay in the cache. After the second rejection the next connect must not send
     // them again.
-    [Test]
-    public async Task CreateAsync_HandshakeRejectsTheNewCachedCredentialsToo_NextConnectGetsNewOnes()
+    [TestCase(AuthenticationFailed, TestName = "CreateAsync_HandshakeRejectsTheNewCachedCredentialsToo_NextConnectGetsNewOnes")]
+    [TestCase(RequiredPassword, TestName = "CreateAsync_HandshakeRejectsTheNewCachedCredentialsTooWith194_NextConnectGetsNewOnes")]
+    public async Task CreateAsync_HandshakeRejectsTheNewCachedCredentialsToo_NextConnectGetsNewOnes(int second)
     {
-        await using var server = new HandshakeServer(AuthenticationFailed, AuthenticationFailed, Hello);
+        await using var server = new HandshakeServer(AuthenticationFailed, second, Hello);
         var reasons = new ConcurrentQueue<ClickHouseCredentialsRefreshReason>();
         ClickHouseTcpClientOptions options = Options(server) with
         {
@@ -353,6 +357,7 @@ public class CredentialsProviderTests
     }
 
     [TestCase(AuthenticationFailed, true, true, 3008, TestName = "DisposeAsync_OperationFailedWith516_InvalidatesTheProvidersCredentials")]
+    [TestCase(RequiredPassword, true, true, 3008, TestName = "DisposeAsync_OperationFailedWith194_InvalidatesTheProvidersCredentials")]
     [TestCase(60, true, false, 3002, TestName = "DisposeAsync_OperationFailedWithAnotherError_KeepsTheProvidersCredentials")]
     [TestCase(AuthenticationFailed, false, false, 3002, TestName = "DisposeAsync_OperationFailedWith516OnStaticCredentials_OnlyDiscardsTheConnection")]
     public async Task DisposeAsync_OperationFailedWithAServerError(int code, bool fromProvider, bool expectInvalidated, int expectedEventId)

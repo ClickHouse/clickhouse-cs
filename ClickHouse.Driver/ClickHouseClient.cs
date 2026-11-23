@@ -206,27 +206,22 @@ public sealed class ClickHouseClient : IClickHouseClient
             // relative resolution replaces the last segment, dropping a reverse-proxy prefix
             // configured via the Path setting (e.g. http://host:8123/ch -> http://host:8123/ping).
             var pingUri = new UriBuilder(serverUri) { Path = serverUri.AbsolutePath.TrimEnd('/') + "/ping" }.Uri;
-            for (var attempt = 1; ; attempt++)
+            using var request = new HttpRequestMessage(HttpMethod.Get, pingUri);
+            AddDefaultHttpHeaders(request.Headers, queryOptions);
+            var credentials = await ApplyAuthorizationAsync(request.Headers, queryOptions, cancellationToken).ConfigureAwait(false);
+
+            using var response = await SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+
+            // /ping is judged by its status code. ClickHouse answers /ping without checking credentials, but a
+            // proxy in front of it can reject them: the error body is read only to see whether it rejected
+            // credentials from the provider. The error-body reader decodes a compressed body.
+            if (credentials != null && !response.IsSuccessStatusCode)
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, pingUri);
-                AddDefaultHttpHeaders(request.Headers, queryOptions);
-                var credentials = await ApplyAuthorizationAsync(request.Headers, queryOptions, cancellationToken).ConfigureAwait(false);
-
-                using var response = await SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
-
-                // /ping is judged by its status code. Its error body is read only to see whether the server
-                // rejected credentials from the provider; the error-body reader decodes a compressed body.
-                if (credentials != null && !response.IsSuccessStatusCode)
-                {
-                    var error = await CreateServerExceptionAsync(response, query: null).ConfigureAwait(false);
-                    if (DropIfRejected(response, error, credentials) && attempt == 1)
-                    {
-                        continue;
-                    }
-                }
-
-                return response.IsSuccessStatusCode;
+                var error = await CreateServerExceptionAsync(response, query: null).ConfigureAwait(false);
+                InvalidateIfRejected(response, error, credentials);
             }
+
+            return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
         {
@@ -338,67 +333,41 @@ public sealed class ClickHouseClient : IClickHouseClient
             logger.LogDebug("Executing SQL query. QueryId: {QueryId}", uriBuilder.GetEffectiveQueryId());
         }
 
+        using var postMessage = Settings.UseFormDataParameters
+            ? BuildHttpRequestMessageWithFormData(
+                sql,
+                parameters,
+                uriBuilder,
+                options,
+                rawBody)
+            : BuildHttpRequestMessageWithQueryParams(
+                sql,
+                parameters,
+                uriBuilder,
+                options,
+                rawBody);
+
         activity.SetQuery(sql);
 
         HttpResponseMessage response = null;
         try
         {
-            // A request message can be sent only once, so a retry after rejected credentials builds a new one.
-            for (var attempt = 1; ; attempt++)
+            var credentials = await ApplyAuthorizationAsync(postMessage.Headers, options, cancellationToken).ConfigureAwait(false);
+
+            response = await SendAsync(postMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+
+            var handled = await HandleError(response, sql, activity, credentials).ConfigureAwait(false);
+            var result = new QueryResult(handled);
+
+            if (isDebugLoggingEnabled)
             {
-                using var postMessage = Settings.UseFormDataParameters
-                    ? BuildHttpRequestMessageWithFormData(
-                        sql,
-                        parameters,
-                        uriBuilder,
-                        options,
-                        rawBody)
-                    : BuildHttpRequestMessageWithQueryParams(
-                        sql,
-                        parameters,
-                        uriBuilder,
-                        options,
-                        rawBody);
-                var credentials = await ApplyAuthorizationAsync(postMessage.Headers, options, cancellationToken).ConfigureAwait(false);
-
-                response = await SendAsync(postMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (credentials != null && !response.IsSuccessStatusCode)
-                {
-                    // The same error handling as HandleError, with one retry when the server rejected the
-                    // credentials from the provider.
-                    var error = await CreateServerExceptionAsync(response, sql).ConfigureAwait(false);
-                    if (DropIfRejected(response, error, credentials) && attempt == 1)
-                    {
-                        response.Dispose();
-                        response = null;
-                        if (logger != null && logger.IsEnabled(LogLevel.Debug))
-                        {
-                            logger.LogDebug(
-                                "The server rejected the credentials from the credentials provider. Sending the query (QueryId: {QueryId}) again with new credentials.",
-                                uriBuilder.GetEffectiveQueryId());
-                        }
-
-                        continue;
-                    }
-
-                    activity?.SetException(error);
-                    throw error;
-                }
-
-                var handled = await HandleError(response, sql, activity).ConfigureAwait(false);
-                var result = new QueryResult(handled);
-
-                if (isDebugLoggingEnabled)
-                {
-                    LogQuerySuccess(stopwatch, uriBuilder.GetEffectiveQueryId(), logger, result.QueryStats);
-                }
-
-                activity.SetQueryStats(result.QueryStats);
-
-                return result;
+                LogQuerySuccess(stopwatch, uriBuilder.GetEffectiveQueryId(), logger, result.QueryStats);
             }
+
+            activity.SetQueryStats(result.QueryStats);
+
+            return result;
         }
         catch (Exception ex)
         {
@@ -1016,17 +985,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             response = await SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
             GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Streamed request to {Endpoint} received response {StatusCode}.", serverUri, response.StatusCode);
 
-            // A streamed body cannot be sent again, so rejected credentials are only dropped from the cache:
-            // the next request gets new ones.
-            if (credentials != null && !response.IsSuccessStatusCode)
-            {
-                var error = await CreateServerExceptionAsync(response, sql).ConfigureAwait(false);
-                DropIfRejected(response, error, credentials);
-                activity?.SetException(error);
-                throw error;
-            }
-
-            return await HandleError(response, sql, activity).ConfigureAwait(false);
+            return await HandleError(response, sql, activity, credentials).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1216,21 +1175,22 @@ public sealed class ClickHouseClient : IClickHouseClient
         => new("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}")));
 
     /// <summary>
-    /// Drops <paramref name="credentials"/> from the cache when the server rejected them: error 516
-    /// (<c>AUTHENTICATION_FAILED</c>) in the <c>X-ClickHouse-Exception-Code</c> header or, when there is no
-    /// such header, in the error body.
+    /// Invalidates <paramref name="credentials"/> from the provider when the server rejected them
+    /// (<see cref="CredentialsCache.IsRejection"/>): the code in the <c>X-ClickHouse-Exception-Code</c> header
+    /// or, when there is no such header, in the error body. The next request gets new credentials.
     /// </summary>
-    /// <returns><see langword="true"/> when the server rejected the credentials.</returns>
-    private bool DropIfRejected(HttpResponseMessage response, ClickHouseServerException error, ClickHouseCredentials credentials)
+    private void InvalidateIfRejected(HttpResponseMessage response, ClickHouseServerException error, ClickHouseCredentials credentials)
     {
         var code = TryGetExceptionCodeHeader(response) ?? error.ErrorCode;
-        if (code != CredentialsCache.AuthenticationFailedErrorCode)
+        if (!CredentialsCache.IsRejection(code))
         {
-            return false;
+            return;
         }
 
         credentialsCache.Invalidate(credentials);
-        return true;
+        GetLogger(ClickHouseLogCategories.Connection)?.LogDebug(
+            "The server rejected the credentials from the credentials provider (error {ErrorCode}). The next request gets new credentials.",
+            code);
     }
 
     /// <summary>
@@ -1302,7 +1262,13 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <summary>
     /// Handles HTTP response errors.
     /// </summary>
-    private static async Task<HttpResponseMessage> HandleError(HttpResponseMessage response, string query, Activity activity)
+    /// <param name="credentials">
+    /// The credentials from the provider that the request carried, or <see langword="null"/>. When the server
+    /// rejected them, they are invalidated before the server error is thrown. The request is not sent again:
+    /// the server can reject credentials after the query has written data (for example a materialized view
+    /// that reads from <c>remote()</c>), so a resend can write the data twice.
+    /// </param>
+    private async Task<HttpResponseMessage> HandleError(HttpResponseMessage response, string query, Activity activity, ClickHouseCredentials credentials = null)
     {
         if (response.IsSuccessStatusCode)
         {
@@ -1311,6 +1277,11 @@ public sealed class ClickHouseClient : IClickHouseClient
         }
 
         var ex = await CreateServerExceptionAsync(response, query).ConfigureAwait(false);
+        if (credentials != null)
+        {
+            InvalidateIfRejected(response, ex, credentials);
+        }
+
         activity?.SetException(ex);
         throw ex;
     }
