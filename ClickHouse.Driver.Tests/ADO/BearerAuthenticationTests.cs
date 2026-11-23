@@ -12,7 +12,7 @@ namespace ClickHouse.Driver.Tests.ADO;
 /// These tests require a ClickHouse Cloud instance configured with JWT authentication.
 /// Set the CLICKHOUSE_CLOUD_JWT environment variable to run these tests, and CLICKHOUSE_CLOUD_JWT_EXPIRED (a token
 /// that has expired) for the token refresh test. In CI, the Cloud workflow signs new tokens for each run with
-/// <c>.github/scripts/generate_jwt.py</c>.
+/// <c>.github/scripts/jwt.cs</c>.
 /// </summary>
 [TestFixture]
 [Category("Cloud")]

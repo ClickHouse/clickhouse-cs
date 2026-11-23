@@ -7,7 +7,7 @@ The JWT tests run against ClickHouse Cloud, in the Cloud jobs of both clients:
 | HTTP | `ClickHouse.Driver.Tests/ADO/BearerAuthenticationTests.cs` | `.github/workflows/tests-cloud.yml` |
 | TCP | `ClickHouse.Driver.Tcp.Tests/Integration/BearerAuthenticationIntegrationTests.cs` | `.github/workflows/tests-cloud-tcp.yml` |
 
-Each job signs two new tokens for each run with `generate_jwt.py`: a valid one in the
+Each job signs two new tokens for each run with `jwt.cs`: a valid one in the
 `CLICKHOUSE_CLOUD_JWT` environment variable, and one that expired 5 minutes ago (`--expired`) in
 `CLICKHOUSE_CLOUD_JWT_EXPIRED`. The token refresh tests give the expired token first, and check that
 the client asks its credentials provider again after the rejection. If the `JWT_PKEY` secret is not
@@ -22,7 +22,7 @@ The parts:
 | Public key set | `.github/jwks.json` in this repository (step 2 adds it) | no |
 | JWT provider | the Cloud service of the `CLICKHOUSE_CLOUD_HOST` secret | no |
 
-The provider and the token must agree on these claims (the defaults of `generate_jwt.py`):
+The provider and the token must agree on these claims (the defaults of `jwt.cs`):
 
 | Claim | Value |
 |---|---|
@@ -45,13 +45,11 @@ until the provider accepts the tokens.
    openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out pkcs8_key.pem
    ```
 
-2. Install the script dependencies and make `jwks.json`:
+2. Make `jwks.json`. `jwt.cs` needs the .NET 10 SDK.
 
    ```bash
-   python3 -m venv .venv
-   .venv/bin/pip install --require-hashes -r <repo>/.github/scripts/requirements.txt
    export JWT_PKEY="$(cat pkcs8_key.pem)"
-   .venv/bin/python <repo>/.github/scripts/generate_jwks.py > <repo>/.github/jwks.json
+   dotnet run <repo>/.github/scripts/jwt.cs -- jwks > <repo>/.github/jwks.json
    ```
 
    Commit and push `.github/jwks.json`. It contains only the public key.
@@ -72,7 +70,7 @@ until the provider accepts the tokens.
 4. Make sure that the service accepts a token:
 
    ```bash
-   TOKEN="$(.venv/bin/python <repo>/.github/scripts/generate_jwt.py)"
+   TOKEN="$(dotnet run <repo>/.github/scripts/jwt.cs -- token)"
    curl -H "Authorization: Bearer $TOKEN" \
      "https://<CLICKHOUSE_CLOUD_HOST>:8443/?query=SELECT+currentUser()"
    ```
@@ -93,12 +91,12 @@ until the provider accepts the tokens.
 - Keep `JWT_PKEY` as safe as `CLICKHOUSE_CLOUD_PASSWORD`. A person who has the key can sign a token
   with `clickhouse:grants` or `clickhouse:roles` claims, and Cloud gives those rights up to the
   provider's permission limit (the `default` user).
-- The tokens that `generate_jwt.py` signs have no `clickhouse:grants` or `clickhouse:roles` claims,
+- The tokens that `jwt.cs` signs have no `clickhouse:grants` or `clickhouse:roles` claims,
   so their ephemeral user has no grants. The JWT tests only run queries that need no grants
   (`SELECT 1`, `SELECT currentUser()`).
 - A token is valid for 30 minutes (`--ttl`). The HTTP Cloud job times out after 15 minutes. The TCP
   Cloud job times out after 30 minutes, so it signs its valid token with `--ttl 2700` (45 minutes).
-- The `x5c` certificate that `generate_jwks.py` writes is valid for 365 days. To rotate the key, do
+- The `x5c` certificate that `jwt.cs jwks` writes is valid for 365 days. To rotate the key, do
   the setup again with a new key.
-- `requirements.txt` pins every package with hashes. To change a version, edit `requirements.in`
-  and run the `uv pip compile` command at the top of `requirements.txt`.
+- `jwt.cs` is a .NET file-based app. It uses only the .NET base class library, so it has no
+  packages to pin.

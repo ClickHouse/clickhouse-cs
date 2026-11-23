@@ -37,14 +37,6 @@ jobs:
           dotnet-version: |
             10.x
 
-      - name: Setup Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      - name: Install JWT script dependencies
-        run: python -m pip install --disable-pip-version-check --require-hashes -r .github/scripts/requirements.txt
-
       # The JWT tests (BearerAuthenticationTests) need a valid token, and the token refresh tests also
       # an expired one. Sign new ones for this run with the JWT_PKEY secret; .github/scripts/README.md
       # describes the Cloud setup. Only this step gets the private key; the Test step gets the masked
@@ -56,10 +48,10 @@ jobs:
             echo "::warning title=JWT tests skipped::The JWT_PKEY secret is not set. See .github/scripts/README.md."
             exit 0
           fi
-          token="$(python .github/scripts/generate_jwt.py)"
+          token="$(dotnet run .github/scripts/jwt.cs -- token)"
           echo "::add-mask::$token"
           echo "token=$token" >> "$GITHUB_OUTPUT"
-          expired_token="$(python .github/scripts/generate_jwt.py --expired)"
+          expired_token="$(dotnet run .github/scripts/jwt.cs -- token --expired)"
           echo "::add-mask::$expired_token"
           echo "expired_token=$expired_token" >> "$GITHUB_OUTPUT"
         env:

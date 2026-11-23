@@ -9,7 +9,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Integration;
 /// JWT authentication over the native protocol. JWT authentication needs ClickHouse Cloud: set
 /// <c>CLICKHOUSE_CLOUD_JWT</c> to a valid token to run these tests, and <c>CLICKHOUSE_CLOUD_JWT_EXPIRED</c> to a token
 /// that has expired for the token refresh test. In CI, the Cloud workflow signs new tokens for each run with
-/// <c>.github/scripts/generate_jwt.py</c>.
+/// <c>.github/scripts/jwt.cs</c>.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
