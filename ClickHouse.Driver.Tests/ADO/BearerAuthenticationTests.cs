@@ -10,7 +10,7 @@ namespace ClickHouse.Driver.Tests.ADO;
 /// Integration tests for JWT/Bearer token authentication.
 /// These tests require a ClickHouse Cloud instance configured with JWT authentication.
 /// Set the CLICKHOUSE_CLOUD_JWT environment variable to run these tests. In CI, the Cloud workflow
-/// signs a new token for each run with <c>.github/scripts/generate_jwt.py</c>.
+/// signs a new token for each run with <c>.github/scripts/jwt.cs</c>.
 /// </summary>
 [TestFixture]
 [Category("Cloud")]
