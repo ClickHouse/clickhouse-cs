@@ -12,7 +12,11 @@ jobs:
     name: Cloud Tests - AWS
     runs-on: ubuntu-22.04
     timeout-minutes: 15
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    # workflow_dispatch is listed on its own: on a dispatch there is no pull_request context. It runs the job for a
+    # pull request whose base is not main (a stacked pull request), which tests.yml does not start on its own.
+    if: >-
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+      || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -41,9 +45,10 @@ jobs:
       - name: Install JWT script dependencies
         run: python -m pip install --disable-pip-version-check --require-hashes -r .github/scripts/requirements.txt
 
-      # The JWT tests (BearerAuthenticationTests) need a valid token. Sign a new, short-lived one for
-      # this run with the JWT_PKEY secret; .github/scripts/README.md describes the Cloud setup. Only
-      # this step gets the private key; the Test step gets the masked token.
+      # The JWT tests (BearerAuthenticationTests) need a valid token, and the token refresh tests also
+      # an expired one. Sign new ones for this run with the JWT_PKEY secret; .github/scripts/README.md
+      # describes the Cloud setup. Only this step gets the private key; the Test step gets the masked
+      # tokens.
       - name: Sign JWT
         id: jwt
         run: |
@@ -54,6 +59,9 @@ jobs:
           token="$(python .github/scripts/generate_jwt.py)"
           echo "::add-mask::$token"
           echo "token=$token" >> "$GITHUB_OUTPUT"
+          expired_token="$(python .github/scripts/generate_jwt.py --expired)"
+          echo "::add-mask::$expired_token"
+          echo "expired_token=$expired_token" >> "$GITHUB_OUTPUT"
         env:
           JWT_PKEY: ${{ secrets.JWT_PKEY }}
 
@@ -66,3 +74,4 @@ jobs:
           CLICKHOUSE_CONNECTION: Host=${{ secrets.CLICKHOUSE_CLOUD_HOST }};Port=8443;User=${{ secrets.CLICKHOUSE_CLOUD_USER }};Password=${{ secrets.CLICKHOUSE_CLOUD_PASSWORD }};Protocol=https
           CLICKHOUSE_TEST_ENVIRONMENT: cloud
           CLICKHOUSE_CLOUD_JWT: ${{ steps.jwt.outputs.token }}
+          CLICKHOUSE_CLOUD_JWT_EXPIRED: ${{ steps.jwt.outputs.expired_token }}

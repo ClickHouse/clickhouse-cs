@@ -22,17 +22,21 @@ def get_private_key_pem():
     raise ValueError("Private key not found. Set the JWT_PKEY environment variable.")
 
 
-def generate_jwt_token(private_key_pem, issuer, audience, subject, expiration_seconds):
-    """Return an RS256-signed JWT that expires after expiration_seconds."""
+def generate_jwt_token(private_key_pem, issuer, audience, subject, expiration_seconds, expired=False):
+    """Return an RS256-signed JWT that expires after expiration_seconds.
+
+    With expired=True, the token was issued 10 minutes ago and expired 5 minutes ago instead.
+    """
     jwk_key = JWK.from_pem(private_key_pem.encode("utf-8"))
 
     now = int(time.time())
+    issued_at, expires_at = (now - 600, now - 300) if expired else (now, now + expiration_seconds)
     claims = {
         "iss": issuer,
         "sub": subject,
         "aud": audience,
-        "iat": now,
-        "exp": now + expiration_seconds,
+        "iat": issued_at,
+        "exp": expires_at,
     }
     header = {
         "alg": "RS256",
@@ -52,9 +56,16 @@ def main():
     parser.add_argument("--audience", default="ci-test-service", help="the aud claim")
     parser.add_argument("--subject", default="ci-test", help="the sub claim")
     parser.add_argument("--ttl", type=int, default=1800, help="token lifetime in seconds")
+    parser.add_argument(
+        "--expired",
+        action="store_true",
+        help="sign a token that expired 5 minutes ago (iat = now - 600, exp = now - 300); --ttl is ignored",
+    )
     args = parser.parse_args()
 
-    token = generate_jwt_token(get_private_key_pem(), args.issuer, args.audience, args.subject, args.ttl)
+    token = generate_jwt_token(
+        get_private_key_pem(), args.issuer, args.audience, args.subject, args.ttl, expired=args.expired
+    )
     sys.stdout.write(token)
 
 

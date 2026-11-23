@@ -25,6 +25,7 @@ on:
       - ".github/workflows/tests-tcp.yml"
       - ".github/workflows/reusable-tcp.yml"
       - ".github/workflows/tests-cloud-tcp.yml"
+      - ".github/scripts/**"
       - "!**/*.md"
   pull_request:
     # Matches the PR's base branch, so a PR stacked onto another tcp/** epic branch triggers too.
@@ -43,6 +44,7 @@ on:
       - ".github/workflows/tests-tcp.yml"
       - ".github/workflows/reusable-tcp.yml"
       - ".github/workflows/tests-cloud-tcp.yml"
+      - ".github/scripts/**"
       - "!**/*.md"
   workflow_dispatch:
     inputs:
@@ -143,5 +145,7 @@ jobs:
       CLICKHOUSE_CLOUD_HOST: ${{ secrets.CLICKHOUSE_CLOUD_HOST }}
       CLICKHOUSE_CLOUD_USER: ${{ secrets.CLICKHOUSE_CLOUD_USER }}
       CLICKHOUSE_CLOUD_PASSWORD: ${{ secrets.CLICKHOUSE_CLOUD_PASSWORD }}
+      # Signs the tokens of the JWT tests. tests-cloud-tcp-label.yml does not pass it: a fork's code never gets it.
+      JWT_PKEY: ${{ secrets.JWT_PKEY }}
     with:
       ref: ${{ inputs.ref }}

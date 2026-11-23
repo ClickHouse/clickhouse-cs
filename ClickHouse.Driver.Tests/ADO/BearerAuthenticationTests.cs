@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
@@ -9,8 +10,9 @@ namespace ClickHouse.Driver.Tests.ADO;
 /// <summary>
 /// Integration tests for JWT/Bearer token authentication.
 /// These tests require a ClickHouse Cloud instance configured with JWT authentication.
-/// Set the CLICKHOUSE_CLOUD_JWT environment variable to run these tests. In CI, the Cloud workflow
-/// signs a new token for each run with <c>.github/scripts/generate_jwt.py</c>.
+/// Set the CLICKHOUSE_CLOUD_JWT environment variable to run these tests, and CLICKHOUSE_CLOUD_JWT_EXPIRED (a token
+/// that has expired) for the token refresh test. In CI, the Cloud workflow signs new tokens for each run with
+/// <c>.github/scripts/generate_jwt.py</c>.
 /// </summary>
 [TestFixture]
 [Category("Cloud")]
@@ -134,6 +136,42 @@ public class BearerAuthenticationTests
         {
             Assert.That(tokenUser, Does.Match(JwtUserNamePattern));
             Assert.That(clientUser, Does.Not.Match(JwtUserNamePattern));
+        });
+    }
+
+    [Test]
+    public async Task ExecuteScalarAsync_ProviderReturnsExpiredTokenFirst_SendsOnceMoreWithTheNextToken()
+    {
+        var expiredToken = Environment.GetEnvironmentVariable("CLICKHOUSE_CLOUD_JWT_EXPIRED");
+        if (string.IsNullOrEmpty(expiredToken))
+        {
+            Assert.Ignore("Skipping the JWT refresh test: CLICKHOUSE_CLOUD_JWT_EXPIRED environment variable must be set");
+        }
+
+        // The server rejects the expired token. The client then asks the provider again, with the reason Rejected,
+        // and sends the query once more.
+        var reasons = new ConcurrentQueue<ClickHouseCredentialsRefreshReason>();
+        var settings = new ClickHouseClientSettings(connectionString)
+        {
+            CredentialsProvider = (request, _) =>
+            {
+                reasons.Enqueue(request.Reason);
+                var token = request.Reason == ClickHouseCredentialsRefreshReason.Initial ? expiredToken : bearerToken;
+                return new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBearer(token));
+            },
+        };
+        using var client = new ClickHouseClient(settings);
+
+        var user = await client.ExecuteScalarAsync("SELECT currentUser()");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(user, Does.Match(JwtUserNamePattern));
+            Assert.That(reasons.ToArray(), Is.EqualTo(new[]
+            {
+                ClickHouseCredentialsRefreshReason.Initial,
+                ClickHouseCredentialsRefreshReason.Rejected,
+            }));
         });
     }
 }
