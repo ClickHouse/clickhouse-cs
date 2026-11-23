@@ -1,3 +1,7 @@
+# Communication style
+
+- Follow ASD-STE100
+
 # ClickHouse.Driver Development Guide
 
 This file has the rules for the whole repository. Each client, and the examples, has a second file
@@ -11,6 +15,7 @@ in it.**
 | The shared code in `ClickHouse.Driver.Common/` | Both client files. Both clients use this code, so run both test suites. |
 | The examples: `examples/` | [`examples/AGENTS.md`](examples/AGENTS.md) |
 | The benchmarks: `ClickHouse.Driver.Benchmark/` | This file only (see Benchmarks below). |
+| The upstream SQL test harness: `tests/clickhouse-test-runner/` | [`tests/clickhouse-test-runner/AGENTS.md`](tests/clickhouse-test-runner/AGENTS.md) |
 
 ## Repository Overview
 
@@ -157,6 +162,14 @@ needs the same fix in the other:
 ## PR Review Guidelines
 
 Use review skill.
+
+## Issue triage
+
+To set, check, or explain the Priority of an issue, follow [`.claude/skills/issue-priority/SKILL.md`](.claude/skills/issue-priority/SKILL.md). It is the single source of truth for the priority rules.
+
+To classify an issue (its impacts and its area), follow [`.claude/skills/issue-classification/SKILL.md`](.claude/skills/issue-classification/SKILL.md).
+
+A vulnerability that is not public yet goes into a private security report (**Security** → **Report a vulnerability**), never into an issue or a pull request. The classification skill defines such a vulnerability, and the priority skill says how to handle the public issue.
 
 ---
 

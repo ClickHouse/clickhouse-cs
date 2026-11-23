@@ -27,5 +27,16 @@ public class DataSourceTests
         using var command = connection.CreateCommand("SELECT 1");
         Assert.That(await command.ExecuteScalarAsync(), Is.EqualTo(1));
     }
+
+    [Test]
+    public void ConnectionString_WithBearerTokenFromSettings_ShouldContainToken()
+    {
+        var settings = new ClickHouseClientSettings { Host = "localhost", BearerToken = "settings-level-token" };
+        using var dataSource = new ClickHouseDataSource(settings);
+
+        var reparsed = new ClickHouseConnectionStringBuilder(dataSource.ConnectionString);
+
+        Assert.That(reparsed.BearerToken, Is.EqualTo("settings-level-token"));
+    }
 }
 #endif

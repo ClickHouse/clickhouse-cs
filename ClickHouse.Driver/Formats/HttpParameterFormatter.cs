@@ -137,7 +137,7 @@ internal static class HttpParameterFormatter
                 // Unspecified: send as-is so ClickHouse interprets in parameter timezone
                 // UTC/Local: convert to parameter timezone (or UTC if not specified) to preserve instant
                 if (dtv.Kind == DateTimeKind.Unspecified)
-                    return QuoteIfNeeded($"{dtv:yyyy-MM-dd HH:mm:ss.fffffff}", quote);
+                    return QuoteIfNeeded(dtv.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture), quote);
                 return QuoteIfNeeded(FormatDateTime64InTargetTimezone(new DateTimeOffset(dtv), d64t.TimeZoneOrUtc), quote);
 
             case DateTime64Type d64t when value is DateTimeOffset dto:
@@ -279,6 +279,8 @@ internal static class HttpParameterFormatter
     {
         var instant = NodaTime.Instant.FromDateTimeOffset(dto);
         var zonedDateTime = instant.InZone(targetTimezone);
-        return $"{zonedDateTime.ToDateTimeUnspecified():yyyy-MM-dd HH:mm:ss.fffffff}";
+        return zonedDateTime
+            .ToDateTimeUnspecified()
+            .ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture);
     }
 }

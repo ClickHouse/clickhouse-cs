@@ -60,6 +60,18 @@ internal class EnumType : ParameterizedType
 
     public string Lookup(int value) => reverseValues.TryGetValue(value, out var key) ? key : throw new KeyNotFoundException($"Enum value {value} not found");
 
+    // A write must reject a value that is not a member: RowBinary carries only the ordinal, and the server stores
+    // it without checking it against the members, so text reads of the row then fail with UNKNOWN_ELEMENT_OF_ENUM.
+    // Convert maps null to the ordinal 0, which the type need not declare.
+    protected object RequireNotNull(object value) => value is null || value is DBNull
+        ? throw new ArgumentException($"A null is not a label of '{this}'. Declare the target Nullable to carry nulls.")
+        : value;
+
+    // A type parsed without its members (a bare Enum8 in InsertOptions.ColumnTypes) has nothing to check against.
+    protected int RequireDeclared(int ordinal) => reverseValues.Count == 0 || reverseValues.ContainsKey(ordinal)
+        ? ordinal
+        : throw new ArgumentException($"The type '{this}' declares no member with the ordinal {ordinal.ToString(CultureInfo.InvariantCulture)}.");
+
     // Renders the ClickHouse declaration form, e.g. Enum8('a' = 1, 'b' = 2), so the result round-trips
     // through TypeConverter.ParseClickHouseType — SchemaDescriber writes this into GetSchemaTable()'s
     // ProviderType, and PocoTypeRegistry keys its row-reader cache on it. Labels are quoted and escaped
