@@ -128,6 +128,39 @@ public class CredentialsProviderTests
         });
     }
 
+    // Credentials with a known expiry stay in the cache. After the second rejection the next connect must not send
+    // them again.
+    [Test]
+    public async Task CreateAsync_HandshakeRejectsTheNewCachedCredentialsToo_NextConnectGetsNewOnes()
+    {
+        await using var server = new HandshakeServer(AuthenticationFailed, AuthenticationFailed, Hello);
+        var reasons = new ConcurrentQueue<ClickHouseCredentialsRefreshReason>();
+        ClickHouseTcpClientOptions options = Options(server) with
+        {
+            CredentialsProvider = (request, _) =>
+            {
+                reasons.Enqueue(request.Reason);
+                return new(ClickHouseCredentials.CreateBearer($"token-{reasons.Count}", DateTimeOffset.UtcNow.AddHours(1)));
+            },
+        };
+        using var factory = new TcpConnectionFactory(options);
+
+        Assert.ThrowsAsync<ClickHouseTcpServerException>(async () => await factory.CreateAsync(None));
+        using ClickHouseTcpConnection connection = await factory.CreateAsync(None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(server.Hellos, Is.EqualTo(new[] { (JwtMarker, "token-1"), (JwtMarker, "token-2"), (JwtMarker, "token-3") }));
+            Assert.That(reasons, Is.EqualTo(new[]
+            {
+                ClickHouseCredentialsRefreshReason.Initial,
+                ClickHouseCredentialsRefreshReason.Rejected,
+                ClickHouseCredentialsRefreshReason.Rejected,
+            }));
+            Assert.That(connection.Credentials.Credentials.BearerToken, Is.EqualTo("token-3"));
+        });
+    }
+
     // No new connection when it would send the same credentials (the static ones), or when the error is not a
     // rejection of the credentials.
     [TestCase(AuthenticationFailed, ProviderResult.NoProvider, TestName = "CreateAsync_HandshakeRejectsTheStaticCredentials_DoesNotConnectAgain")]

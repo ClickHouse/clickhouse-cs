@@ -35,7 +35,8 @@ internal interface IConnectionFactory : IDisposable
 /// <remarks>
 /// With a <see cref="ClickHouseTcpClientOptions.CredentialsProvider"/>, the factory gets the credentials for each
 /// connection from a <see cref="CredentialsCache"/> that it owns. If the server rejects them during the handshake
-/// (error 516), it invalidates them, gets new ones, and connects once more.
+/// (error 516), it invalidates them, gets new ones, and connects once more. If the server rejects the new ones too,
+/// it invalidates them as well and throws.
 /// </remarks>
 internal sealed class TcpConnectionFactory : IConnectionFactory
 {
@@ -109,7 +110,17 @@ internal sealed class TcpConnectionFactory : IConnectionFactory
                     gettingCredentials = true;
                     used = await credentials.GetAsync(linked.Token).ConfigureAwait(false);
                     gettingCredentials = false;
-                    connection = await ConnectAsync(options.ToHandshakeParameters(used), linked.Token).ConfigureAwait(false);
+                    try
+                    {
+                        connection = await ConnectAsync(options.ToHandshakeParameters(used), linked.Token).ConfigureAwait(false);
+                    }
+                    catch (ClickHouseTcpServerException retryError) when (used is not null && retryError.Code == ClickHouseErrorCode.AuthenticationFailed)
+                    {
+                        // Drop the rejected credentials from the cache, so that the next connect asks the provider
+                        // again instead of sending them once more.
+                        credentials.Invalidate(used);
+                        throw;
+                    }
                 }
 
                 // A provider that returned null selected the static credentials, which the pool does not track.
