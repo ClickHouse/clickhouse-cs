@@ -296,6 +296,42 @@ public class CredentialsCacheTests
     }
 
     [Test]
+    public async Task GetAsync_ProviderBlocksBeforeItsFirstAwait_CancelledCallerStopsWaiting()
+    {
+        using var release = new ManualResetEventSlim();
+        var provider = new FakeProvider();
+        provider.Next = (n, _) =>
+        {
+            release.Wait(Timeout);
+            return Task.FromResult(Bearer(n, TimeSpan.FromHours(1)));
+        };
+        using var cache = CreateCache(provider);
+        using var cancelled = new CancellationTokenSource();
+
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var caller = cache.GetAsync(cancelled.Token).AsTask();
+            cancelled.Cancel();
+
+            Assert.ThrowsAsync<TaskCanceledException>(async () => await caller.WaitAsync(Timeout));
+            Assert.That(stopwatch.Elapsed, Is.LessThan(Timeout / 2));
+        }
+        finally
+        {
+            release.Set();
+        }
+
+        // The shared call goes on, and its result serves the next caller.
+        var result = await cache.GetAsync(CancellationToken.None).AsTask().WaitAsync(Timeout);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.BearerToken, Is.EqualTo("token-1"));
+            Assert.That(provider.Calls, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public async Task Invalidate_SameInstance_NextCallAsksWithReasonRejected()
     {
         var provider = new FakeProvider { Next = (n, _) => Task.FromResult(Bearer(n, TimeSpan.FromHours(1))) };

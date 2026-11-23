@@ -377,6 +377,37 @@ public class CredentialsProviderHttpTests
         });
     }
 
+    [Test]
+    public void ExecuteNonQueryAsync_ProviderBlocksBeforeItsFirstAwait_StopsAtTheCallersCancellation()
+    {
+        var blockFor = TimeSpan.FromSeconds(10);
+        using var release = new ManualResetEventSlim();
+        var (client, handler) = CreateClient((_, _) =>
+        {
+            release.Wait(blockFor);
+            return new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBearer("provider-token"));
+        });
+        using var _ = client;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            Assert.CatchAsync<OperationCanceledException>(() => client.ExecuteNonQueryAsync("SELECT 1", cancellationToken: cancellation.Token));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(stopwatch.Elapsed, Is.LessThan(blockFor / 2));
+                Assert.That(handler.RequestCount, Is.Zero);
+            });
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
     private static IEnumerable<TestCaseData> PrecedenceCases()
     {
         var provided = ClickHouseCredentials.CreateBearer("provider-token");

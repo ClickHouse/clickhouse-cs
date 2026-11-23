@@ -241,6 +241,43 @@ public class CredentialsProviderTests
     }
 
     [Test]
+    public void CreateAsync_ProviderBlocksBeforeItsFirstAwaitBeyondDialTimeout_ThrowsATimeoutThatNamesTheProvider()
+    {
+        TimeSpan blockFor = TimeSpan.FromSeconds(10);
+        using var release = new ManualResetEventSlim();
+        ClickHouseTcpClientOptions options = new()
+        {
+            Host = "127.0.0.1",
+            Port = 9,
+            DialTimeout = TimeSpan.FromMilliseconds(250),
+            CredentialsProvider = (_, _) =>
+            {
+                release.Wait(blockFor);
+                return new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBearer("token"));
+            },
+        };
+
+        try
+        {
+            using var factory = new TcpConnectionFactory(options);
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+            var thrown = Assert.ThrowsAsync<ClickHouseTcpConnectionException>(async () => await factory.CreateAsync(None));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(stopwatch.Elapsed, Is.LessThan(blockFor / 2));
+                Assert.That(thrown.InnerException, Is.TypeOf<TimeoutException>());
+                Assert.That(thrown.Message, Does.StartWith("Getting credentials from the CredentialsProvider"));
+            });
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Test]
     public async Task DisposeAsync_RentWaitsForTheProvider_ThrowsObjectDisposedAndCancelsTheProvider()
     {
         var providerCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

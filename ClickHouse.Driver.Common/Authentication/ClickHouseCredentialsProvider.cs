@@ -33,8 +33,10 @@ namespace ClickHouse.Driver;
 /// credentials until they expire.
 /// </para>
 /// <para>
-/// The client does not limit how long a call takes, and the operations that need new credentials wait
-/// for it. Give the provider its own timeout.
+/// The client does not limit how long a call takes. It calls the provider on a thread-pool thread, so an
+/// operation that waits for new credentials stops at its cancellation token (and, in the native TCP client,
+/// at <c>DialTimeout</c>), also when the provider blocks; the call itself goes on. Give the provider its
+/// own timeout.
 /// </para>
 /// </remarks>
 public delegate ValueTask<ClickHouseCredentials> ClickHouseCredentialsProvider(

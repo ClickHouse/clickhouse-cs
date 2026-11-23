@@ -18,8 +18,8 @@ namespace ClickHouse.Driver.Authentication;
 /// background refresh starts.
 /// </para>
 /// <para>
-/// At most one provider call runs at a time. It gets a token that <see cref="Dispose"/> cancels; the
-/// token of a caller cancels only the wait of that caller.
+/// At most one provider call runs at a time, on a thread-pool thread. It gets a token that
+/// <see cref="Dispose"/> cancels; the token of a caller cancels only the wait of that caller.
 /// </para>
 /// </remarks>
 internal sealed class CredentialsCache : IDisposable
@@ -132,16 +132,12 @@ internal sealed class CredentialsCache : IDisposable
 
         if (started is not null)
         {
-            if (started.Background)
-            {
-                // Run the provider off the caller's thread: a provider that blocks before its first await
-                // must not delay a request that has usable credentials.
-                _ = Task.Run(() => RunRefreshAsync(started), CancellationToken.None);
-            }
-            else
-            {
-                _ = RunRefreshAsync(started);
-            }
+            // Run the provider off the caller's thread. A provider that blocks before its first await must not
+            // delay a request that has usable credentials, and must not keep a waiting caller from stopping at
+            // its cancellation token (the HTTP client) or at DialTimeout (the TCP client). A thread-pool thread
+            // also has no SynchronizationContext, so a provider that awaits without ConfigureAwait(false)
+            // cannot deadlock a caller that blocks on the operation (the synchronous ADO.NET methods).
+            _ = Task.Run(() => RunRefreshAsync(started), CancellationToken.None);
         }
 
         if (usable is not null)
@@ -240,7 +236,7 @@ internal sealed class CredentialsCache : IDisposable
         ClickHouseCredentials credentials;
         try
         {
-            credentials = await InvokeProviderAsync(run.Reason).ConfigureAwait(false);
+            credentials = await provider(new ClickHouseCredentialsRequest(run.Reason), disposal.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -296,23 +292,6 @@ internal sealed class CredentialsCache : IDisposable
         }
 
         run.Completion.TrySetResult(credentials);
-    }
-
-    private ValueTask<ClickHouseCredentials> InvokeProviderAsync(ClickHouseCredentialsRefreshReason reason)
-    {
-        // The provider is user code. Call it without the caller's SynchronizationContext, so that a provider
-        // that awaits without ConfigureAwait(false) cannot deadlock a caller that blocks on the operation
-        // (the synchronous ADO.NET methods).
-        var context = SynchronizationContext.Current;
-        SynchronizationContext.SetSynchronizationContext(null);
-        try
-        {
-            return provider(new ClickHouseCredentialsRequest(reason), disposal.Token);
-        }
-        finally
-        {
-            SynchronizationContext.SetSynchronizationContext(context);
-        }
     }
 
     private void ReportBackgroundFailure(Exception exception)
