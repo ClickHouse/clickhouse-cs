@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
@@ -124,8 +125,10 @@ public class SqlSimpleSelectTests : IDisposable
         using var reader = await connection.ExecuteReaderAsync(sql);
         Assert.That(reader.FieldCount, Is.EqualTo(types.Length));
 
-        var data = reader.GetEnsureSingleRow();
-        Assert.That(data, Is.All.EqualTo(55).Or.EqualTo(new BigInteger(55)));
+        // BigInteger (the 128-bit and 256-bit types) does not implement IConvertible.
+        var data = reader.GetEnsureSingleRow()
+            .Select(value => value is BigInteger bigInteger ? (double)bigInteger : Convert.ToDouble(value, CultureInfo.InvariantCulture));
+        Assert.That(data, Is.All.EqualTo(55.0));
     }
 
     [Test]
