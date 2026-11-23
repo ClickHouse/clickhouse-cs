@@ -52,7 +52,8 @@ until the provider accepts the tokens.
    **Settings** > **Security** > **JWT authentication** > **Set up JWT providers**, and add a
    provider:
 
-   - **Name**: `clickhouse-cs-ci` (any name; you cannot change it later)
+   - **Name**: `dotnet-driver-ci` (any name; you cannot change it later). The name must not start
+     with a reserved prefix: `cloud`, `clickhouse`, `ch`, `internal`, `system` or `default`.
    - **Issuer**: `mydomain.com`
    - **Audience**: `ci-test-service`
    - **JWKS URL**: `https://raw.githubusercontent.com/ClickHouse/clickhouse-cs/main/.github/jwks.json`
