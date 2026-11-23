@@ -412,14 +412,18 @@ public class CredentialsProviderHttpTests
     public async Task Dispose_ProviderCallRuns_CancelsTheProviderToken()
     {
         var tokenCancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var providerStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var (client, _) = CreateClient(async (_, token) =>
         {
             using var registration = token.Register(() => tokenCancelled.TrySetResult(true));
+            providerStarted.TrySetResult(true);
             await Task.Delay(System.Threading.Timeout.Infinite, token);
             return null;
         });
         var query = client.ExecuteNonQueryAsync("SELECT 1");
 
+        // The query can reach the provider after an await: dispose only when the provider call runs.
+        await providerStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
         client.Dispose();
 
         Assert.That(await tokenCancelled.Task.WaitAsync(TimeSpan.FromSeconds(10)), Is.True);
