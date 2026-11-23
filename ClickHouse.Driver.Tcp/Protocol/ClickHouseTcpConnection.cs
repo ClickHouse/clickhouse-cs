@@ -8,6 +8,7 @@ using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Compression;
+using ClickHouse.Driver.Tcp.Client;
 using ClickHouse.Driver.Tcp.Compression;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Types;
@@ -82,6 +83,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     private ServerHandshake server;
     private ClientMetadata clientMetadata;
     private TcpConnectionState state;
+    private bool credentialsRejected;
 
     /// <summary>
     /// Initializes a connection over an established transport, in the Handshaking state. Production callers
@@ -199,6 +201,20 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
     /// <summary>The server identity and protocol details decoded during the handshake.</summary>
     public ServerHandshake Server => server;
+
+    /// <summary>
+    /// The credentials from the client's <see cref="ClickHouseTcpClientOptions.CredentialsProvider"/> that this
+    /// connection authenticated with, or null for the static credentials of the options. Set by the factory that
+    /// opened the connection, before the pool sees it.
+    /// </summary>
+    internal ConnectionCredentials Credentials { get; set; }
+
+    /// <summary>
+    /// Whether an operation on this connection failed with server error 516 (<c>AUTHENTICATION_FAILED</c>). Like any
+    /// server exception during an operation, it also terminated the connection. The pool reads it to invalidate
+    /// <see cref="Credentials"/>.
+    /// </summary>
+    internal bool CredentialsRejected => credentialsRejected;
 
     /// <summary>The protocol version negotiated with the server, and the authority for version-gated fields.</summary>
     public NegotiatedProtocol Protocol => server.Negotiated;
@@ -331,7 +347,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     ClickHouseTcpServerException exception;
                     try
                     {
-                        exception = await ClickHouseTcpServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
+                        exception = await ReadServerExceptionAsync(cancellationToken).ConfigureAwait(false);
                     }
                     catch
                     {
@@ -472,7 +488,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
 
                 if (packet == ServerPacketType.Exception)
                 {
-                    pending = await ClickHouseTcpServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
+                    pending = await ReadServerExceptionAsync(cancellationToken).ConfigureAwait(false);
                     responseCompleted = true;
                     break;
                 }
@@ -1340,6 +1356,23 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
+    /// Reads the body of a server Exception packet during an operation, and records a rejection of the credentials
+    /// (<see cref="CredentialsRejected"/>).
+    /// </summary>
+    /// <param name="cancellationToken">A token to observe for cancellation.</param>
+    /// <returns>The decoded exception.</returns>
+    private async ValueTask<ClickHouseTcpServerException> ReadServerExceptionAsync(CancellationToken cancellationToken)
+    {
+        ClickHouseTcpServerException exception = await ClickHouseTcpServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false);
+        if (exception.Code == ClickHouseErrorCode.AuthenticationFailed)
+        {
+            credentialsRejected = true;
+        }
+
+        return exception;
+    }
+
+    /// <summary>
     /// Runs the handshake exchange over the transport and transitions Handshaking → Ready. Any failure
     /// (protocol violation, connection error, cancellation) terminates the connection before propagating, so
     /// the "any failure ⇒ Terminated, never reused" contract holds regardless of who invokes the handshake.
@@ -1407,7 +1440,7 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
                     return (null, null);
 
                 case ServerPacketType.Exception:
-                    return (null, await ClickHouseTcpServerException.ReadAsync(reader, cancellationToken).ConfigureAwait(false));
+                    return (null, await ReadServerExceptionAsync(cancellationToken).ConfigureAwait(false));
 
                 case ServerPacketType.Data:
                     return (await ReadBlockAsync(ServerPacketType.Data, negotiated, context, cancellationToken).ConfigureAwait(false), null);

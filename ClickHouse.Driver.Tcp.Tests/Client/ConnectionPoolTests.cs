@@ -1169,6 +1169,20 @@ public class ConnectionPoolTests
         Assert.That(ConnectionPool.SweepInterval(options), Is.EqualTo(TimeSpan.FromSeconds(30)));
     }
 
+    [Test]
+    public void SweepInterval_NoLimitsButACredentialsProvider_StillSweeps()
+    {
+        // Credentials from a provider can expire, and the sweep closes idle connections whose credentials expired.
+        var options = new ClickHouseTcpClientOptions
+        {
+            IdleTimeout = TimeSpan.Zero,
+            MaxConnectionLifetime = TimeSpan.Zero,
+            CredentialsProvider = (_, _) => default,
+        };
+
+        Assert.That(ConnectionPool.SweepInterval(options), Is.EqualTo(TimeSpan.FromSeconds(30)));
+    }
+
     [TestCase(0, 0, 0, TestName = "SweepInterval_NoLimitsSet_IsZeroSoNoSweepRuns")]
     [TestCase(0, 1800, 30, TestName = "SweepInterval_LongLimit_IsCappedAtThirtySeconds")]
     [TestCase(40, 0, 10, TestName = "SweepInterval_ModerateLimit_IsAQuarterOfIt")]

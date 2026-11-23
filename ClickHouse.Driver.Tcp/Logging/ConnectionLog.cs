@@ -34,4 +34,16 @@ internal static partial class ConnectionLog
         Level = LogLevel.Debug,
         Message = "Connecting to {Host}:{Port} was cancelled after {ElapsedMs:0.###} ms")]
     public static partial void OpenCancelled(ILogger logger, string host, int port, double elapsedMs);
+
+    [LoggerMessage(
+        EventId = 2004,
+        Level = LogLevel.Information,
+        Message = "The server at {Host}:{Port} rejected the credentials from the CredentialsProvider during the handshake; getting new credentials and connecting again")]
+    public static partial void CredentialsRejected(ILogger logger, string host, int port);
+
+    [LoggerMessage(
+        EventId = 2005,
+        Level = LogLevel.Warning,
+        Message = "Refreshing the credentials from the CredentialsProvider in the background failed; the current credentials stay in use")]
+    public static partial void BackgroundRefreshFailed(ILogger logger, Exception exception);
 }

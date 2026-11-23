@@ -116,4 +116,13 @@ public class HandshakeTests
         Assert.That(inner.Message, Is.EqualTo("inner cause"));
         Assert.That(inner.InnerException, Is.Null);
     }
+
+    [TestCase(" JWT AUTHENTICATION ", "", TestName = "FromHandshake_JwtAuthentication_SendsAnEmptyInitialUser")]
+    [TestCase("alice", "alice", TestName = "FromHandshake_Username_SendsItAsTheInitialUser")]
+    public void ClientMetadata_FromHandshake_InitialUser(string username, string expected)
+    {
+        var parameters = new ClientHandshakeParameters { Username = username, Password = "token" };
+
+        Assert.That(ClientMetadata.FromHandshake(parameters).Username, Is.EqualTo(expected));
+    }
 }

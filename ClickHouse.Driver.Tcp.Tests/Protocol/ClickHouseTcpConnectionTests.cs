@@ -50,6 +50,27 @@ public class ClickHouseTcpConnectionTests
         });
     }
 
+    [TestCase(516, true, TestName = "PingAsync_ServerReportsAuthenticationFailed_RecordsRejectedCredentials")]
+    [TestCase(60, false, TestName = "PingAsync_ServerReportsAnotherError_DoesNotRecordRejectedCredentials")]
+    public async Task PingAsync_ServerException_CredentialsRejected(int code, bool expected)
+    {
+        byte[] exception = await BytesAsync(w =>
+        {
+            w.WriteVarUInt((ulong)ServerPacketType.Exception);
+            w.WriteInt32(code);
+            w.WriteString("DB::Exception");
+            w.WriteString("failed");
+            w.WriteString("stack trace");
+            w.WriteBool(false); // has_nested
+        });
+        using var connection = new ClickHouseTcpConnection(new ScriptedDuplexStream(Concat(await ServerHelloBytesAsync(54476), exception)), socket: null);
+        await connection.HandshakeAsync(Handshake, None);
+
+        Assert.ThrowsAsync<ClickHouseTcpServerException>(async () => await connection.PingAsync(None));
+
+        Assert.That(connection.CredentialsRejected, Is.EqualTo(expected));
+    }
+
     [Test]
     public async Task PingAsync_ServerRepliesUnexpectedPacket_ThrowsProtocolAndTerminates()
     {

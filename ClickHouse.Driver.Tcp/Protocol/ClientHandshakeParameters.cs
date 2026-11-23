@@ -11,6 +11,12 @@ internal sealed class ClientHandshakeParameters
     /// <summary>The product identifier this driver reports on the wire, for both the handshake and every query.</summary>
     public const string DefaultClientName = "clickhouse-cs-tcp";
 
+    /// <summary>
+    /// The value of the Username field that selects JWT authentication. The Password field then carries the token,
+    /// as in clickhouse-go (<c>jwtAuthMarker</c>).
+    /// </summary>
+    public const string JwtAuthenticationMarker = " JWT AUTHENTICATION ";
+
     /// <summary>Informational client identifier (ClientHello field 1). Pinned to <see cref="DefaultClientName"/>
     /// and not caller-configurable, so the handshake and every query's ClientInfo report the same name. Does not
     /// affect negotiation.</summary>
@@ -28,8 +34,11 @@ internal sealed class ClientHandshakeParameters
     /// <summary>Username for authentication (ClientHello field 6).</summary>
     required public string Username { get; init; }
 
-    /// <summary>Password, sent in plaintext and protected only by TLS (ClientHello field 7).</summary>
+    /// <summary>Password, sent in plaintext and protected only by TLS (ClientHello field 7). For JWT authentication, the token.</summary>
     public string Password { get; init; } = string.Empty;
+
+    /// <summary>Whether these parameters authenticate with a JWT (<see cref="JwtAuthenticationMarker"/>).</summary>
+    public bool IsJwt => Username == JwtAuthenticationMarker;
 
     /// <summary>Keyed-quota resource key (Addendum field 1). Empty when the client uses no keyed quota.</summary>
     public string QuotaKey { get; init; } = string.Empty;

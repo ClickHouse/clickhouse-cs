@@ -115,6 +115,12 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
     /// <summary>Runs when the pool disposes the factory. Null for none.</summary>
     public Action OnDispose { get; set; }
 
+    /// <summary>
+    /// Gives the credentials to attach to each new connection, as the real factory does for credentials from a
+    /// provider. Null, or a null result, attaches none: the static credentials.
+    /// </summary>
+    public Func<ConnectionCredentials> Credentials { get; set; }
+
     /// <summary>Whether the pool disposed this factory during its teardown.</summary>
     public bool Disposed => DisposeCount != 0;
 
@@ -171,6 +177,7 @@ internal sealed class FakeConnectionFactory : IConnectionFactory
             trailing: Trailing,
             throwOnClose: ClosingThrows,
             onClose: OnClose).ConfigureAwait(false);
+        connection.Credentials = Credentials?.Invoke();
         lock (gate)
         {
             created.Add(connection);

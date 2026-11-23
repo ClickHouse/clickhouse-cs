@@ -139,6 +139,19 @@ public class ClickHouseTcpConnectionInsertTests
         });
     }
 
+    [TestCase(516, true, TestName = "InsertAsync_ServerReportsAuthenticationFailed_RecordsRejectedCredentials")]
+    [TestCase(60, false, TestName = "InsertAsync_ServerReportsAnotherError_DoesNotRecordRejectedCredentials")]
+    public async Task InsertAsync_ServerException_CredentialsRejected(int code, bool expected)
+    {
+        byte[] script = Concat(await ServerHelloBytesAsync(54476), await ExceptionPacketAsync(code, "failed"));
+        using var connection = await ConnectedAsync(script);
+
+        Assert.ThrowsAsync<ClickHouseTcpServerException>(async () =>
+            await connection.InsertAsync("INSERT INTO t VALUES", Columns(UInt64Column(1)), cancellationToken: None));
+
+        Assert.That(connection.CredentialsRejected, Is.EqualTo(expected));
+    }
+
     [Test]
     public async Task InsertAsync_ServerExceptionDuringAcknowledgement_ThrowsAndTerminatesConnection()
     {
