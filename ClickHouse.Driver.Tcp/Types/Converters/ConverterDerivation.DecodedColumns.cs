@@ -160,8 +160,10 @@ internal sealed partial class ConverterDerivation
     /// <summary>How the insert writes one part of a column that a query read as <paramref name="source"/>.</summary>
     /// <param name="source">The source type of the part.</param>
     /// <param name="target">The target type of the part.</param>
+    /// <param name="context">The resolution context of the target.</param>
     /// <returns>The plan of the part.</returns>
-    internal DecodedPartPlan PlanDecodedPart(string source, string target)
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    internal DecodedPartPlan PlanDecodedPart(string source, string target, in ResolveContext context)
     {
         TypeNode sourceNode = WithoutAggregateFunction(TypeParser.Parse(source));
         TypeNode targetNode = WithoutAggregateFunction(TypeParser.Parse(target));
@@ -173,6 +175,13 @@ internal sealed partial class ConverterDerivation
         bool changes = ChangesMeaning(sourceNode, targetNode) || ChangesStringShape(sourceNode, targetNode);
         string leaf = CanonicalName(Unwrapped(sourceNode));
         if (changes && (MeaningFamily(leaf) is not null || (IsStringLeaf(leaf) && IsStringLeaf(CanonicalName(Unwrapped(targetNode))))))
+        {
+            return new DecodedPartPlan(DecodedPart.Converted);
+        }
+
+        // A String into a Variant whose String alternative takes both the text and the bytes of a value: through the bytes,
+        // so a value that is not UTF-8 keeps them. Also a String under Nullable, whose NULL is the NULL of the Variant.
+        if (leaf == "String" && PlacesStringBytesAsString(targetNode, in context))
         {
             return new DecodedPartPlan(DecodedPart.Converted);
         }
@@ -224,6 +233,32 @@ internal sealed partial class ConverterDerivation
                         refusal: $"The values of {sourceNode} are converted to another type only through Nullable, LowCardinality, Array, Map and Tuple, so a column read as {sourceNode} is written only into a column whose DateTime64, Time64 and Enum types are the same.")
                     : new DecodedPartPlan(DecodedPart.Kept);
         }
+    }
+
+    // Whether the type is a Variant whose write places a string and a byte[] in the same alternative, each with no tie, and
+    // that alternative is a String.
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private bool PlacesStringBytesAsString(TypeNode target, in ResolveContext context)
+    {
+        if (CanonicalName(target) != "Variant")
+        {
+            return false;
+        }
+
+        Derivation derived = Derive(target.ToString(), in context, typeof(object), ConversionDirection.Write);
+        if (!derived.Succeeded || derived.Converter is not VariantWriter variant)
+        {
+            return false;
+        }
+
+        int alternative = variant.AlternativeOf(typeof(string));
+        if (alternative < 0 || alternative != variant.AlternativeOf(typeof(byte[])))
+        {
+            return false;
+        }
+
+        TypeNode type = TypeParser.Parse(variant.AlternativeType(alternative));
+        return CanonicalName(type) == "String" && type.Arguments.Count == 0;
     }
 
     // Whether a column of the type can hold a value that a Nullable hides: a Nullable that is not the dictionary of a

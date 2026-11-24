@@ -40,6 +40,17 @@ public class DecodedColumnInsertIntegrationTests
         ["enable_nullable_tuple_type"] = "1",
     };
 
+    private static readonly Dictionary<string, string> VariantSettings = new(StringComparer.Ordinal)
+    {
+        ["allow_experimental_variant_type"] = "1",
+        ["allow_suspicious_variant_types"] = "1",
+    };
+
+    private static readonly Dictionary<string, string> DynamicSettings = new(StringComparer.Ordinal)
+    {
+        ["allow_experimental_dynamic_type"] = "1",
+    };
+
     public static IEnumerable<TestCaseData> Cases()
     {
         yield return Case(
@@ -202,6 +213,71 @@ public class DecodedColumnInsertIntegrationTests
             NullableTupleSettings);
     }
 
+    // A String that a query read, into a Variant whose String alternative takes both the text and the bytes of a value,
+    // also as an element of an Array or a Tuple and a value of a Map: the alternative of each row and the hex of its String
+    // value. Every String value is not UTF-8.
+    public static IEnumerable<TestCaseData> VariantCases()
+    {
+        const string ReadBack = "concat(variantType(value), ' ', ifNull(hex(variantElement(value, 'String')), ''))";
+        string[] strings = { "unhex('41FF42')", "unhex('C328')", "unhex('61C0AF')" };
+        string[] stored = { "String 41FF42", "String C328", "String 61C0AF" };
+        yield return SiblingCase("String", "Variant(String, Int64)", strings, ReadBack, stored, VariantSettings);
+        yield return SiblingCase("LowCardinality(String)", "Variant(String, Int64)", strings, ReadBack, stored, VariantSettings);
+        yield return SiblingCase(
+            "Nullable(String)",
+            "Variant(String, Int64)",
+            new[] { "unhex('41FF42')", "NULL", "unhex('61C0AF')" },
+            ReadBack,
+            new[] { "String 41FF42", "None ", "String 61C0AF" },
+            VariantSettings);
+        yield return SiblingCase(
+            "Array(String)",
+            "Array(Variant(String, Int64))",
+            new[] { "[unhex('41FF42'), unhex('C328')]", "[]", "[unhex('61C0AF')]" },
+            "concat(toString(arrayMap(x -> variantType(x), value)), ' ', hex(arrayStringConcat(arrayMap(x -> assumeNotNull(variantElement(x, 'String')), value), ',')))",
+            new[] { "['String','String'] 41FF422CC328", "[] ", "['String'] 61C0AF" },
+            VariantSettings);
+        yield return SiblingCase(
+            "Tuple(String, Int32)",
+            "Tuple(Variant(String, Int32), Int32)",
+            new[] { "(unhex('41FF42'), 1)", "(unhex('C328'), 2)", "(unhex('61C0AF'), 3)" },
+            "concat(variantType(value.1), ' ', hex(variantElement(value.1, 'String')), ' ', toString(value.2))",
+            new[] { "String 41FF42 1", "String C328 2", "String 61C0AF 3" },
+            VariantSettings);
+        yield return SiblingCase(
+            "Map(String, String)",
+            "Map(String, Variant(String, Int64))",
+            new[] { "map(unhex('FF'), unhex('41FF42'))", "map()", "map(unhex('C328'), unhex('61C0AF'))" },
+            "concat(hex(arrayStringConcat(mapKeys(value), ',')), ' ', toString(arrayMap(x -> variantType(x), mapValues(value))), ' ', hex(arrayStringConcat(arrayMap(x -> assumeNotNull(variantElement(x, 'String')), mapValues(value)), ',')))",
+            new[] { "FF ['String'] 41FF42", " [] ", "C328 ['String'] 61C0AF" },
+            VariantSettings);
+    }
+
+    // A String that a query read, into a Variant whose alternative for text is not a String, or into a Dynamic: these
+    // parts go through the text of their values. Every String value is valid UTF-8, so the stored values are the source.
+    public static IEnumerable<TestCaseData> TextRouteCases()
+    {
+        string[] strings = { "'abc'", "'xyz'", "'def'" };
+        yield return SiblingCase(
+            "String",
+            "Variant(FixedString(3), Int64)",
+            strings,
+            "concat(variantType(value), ' ', hex(variantElement(value, 'FixedString(3)')))",
+            new[] { "FixedString(3) 616263", "FixedString(3) 78797A", "FixedString(3) 646566" },
+            VariantSettings);
+    }
+
+    public static IEnumerable<TestCaseData> DynamicTextRouteCases()
+    {
+        yield return SiblingCase(
+            "String",
+            "Dynamic",
+            new[] { "'abc'", "'xyz'", "'def'" },
+            "concat(dynamicType(value), ' ', hex(dynamicElement(value, 'String')))",
+            new[] { "String 616263", "String 78797A", "String 646566" },
+            DynamicSettings);
+    }
+
     public static IEnumerable<TestCaseData> TimeCases()
     {
         yield return Case("Time64(3)", "Time64(6)", ("'01:02:03.456'", "01:02:03.456000"), ("'-00:00:00.001'", "-00:00:00.001000"));
@@ -257,6 +333,50 @@ public class DecodedColumnInsertIntegrationTests
     [TestCaseSource(nameof(NullableTupleSiblingCases))]
     [RequiresServerFeature(TcpFeature.NullableTuple)]
     public Task InsertAsync_NullableTupleReadWithAStringNextToAPartOfAnotherType_StoresTheStringBytes(
+        string source,
+        string target,
+        string[] literals,
+        string readBack,
+        string[] expected,
+        IReadOnlyDictionary<string, string> settings)
+        => AssertStoresInBlocksAsync(source, target, literals, readBack, expected, settings);
+
+    /// <summary>
+    /// A <c>String</c> column that a query read, also under <c>Nullable</c> and <c>LowCardinality</c> and inside an
+    /// <c>Array</c>, a <c>Tuple</c> and a <c>Map</c>, into a <c>Variant</c> whose <c>String</c> alternative takes the text
+    /// and the bytes of a value: the server stores the bytes in the <c>String</c> alternative, and a NULL row as the NULL
+    /// of the <c>Variant</c>. The insert sends two rows in each block.
+    /// </summary>
+    [TestCaseSource(nameof(VariantCases))]
+    [RequiresServerFeature(TcpFeature.Variant)]
+    public Task InsertAsync_StringReadIntoAVariantWithAStringAlternative_StoresItsBytes(
+        string source,
+        string target,
+        string[] literals,
+        string readBack,
+        string[] expected,
+        IReadOnlyDictionary<string, string> settings)
+        => AssertStoresInBlocksAsync(source, target, literals, readBack, expected, settings);
+
+    /// <summary>
+    /// A <c>String</c> column that a query read, into a <c>Variant</c> whose alternative for text is a
+    /// <c>FixedString(N)</c>: the values go through their text into that alternative.
+    /// </summary>
+    [TestCaseSource(nameof(TextRouteCases))]
+    [RequiresServerFeature(TcpFeature.Variant)]
+    public Task InsertAsync_StringReadIntoAVariantWithNoStringAlternative_StoresItsText(
+        string source,
+        string target,
+        string[] literals,
+        string readBack,
+        string[] expected,
+        IReadOnlyDictionary<string, string> settings)
+        => AssertStoresInBlocksAsync(source, target, literals, readBack, expected, settings);
+
+    /// <summary>A <c>String</c> column that a query read, into a <c>Dynamic</c>: the values go through their text.</summary>
+    [TestCaseSource(nameof(DynamicTextRouteCases))]
+    [RequiresServerFeature(TcpFeature.Dynamic)]
+    public Task InsertAsync_StringReadIntoADynamic_StoresItsText(
         string source,
         string target,
         string[] literals,

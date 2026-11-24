@@ -387,6 +387,23 @@ public class DecodedColumnConversionTests
     }
 
     /// <summary>
+    /// A <c>String</c> that a query read, into a <c>Variant</c>: through its bytes when the <c>String</c> alternative takes
+    /// both the text and the bytes of a value, so bytes that are not UTF-8 keep their value, a NULL is the NULL of the
+    /// <c>Variant</c>, and a value that an enclosing NULL hides is not read. Through its text when the alternative for text
+    /// and the alternative for bytes differ (an <c>Array(UInt8)</c> alternative takes the bytes), or when the alternative
+    /// for text is a <c>FixedString</c>. All rows, and the rows from row 1.
+    /// </summary>
+    [TestCaseSource(nameof(VariantCases))]
+    public Task Write_DecodedStringIntoAVariant_WritesItsBytesOnlyIntoAStringAlternativeForBoth(
+        string source,
+        string target,
+        int rows,
+        string sourceBytes,
+        string expected,
+        string expectedFromRow1)
+        => AssertWritesAsync(source, target, rows, sourceBytes, expected, expectedFromRow1, storageOfTheTarget: null);
+
+    /// <summary>
     /// A <c>FixedString</c> takes the bytes of a <c>String</c> that a query read only when each value has its width, as
     /// for any <c>byte[]</c>. A column of <c>string</c> values that a caller built goes by the text rules, which pad a
     /// shorter value with zero bytes.
@@ -633,6 +650,21 @@ public class DecodedColumnConversionTests
             "01FF0002C328",
             "000000" + "01FF0002C328",
             "0000" + "0002C328");
+    }
+
+    public static IEnumerable<TestCaseData> VariantCases()
+    {
+        yield return Bytes("String", "Variant(String, Int64)", 3, "01FF0002C328", "0000000000000000" + "000000" + "01FF0002C328", "0000000000000000" + "0000" + "0002C328");
+        yield return Bytes("Nullable(String)", "Variant(String, Int64)", 3, "000100" + "01FF0141" + "02C328", "0000000000000000" + "00FF00" + "01FF02C328", "0000000000000000" + "FF00" + "02C328");
+        yield return Bytes(
+            "Nullable(Tuple(String))",
+            "Nullable(Tuple(Variant(String, Int64)))",
+            3,
+            "010000" + "0141" + "01FF" + "02C328",
+            "0000000000000000" + "010000" + "FF0000" + "01FF02C328",
+            "0000000000000000" + "0000" + "0000" + "01FF02C328");
+        yield return Bytes("String", "Variant(Array(UInt8), String)", 3, "02616200" + "0178", "0000000000000000" + "010101" + "026162000178", "0000000000000000" + "0101" + "000178");
+        yield return Bytes("String", "Variant(FixedString(2), Int64)", 3, "026162" + "026364" + "026566", "0000000000000000" + "000000" + "616263646566", "0000000000000000" + "0000" + "63646566");
     }
 
     public static IEnumerable<TestCaseData> StringShapeCases()

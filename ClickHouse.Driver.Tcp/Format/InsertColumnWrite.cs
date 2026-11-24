@@ -105,7 +105,7 @@ internal abstract class InsertColumnWrite
         {
             // A column of the same type, or of a type with no structure in common with the target, is written as any
             // other column.
-            DecodedPartPlan plan = derivation.PlanDecodedPart(source, typeName);
+            DecodedPartPlan plan = derivation.PlanDecodedPart(source, typeName, in context);
             if (plan.Kind != DecodedPart.Kept)
             {
                 return PlannedWrite(plan, codec, values, source, typeName, in context, derivation, hidden: null, out refusal);
@@ -247,7 +247,7 @@ internal abstract class InsertColumnWrite
 
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     private static InsertColumnWrite PartWrite(IColumn values, string source, string target, in ResolveContext context, ConverterDerivation derivation, HiddenRows hidden, out string refusal)
-        => PlannedWrite(derivation.PlanDecodedPart(source, target), derivation.ResolvePart(target, in context), values, source, target, in context, derivation, hidden, out refusal);
+        => PlannedWrite(derivation.PlanDecodedPart(source, target, in context), derivation.ResolvePart(target, in context), values, source, target, in context, derivation, hidden, out refusal);
 
     // The converter tree of the column's CLR type, or of the first suggested CLR type of the target type that the column
     // implements when it has no single CLR type. hidden: the rows that the tree writes as marked, or null.
