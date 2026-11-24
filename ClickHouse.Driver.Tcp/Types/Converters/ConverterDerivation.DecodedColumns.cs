@@ -9,9 +9,9 @@ namespace ClickHouse.Driver.Tcp.Types.Converters;
 internal enum DecodedPart
 {
     /// <summary>
-    /// The values keep their meaning: the codec writes the part from its storage, else the converter tree of its CLR type.
-    /// Under rows that an enclosing <c>Nullable</c> hides, a part of another type goes through the converter tree with
-    /// those rows marked (<see cref="DecodedPartPlan.SameType"/>).
+    /// The same type (<see cref="DecodedPartPlan.SameType"/>), or a part that has no structure in common with its target:
+    /// the codec writes the part from its storage, else the converter tree of its CLR type. Under rows that an enclosing
+    /// <c>Nullable</c> hides, a part of another type goes through the converter tree with those rows marked.
     /// </summary>
     Kept,
 
@@ -23,16 +23,19 @@ internal enum DecodedPart
     /// </summary>
     Converted,
 
-    /// <summary>A <c>Tuple</c>: each element is a part.</summary>
+    /// <summary>A <c>Tuple</c> on both sides, with the same number of elements: each element is a part.</summary>
     Tuple,
 
-    /// <summary>An <c>Array</c>: the stored offsets, then the elements as a part.</summary>
+    /// <summary>An <c>Array</c> on both sides: the stored offsets, then the elements as a part.</summary>
     Array,
 
-    /// <summary>A <c>Map</c>: the stored offsets, then the keys and the values as parts.</summary>
+    /// <summary>A <c>Map</c> on both sides: the stored offsets, then the keys and the values as parts.</summary>
     Map,
 
-    /// <summary>A <c>Nullable</c> of a composite on either side: the null map, then the composite as a part.</summary>
+    /// <summary>
+    /// A <c>Nullable</c> on either side, when neither side is a <c>LowCardinality</c>: the null map (or a null map of zeros
+    /// when the source is not <c>Nullable</c>), then the type in it as a part.
+    /// </summary>
     Nullable,
 
     /// <summary>A type that no part of the write converts (a <c>Variant</c>, a <c>Nested</c>); the reason says why.</summary>
@@ -50,7 +53,19 @@ internal readonly struct DecodedPartPlan
     /// <param name="targetHoldsNull">For <see cref="DecodedPart.Nullable"/>: whether the target is <c>Nullable</c>.</param>
     /// <param name="refusal">For <see cref="DecodedPart.Refused"/>: why no part converts the values.</param>
     /// <param name="sameType">Whether the source and the target of the part are the same type.</param>
-    public DecodedPartPlan(DecodedPart kind, string[] sourceParts = null, string[] targetParts = null, bool sourceHoldsNull = false, bool targetHoldsNull = false, string refusal = null, bool sameType = false)
+    /// <param name="keepsStorage">
+    /// For <see cref="DecodedPart.Tuple"/>, <see cref="DecodedPart.Array"/> and <see cref="DecodedPart.Map"/>: whether no
+    /// part in it changes meaning or string shape and no <c>Nullable</c> in the source hides a value.
+    /// </param>
+    public DecodedPartPlan(
+        DecodedPart kind,
+        string[] sourceParts = null,
+        string[] targetParts = null,
+        bool sourceHoldsNull = false,
+        bool targetHoldsNull = false,
+        string refusal = null,
+        bool sameType = false,
+        bool keepsStorage = false)
     {
         Kind = kind;
         SameType = sameType;
@@ -59,6 +74,7 @@ internal readonly struct DecodedPartPlan
         SourceHoldsNull = sourceHoldsNull;
         TargetHoldsNull = targetHoldsNull;
         Refusal = refusal;
+        KeepsStorage = keepsStorage;
     }
 
     /// <summary>The kind of the part.</summary>
@@ -87,55 +103,43 @@ internal readonly struct DecodedPartPlan
     /// also the bytes of a value that an enclosing <c>Nullable</c> hides.
     /// </summary>
     public bool SameType { get; }
-}
-
-/// <summary>How the insert writes a column that a query read as another type.</summary>
-internal enum ReadColumnRoute
-{
-    /// <summary>As any other column: the codec when it writes the column from its storage, else the converter tree.</summary>
-    Column,
-
-    /// <summary>Part by part, because a write through its CLR type would change its values.</summary>
-    Parts,
 
     /// <summary>
-    /// Part by part when every part can be written so, because a value that a <c>Nullable</c> hides must not be converted
-    /// into the target type; else as any other column.
+    /// For <see cref="DecodedPart.Tuple"/>, <see cref="DecodedPart.Array"/> and <see cref="DecodedPart.Map"/>: whether no
+    /// part in it changes meaning or string shape, and no <c>Nullable</c> in the source hides a value. When no enclosing
+    /// <c>Nullable</c> hides a row of the part either, a codec of the target that writes the part from its storage writes the
+    /// bytes that the write of each part gives.
     /// </summary>
-    PartsUnderNull,
+    public bool KeepsStorage { get; }
 }
 
 /// <summary>
-/// The write of a column that a query read as one type into a column of another type, where a write through the CLR type
-/// of the column would change its values. The canonical values of the two types can mean other values: the count of a
-/// <c>DateTime64</c> or a <c>Time64</c> is a count at the scale of its type, and the ordinal of an <c>Enum</c> means the
-/// label that its type declares for it. Or a <c>String</c> goes into another type of a string, and its CLR type
-/// <see cref="string"/> reads bytes that are not UTF-8 as U+FFFD. The insert converts only those parts: through the
-/// meaning of their values (a time as <see cref="DateTimeOffset"/>, a duration as <see cref="TimeSpan"/>, a label as
-/// <see cref="string"/>), or through their bytes (<c>byte[]</c>). It writes every other part from its storage,
-/// so their bytes do not change.
+/// The write of a column that a query read as one type into a column of another type. The insert takes the column apart
+/// along the two types, and decides at each part from the types of the part and from the column at that place. The
+/// canonical values of the two types can mean other values: the count of a <c>DateTime64</c> or a <c>Time64</c> is a
+/// count at the scale of its type, and the ordinal of an <c>Enum</c> means the label that its type declares for it. Or a
+/// <c>String</c> goes into another type of a string, and its CLR type <see cref="string"/> reads bytes that are not UTF-8
+/// as U+FFFD. The insert converts only those parts: through the meaning of their values (a time as
+/// <see cref="DateTimeOffset"/>, a duration as <see cref="TimeSpan"/>, a label as <see cref="string"/>), or through their
+/// bytes (<c>byte[]</c>). It writes the offsets of an <c>Array</c> or a <c>Map</c>, the null map of a <c>Nullable</c> and
+/// every part of the same type from their storage, so their bytes do not change.
 /// </summary>
 internal sealed partial class ConverterDerivation
 {
     /// <summary>
-    /// Whether <paramref name="column"/> is the column that a query of <paramref name="source"/> reads, and a write through
-    /// its CLR type would change its values in <paramref name="target"/>: a part whose canonical values mean other values
-    /// (<see cref="ChangesMeaning(string, string)"/>), or a <c>String</c> or <c>FixedString</c> part written into another
-    /// type of a string.
+    /// Whether <paramref name="column"/> is the column that a query of <paramref name="source"/> reads: the type parses,
+    /// the registry resolves it, and its codec writes the column from its storage.
     /// </summary>
     /// <param name="column">The column to write.</param>
     /// <param name="source">The type that the column says it holds.</param>
-    /// <param name="target">The type of the target column.</param>
+    /// <param name="target">The type of the target column, which must parse too.</param>
     /// <param name="context">The resolution context of the target.</param>
-    /// <returns>
-    /// How the insert writes the column: part by part (<see cref="PlanDecodedPart"/>) when a part changes; also when the
-    /// source holds values under a <c>Nullable</c> and the target is another type, so that no hidden value is converted.
-    /// </returns>
-    internal ReadColumnRoute RouteOfReadColumn(IColumn column, string source, string target, in ResolveContext context)
+    /// <returns>Whether the insert writes the column part by part (<see cref="PlanDecodedPart"/>) into another type.</returns>
+    internal bool IsReadColumn(IColumn column, string source, string target, in ResolveContext context)
     {
-        if (!TryParse(source, out TypeNode sourceNode) || !TryParse(target, out TypeNode targetNode))
+        if (!TryParse(source, out TypeNode sourceNode) || !TryParse(target, out _))
         {
-            return ReadColumnRoute.Column;
+            return false;
         }
 
         // A column that a caller built can carry any type name; one that names no type that the registry resolves is not a
@@ -147,41 +151,26 @@ internal sealed partial class ConverterDerivation
         }
         catch (Exception ex) when (ex is FormatException or NotSupportedException or ArgumentException or OverflowException)
         {
-            return ReadColumnRoute.Column;
+            return false;
         }
 
-        if (!sourceCodec.WritesFromStorage(column))
-        {
-            return ReadColumnRoute.Column;
-        }
-
-        if (ChangesMeaning(sourceNode, targetNode) || ChangesStringShape(sourceNode, targetNode))
-        {
-            return ReadColumnRoute.Parts;
-        }
-
-        return HidesValues(sourceNode) && !SameType(sourceNode, targetNode) ? ReadColumnRoute.PartsUnderNull : ReadColumnRoute.Column;
+        return sourceCodec.WritesFromStorage(column);
     }
 
     /// <summary>How the insert writes one part of a column that a query read as <paramref name="source"/>.</summary>
     /// <param name="source">The source type of the part.</param>
     /// <param name="target">The target type of the part.</param>
-    /// <param name="hidden">
-    /// Whether an enclosing <c>Nullable</c> hides rows of the part. Then a composite of another type is taken apart too,
-    /// so that each of its parts marks those rows, and a <c>Nullable</c> of another type is taken apart to mark its own.
-    /// </param>
     /// <returns>The plan of the part.</returns>
-    internal DecodedPartPlan PlanDecodedPart(string source, string target, bool hidden = false)
+    internal DecodedPartPlan PlanDecodedPart(string source, string target)
     {
         TypeNode sourceNode = WithoutAggregateFunction(TypeParser.Parse(source));
         TypeNode targetNode = WithoutAggregateFunction(TypeParser.Parse(target));
-        bool changes = ChangesMeaning(sourceNode, targetNode) || ChangesStringShape(sourceNode, targetNode);
-        bool sameType = SameType(sourceNode, targetNode);
-        if (sameType || (!changes && !hidden && !HidesValues(sourceNode)))
+        if (SameType(sourceNode, targetNode))
         {
-            return new DecodedPartPlan(DecodedPart.Kept, sameType: sameType);
+            return new DecodedPartPlan(DecodedPart.Kept, sameType: true);
         }
 
+        bool changes = ChangesMeaning(sourceNode, targetNode) || ChangesStringShape(sourceNode, targetNode);
         string leaf = CanonicalName(Unwrapped(sourceNode));
         if (changes && (MeaningFamily(leaf) is not null || (IsStringLeaf(leaf) && IsStringLeaf(CanonicalName(Unwrapped(targetNode))))))
         {
@@ -203,27 +192,30 @@ internal sealed partial class ConverterDerivation
                 targetNullable);
         }
 
-        // A change in the composite means that both types have its name; a composite of another type that changes nothing
-        // and has another shape is written as any other column.
+        // A composite of the same name and number of arguments on both sides is taken apart, also when no part in it
+        // changes; a composite of another shape is written as any other column.
         string name = CanonicalName(sourceNode);
         int arguments = sourceNode.Arguments.Count;
         bool sameShape = name == CanonicalName(targetNode) && arguments == targetNode.Arguments.Count;
+        bool keepsStorage = !changes && !HidesValues(sourceNode);
         switch (name)
         {
             case "Array" when sameShape && arguments == 1:
-                return new DecodedPartPlan(DecodedPart.Array, new[] { sourceNode.Arguments[0].ToString() }, new[] { targetNode.Arguments[0].ToString() });
+                return new DecodedPartPlan(DecodedPart.Array, new[] { sourceNode.Arguments[0].ToString() }, new[] { targetNode.Arguments[0].ToString() }, keepsStorage: keepsStorage);
 
             case "Map" when sameShape && arguments == 2:
                 return new DecodedPartPlan(
                     DecodedPart.Map,
                     new[] { sourceNode.Arguments[0].ToString(), sourceNode.Arguments[1].ToString() },
-                    new[] { targetNode.Arguments[0].ToString(), targetNode.Arguments[1].ToString() });
+                    new[] { targetNode.Arguments[0].ToString(), targetNode.Arguments[1].ToString() },
+                    keepsStorage: keepsStorage);
 
             case "Tuple" when sameShape:
                 return new DecodedPartPlan(
                     DecodedPart.Tuple,
                     System.Array.ConvertAll(NamedElementParser.Split(sourceNode), element => element.Type.ToString()),
-                    System.Array.ConvertAll(NamedElementParser.Split(targetNode), element => element.Type.ToString()));
+                    System.Array.ConvertAll(NamedElementParser.Split(targetNode), element => element.Type.ToString()),
+                    keepsStorage: keepsStorage);
 
             default:
                 return changes

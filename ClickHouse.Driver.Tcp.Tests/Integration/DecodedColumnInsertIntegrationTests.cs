@@ -25,6 +25,21 @@ public class DecodedColumnInsertIntegrationTests
         ["allow_experimental_time_time64_type"] = "1",
     };
 
+    private static readonly Dictionary<string, string> BFloat16Settings = new(StringComparer.Ordinal)
+    {
+        ["allow_experimental_bfloat16_type"] = "1",
+    };
+
+    private static readonly Dictionary<string, string> LowCardinalitySettings = new(StringComparer.Ordinal)
+    {
+        ["allow_suspicious_low_cardinality_types"] = "1",
+    };
+
+    private static readonly Dictionary<string, string> NullableTupleSettings = new(StringComparer.Ordinal)
+    {
+        ["enable_nullable_tuple_type"] = "1",
+    };
+
     public static IEnumerable<TestCaseData> Cases()
     {
         yield return Case(
@@ -111,6 +126,82 @@ public class DecodedColumnInsertIntegrationTests
             "2024-01-02 03:04:05.678000 FF");
     }
 
+    // A column that a query read, with a String part next to a part of another type, or under a composite of another
+    // type: the source type, the target type, the SQL literals of three source rows, the expression that the target reads
+    // back, its text for each row, and the settings of the tables and the insert. Every String value is not UTF-8.
+    public static IEnumerable<TestCaseData> SiblingCases()
+    {
+        const string Enum = "Enum8('a' = 1, 'b' = 2)";
+        const string TupleReadBack = "concat(hex(value.1), ' ', toString(value.2))";
+        string[] enums = { "(unhex('FF'), 'a')", "(unhex('C328'), 'b')", "(unhex('61C0AF'), 'a')" };
+        string[] ordinals = { "FF 1", "C328 2", "61C0AF 1" };
+        yield return SiblingCase($"Tuple(String, {Enum})", "Tuple(String, Int8)", enums, TupleReadBack, ordinals);
+        yield return SiblingCase($"Tuple(String, {Enum})", "Tuple(s String, i Int8)", enums, TupleReadBack, ordinals);
+        yield return SiblingCase(
+            "Tuple(String, BFloat16)",
+            "Tuple(String, Float32)",
+            new[] { "(unhex('FF'), 1.5)", "(unhex('C328'), -2)", "(unhex('61C0AF'), 0.5)" },
+            TupleReadBack,
+            new[] { "FF 1.5", "C328 -2", "61C0AF 0.5" },
+            BFloat16Settings);
+        yield return SiblingCase(
+            "Tuple(String, DateTime('UTC'))",
+            "Tuple(String, UInt32)",
+            new[] { "(unhex('FF'), toDateTime(7, 'UTC'))", "(unhex('C328'), toDateTime(8, 'UTC'))", "(unhex('61C0AF'), toDateTime(9, 'UTC'))" },
+            TupleReadBack,
+            new[] { "FF 7", "C328 8", "61C0AF 9" });
+        string[] integers = { "(unhex('FF'), 7)", "(unhex('C328'), -1)", "(unhex('61C0AF'), 7)" };
+        string[] integersRead = { "FF 7", "C328 -1", "61C0AF 7" };
+        yield return SiblingCase("Tuple(String, Int32)", "Tuple(String, LowCardinality(Int32))", integers, TupleReadBack, integersRead, LowCardinalitySettings);
+        yield return SiblingCase("Tuple(String, LowCardinality(Int32))", "Tuple(String, Int32)", integers, TupleReadBack, integersRead, LowCardinalitySettings);
+        yield return SiblingCase(
+            $"Map(String, {Enum})",
+            "Map(String, Int8)",
+            new[] { "map(unhex('FF'), 'a', unhex('C328'), 'b')", "map()", "map(unhex('61C0AF'), 'b')" },
+            "concat(hex(arrayStringConcat(mapKeys(value), ',')), ' ', toString(mapValues(value)))",
+            new[] { "FF2CC328 [1,2]", " []", "61C0AF [2]" });
+        yield return SiblingCase(
+            $"Array(Tuple(String, {Enum}))",
+            "Array(Tuple(String, Int8))",
+            new[] { "[(unhex('FF'), 'a'), (unhex('C328'), 'b')]", "[]", "[(unhex('61C0AF'), 'b')]" },
+            "concat(hex(arrayStringConcat(arrayMap(x -> x.1, value), ',')), ' ', toString(arrayMap(x -> x.2, value)))",
+            new[] { "FF2CC328 [1,2]", " []", "61C0AF [2]" });
+        yield return SiblingCase(
+            $"Tuple(LowCardinality(String), Tuple(String, {Enum}))",
+            "Tuple(String, Tuple(String, Int8))",
+            new[] { "(unhex('FE'), (unhex('FF'), 'a'))", "(unhex('C328'), (unhex('80'), 'b'))", "(unhex('61C0AF'), (unhex('C0'), 'a'))" },
+            "concat(hex(value.1), ' ', hex(value.2.1), ' ', toString(value.2.2))",
+            new[] { "FE FF 1", "C328 80 2", "61C0AF C0 1" });
+    }
+
+    // As SiblingCases, for a Nullable(Tuple) on either side.
+    public static IEnumerable<TestCaseData> NullableTupleSiblingCases()
+    {
+        const string Enum = "Enum8('a' = 1, 'b' = 2)";
+        const string ReadBack = "if(isNull(value), 'NULL', concat(hex(tupleElement(assumeNotNull(value), 1)), ' ', toString(tupleElement(assumeNotNull(value), 2))))";
+        yield return SiblingCase(
+            $"Nullable(Tuple(String, {Enum}))",
+            "Nullable(Tuple(String, Int8))",
+            new[] { "(unhex('FF'), 'a')", "(unhex('C328'), 'b')", "(unhex('61C0AF'), 'a')" },
+            ReadBack,
+            new[] { "FF 1", "C328 2", "61C0AF 1" },
+            NullableTupleSettings);
+        yield return SiblingCase(
+            $"Nullable(Tuple(String, {Enum}))",
+            "Nullable(Tuple(String, Int8))",
+            new[] { "(unhex('FF'), 'a')", "NULL", "(unhex('61C0AF'), 'b')" },
+            ReadBack,
+            new[] { "FF 1", "NULL", "61C0AF 2" },
+            NullableTupleSettings);
+        yield return SiblingCase(
+            "Tuple(String)",
+            "Nullable(Tuple(String))",
+            new[] { "tuple(unhex('FF'))", "tuple(unhex('C328'))", "tuple(unhex('61C0AF'))" },
+            "hex(tupleElement(assumeNotNull(value), 1))",
+            new[] { "FF", "C328", "61C0AF" },
+            NullableTupleSettings);
+    }
+
     public static IEnumerable<TestCaseData> TimeCases()
     {
         yield return Case("Time64(3)", "Time64(6)", ("'01:02:03.456'", "01:02:03.456000"), ("'-00:00:00.001'", "-00:00:00.001000"));
@@ -141,6 +232,83 @@ public class DecodedColumnInsertIntegrationTests
     [TestCaseSource(nameof(StringCases))]
     public Task InsertAsync_StringReadIntoAnotherTypeOfAString_StoresItsBytes(string source, string target, string literal, string readBack, string expected)
         => AssertReadsBackAsync(source, target, literal, readBack, expected);
+
+    /// <summary>
+    /// A column that a query read, with a <c>String</c> part that holds bytes that are not UTF-8, next to a part of
+    /// another type (an <c>Enum8</c> into an <c>Int8</c>, a <c>BFloat16</c> into a <c>Float32</c>, a <c>DateTime</c> into
+    /// a <c>UInt32</c>, a <c>LowCardinality</c> added or removed), also in a <c>Map</c>, an <c>Array</c> and a nested
+    /// <c>Tuple</c>: the server stores the bytes of the <c>String</c> part. The insert sends two rows in each block, so a
+    /// block starts after row 0.
+    /// </summary>
+    [TestCaseSource(nameof(SiblingCases))]
+    public Task InsertAsync_ColumnReadWithAStringNextToAPartOfAnotherType_StoresTheStringBytes(
+        string source,
+        string target,
+        string[] literals,
+        string readBack,
+        string[] expected,
+        IReadOnlyDictionary<string, string> settings)
+        => AssertStoresInBlocksAsync(source, target, literals, readBack, expected, settings);
+
+    /// <summary>
+    /// As the test above, for a <c>Nullable(Tuple)</c> with and without a NULL row, and for a <c>Tuple</c> into a
+    /// <c>Nullable(Tuple)</c>.
+    /// </summary>
+    [TestCaseSource(nameof(NullableTupleSiblingCases))]
+    [RequiresServerFeature(TcpFeature.NullableTuple)]
+    public Task InsertAsync_NullableTupleReadWithAStringNextToAPartOfAnotherType_StoresTheStringBytes(
+        string source,
+        string target,
+        string[] literals,
+        string readBack,
+        string[] expected,
+        IReadOnlyDictionary<string, string> settings)
+        => AssertStoresInBlocksAsync(source, target, literals, readBack, expected, settings);
+
+    // Reads the source rows through one connection and inserts the block through the client, two rows in each block.
+    private static async Task AssertStoresInBlocksAsync(
+        string source,
+        string target,
+        string[] literals,
+        string readBack,
+        string[] expected,
+        IReadOnlyDictionary<string, string> settings)
+    {
+        TcpServerFixture.SkipIfCloudLocksASetting(settings);
+        string sourceTable = UniqueTableName();
+        string targetTable = UniqueTableName();
+        await using ClickHouseTcpConnection connection = await TcpServerFixture.ConnectAsync(None);
+        try
+        {
+            await CreateAsync(connection, sourceTable, targetTable, source, target, literals, settings);
+
+            await using (ClickHouseTcpClient client = TcpServerFixture.CreateClient())
+            {
+                var options = new ClickHouseTcpInsertOptions { Settings = settings, MaxRowsPerBlock = 2 };
+                await foreach (Block block in connection.QueryAsync($"SELECT id, value FROM {sourceTable} ORDER BY id", settings: settings, cancellationToken: None))
+                {
+                    Assert.That(block.RowCount, Is.GreaterThan(2), "the insert splits the block");
+                    await client.InsertAsync($"INSERT INTO {targetTable} (id, value) VALUES", new[] { block[0], block[1] }, options, None);
+                }
+            }
+
+            var stored = new List<string>();
+            await foreach (Block block in connection.QueryAsync($"SELECT {readBack} FROM {targetTable} ORDER BY id", settings: settings, cancellationToken: None))
+            {
+                for (int row = 0; row < block.RowCount; row++)
+                {
+                    stored.Add((string)block[0].GetValue(row));
+                }
+            }
+
+            Assert.That(stored, Is.EqualTo(expected));
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {sourceTable}");
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {targetTable}");
+        }
+    }
 
     // Reads the source row through one connection, inserts its block through another, and reads back the expression.
     private static async Task AssertReadsBackAsync(string source, string target, string literal, string readBack, string expected)
@@ -281,6 +449,10 @@ public class DecodedColumnInsertIntegrationTests
             await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {targetTable}");
         }
     }
+
+    private static TestCaseData SiblingCase(string source, string target, string[] literals, string readBack, string[] expected, IReadOnlyDictionary<string, string> settings = null)
+        => new TestCaseData(source, target, literals, readBack, expected, settings)
+            .SetArgDisplayNames(source, target, Array.IndexOf(literals, "NULL") < 0 ? "no NULL row" : "a NULL row");
 
     private static TestCaseData PartCase(string source, string target, string literal, string readBack, string expected)
         => new TestCaseData(source, target, literal, readBack, expected).SetArgDisplayNames(source, target);

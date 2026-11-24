@@ -13,8 +13,9 @@ namespace ClickHouse.Driver.Tcp.Format;
 /// <summary>
 /// How an insert writes one column, in the three phases of a column write (begin, state prefix, body) for a range of
 /// rows. A column that the codec writes from its own storage (a decoded column, or a dense column in the wire layout of
-/// the type) goes to the codec, with no conversion. Every other column goes to the converter tree of its
-/// CLR type (<see cref="ConverterDerivation"/>), over a value source of its rows.
+/// the type) goes to the codec, with no conversion. A column that a query read as another type is written part by part
+/// (<see cref="ConverterDerivation.PlanDecodedPart"/>). Every other column goes to the converter tree of its CLR type
+/// (<see cref="ConverterDerivation"/>), over a value source of its rows.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -79,51 +80,62 @@ internal abstract class InsertColumnWrite
 
     /// <summary>
     /// The write of <paramref name="values"/> as <paramref name="typeName"/>, as the other overload gives it. A column that
-    /// a query read as another type, where a write through its CLR type would change its values, is written part by part
-    /// (<see cref="ConverterDerivation.PlanDecodedPart"/>). A part whose canonical values mean other values in the target
-    /// (a <c>DateTime64</c> or a <c>Time64</c> of another scale, an <c>Enum</c> with other members) is converted through
-    /// the meaning of its values; a <c>String</c> or <c>FixedString</c> part into another type of a string through its
-    /// bytes; and the codecs write the other parts from their storage. The reason is set when such a column cannot be
-    /// written.
+    /// a query read as another type is taken apart along the two types (<see cref="ConverterDerivation.PlanDecodedPart"/>),
+    /// and each part is decided from its types and from the column at that place. A part whose canonical values mean
+    /// other values in the target (a <c>DateTime64</c> or a <c>Time64</c> of another scale, an <c>Enum</c> with other
+    /// members) is converted through the meaning of its values; a <c>String</c> or <c>FixedString</c> part into another
+    /// type of a string through its bytes. The offsets of an <c>Array</c> or a <c>Map</c>, the null map of a
+    /// <c>Nullable</c> and each part of the same type are written from their storage. A part that has no structure in
+    /// common with its target is written by its codec when the codec writes it from its storage, else through the
+    /// converter tree of its CLR type. The reason is set when a part of such a column cannot be written.
     /// </summary>
     /// <param name="codec">The codec of the target type, resolved with <paramref name="context"/>.</param>
     /// <param name="values">The column that the caller gives.</param>
     /// <param name="typeName">The target type.</param>
     /// <param name="context">The resolution context of the target (its session timezone).</param>
     /// <param name="derivation">The converter derivation of the codec registry.</param>
-    /// <param name="refusal">Why a column that a query read as another type cannot be converted, or null.</param>
+    /// <param name="refusal">Why a part of a column that a query read as another type cannot be written, or null.</param>
     /// <returns>The write, or <see langword="null"/> when the column cannot be written as the type.</returns>
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     public static InsertColumnWrite For(IColumnCodec codec, IColumn values, string typeName, in ResolveContext context, ConverterDerivation derivation, out string refusal)
     {
         refusal = null;
-        bool stored = codec.WritesFromStorage(values);
         string source = SourceType(values);
-        if (source is not null && !string.Equals(source, typeName, StringComparison.Ordinal))
+        if (source is not null && !string.Equals(source, typeName, StringComparison.Ordinal) && derivation.IsReadColumn(values, source, typeName, in context))
         {
-            switch (derivation.RouteOfReadColumn(values, source, typeName, in context))
+            // A column of the same type, or of a type with no structure in common with the target, is written as any
+            // other column.
+            DecodedPartPlan plan = derivation.PlanDecodedPart(source, typeName);
+            if (plan.Kind != DecodedPart.Kept)
             {
-                case ReadColumnRoute.Parts:
-                    return ReadColumnWrite(codec, values, source, typeName, in context, derivation, hidden: null, out refusal);
-
-                case ReadColumnRoute.PartsUnderNull:
-                    InsertColumnWrite parts = ReadColumnWrite(codec, values, source, typeName, in context, derivation, hidden: null, out _);
-                    if (parts is not null)
-                    {
-                        return parts;
-                    }
-
-                    break;
+                return PlannedWrite(plan, codec, values, source, typeName, in context, derivation, hidden: null, out refusal);
             }
         }
 
-        return stored ? new CodecWrite(codec) : ConverterTreeWrite(values, typeName, in context, derivation, hidden: null, out _);
+        return codec.WritesFromStorage(values) ? new CodecWrite(codec) : ConverterTreeWrite(values, typeName, in context, derivation, hidden: null, out _);
     }
 
-    // The write of one part of a column that a query read as another type. hidden: the rows of the part that an enclosing
-    // Nullable hides, or null when no row is hidden.
+    /// <summary>
+    /// The type that a column says it holds: its type name, or for an array that CreateArray builds (which has none) the
+    /// array of the type of its inner column.
+    /// </summary>
+    /// <param name="values">The column.</param>
+    /// <returns>The type, or null when the column names no type.</returns>
+    internal static string SourceType(IColumn values)
+    {
+        if (values.TypeName is { Length: > 0 } typeName)
+        {
+            return typeName;
+        }
+
+        return values is IDenseArrayColumn dense && SourceType(dense.Inner) is string inner ? $"Array({inner})" : null;
+    }
+
+    // The write of one part of a column that a query read as another type, from the plan of the part. hidden: the rows of
+    // the part that an enclosing Nullable hides, or null when no row is hidden.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
-    private static InsertColumnWrite ReadColumnWrite(
+    private static InsertColumnWrite PlannedWrite(
+        DecodedPartPlan plan,
         IColumnCodec codec,
         IColumn values,
         string source,
@@ -134,12 +146,17 @@ internal abstract class InsertColumnWrite
         out string refusal)
     {
         refusal = null;
-        DecodedPartPlan plan = derivation.PlanDecodedPart(source, target, hidden is not null);
+
+        // A composite whose parts all keep their storage, with no hidden row: the codec of the target writes the bytes that
+        // the write of each part gives.
+        bool composite = plan.Kind is DecodedPart.Tuple or DecodedPart.Array or DecodedPart.Map;
+        if (composite && plan.KeepsStorage && hidden is null && codec.WritesFromStorage(values))
+        {
+            return new CodecWrite(codec);
+        }
+
         switch (plan.Kind)
         {
-            case DecodedPart.Kept:
-                return KeptWrite(codec, values, target, plan.SameType, in context, derivation, hidden, out refusal);
-
             case DecodedPart.Converted:
                 return derivation.TryDeriveMeaningConversion(source, target, in context, out ColumnReader reader, out ColumnWriter writer, out refusal)
                     ? DecodedConversions.GetOrAdd(reader.ValueType, BuildDecodedConversionFactory)(reader, writer, hidden)
@@ -189,15 +206,17 @@ internal abstract class InsertColumnWrite
                 refusal = plan.Refusal;
                 return null;
 
+            // The same type, a type with no structure in common with the target, or a composite whose column is not of the
+            // class that a query of the type reads.
             default:
-                refusal = $"A column read as {source} is written into {target} only from the column that a query of {source} reads.";
-                return null;
+                return KeptWrite(codec, values, target, plan.SameType, in context, derivation, hidden, out refusal);
         }
     }
 
-    // A part whose values keep their meaning: its codec writes it from its storage. A part of another type under hidden rows
-    // goes through the converter tree with those rows marked, so a hidden value is not converted into the target type; the
-    // codec writes it when no tree does. A part of the same type keeps the bytes of its hidden values.
+    // A part of the same type, or with no structure in common with its target: its codec writes it from its storage. A part
+    // of another type under hidden rows goes through the converter tree with those rows marked, so a hidden value is not
+    // converted into the target type; the codec writes it when no tree does. A part of the same type keeps the bytes of
+    // its hidden values.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     private static InsertColumnWrite KeptWrite(
         IColumnCodec codec,
@@ -228,7 +247,7 @@ internal abstract class InsertColumnWrite
 
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     private static InsertColumnWrite PartWrite(IColumn values, string source, string target, in ResolveContext context, ConverterDerivation derivation, HiddenRows hidden, out string refusal)
-        => ReadColumnWrite(derivation.ResolvePart(target, in context), values, source, target, in context, derivation, hidden, out refusal);
+        => PlannedWrite(derivation.PlanDecodedPart(source, target), derivation.ResolvePart(target, in context), values, source, target, in context, derivation, hidden, out refusal);
 
     // The converter tree of the column's CLR type, or of the first suggested CLR type of the target type that the column
     // implements when it has no single CLR type. hidden: the rows that the tree writes as marked, or null.
@@ -262,18 +281,6 @@ internal abstract class InsertColumnWrite
         }
 
         return TreeWrite(tree, hidden);
-    }
-
-    // The type that a column says it holds: its type name, or for an array that CreateArray builds (which has none) the
-    // array of the type of its inner column. Null when the column names no type.
-    private static string SourceType(IColumn values)
-    {
-        if (values.TypeName is { Length: > 0 } typeName)
-        {
-            return typeName;
-        }
-
-        return values is IDenseArrayColumn dense && SourceType(dense.Inner) is string inner ? $"Array({inner})" : null;
     }
 
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]

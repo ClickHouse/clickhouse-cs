@@ -348,6 +348,45 @@ public class DecodedColumnConversionTests
         => AssertWritesAsync(source, target, rows, sourceBytes, expected, expectedFromRow1, storageOfTheTarget: null);
 
     /// <summary>
+    /// A column that a query read, with a <c>String</c> part next to a part of another type that keeps the meaning of its
+    /// values (an <c>Enum8</c> into an <c>Int8</c>, an <c>Int32</c> into a <c>Nullable(Int32)</c>), also in a <c>Map</c>,
+    /// an <c>Array</c> and a nested <c>Tuple</c>, and a <c>Tuple</c> into a <c>Nullable(Tuple)</c>: the <c>String</c> part
+    /// keeps its bytes, also bytes that are not UTF-8. All rows, and the rows from row 1.
+    /// </summary>
+    [TestCaseSource(nameof(SiblingCases))]
+    public Task Write_DecodedCompositeWithAPartOfAnotherType_WritesTheStringBytes(
+        string source,
+        string target,
+        int rows,
+        string sourceBytes,
+        string expected,
+        string expectedFromRow1)
+        => AssertWritesAsync(source, target, rows, sourceBytes, expected, expectedFromRow1);
+
+    /// <summary>
+    /// A <c>Nullable(Tuple)</c> with a NULL row and one with no NULL row, with the same values in rows 1 and 2: the insert
+    /// writes the same bytes for those rows, and the <c>String</c> part keeps its bytes in both.
+    /// </summary>
+    [Test]
+    public async Task Write_DecodedNullableTupleWithAndWithoutANullRow_WritesTheSameBytesForTheSameRows()
+    {
+        const string source = "Nullable(Tuple(String, Enum8('a' = 1, 'b' = 2)))";
+        const string target = "Nullable(Tuple(String, Int8))";
+        const string values = "01FF0002C328" + "010201";
+        using IColumn withNull = await ConverterHarness.ReadBackAsync(source, Convert.FromHexString("010000" + values), 3);
+        using IColumn withoutNull = await ConverterHarness.ReadBackAsync(source, Convert.FromHexString("000000" + values), 3);
+
+        byte[] fromWithNull = await WriteAsync(withNull, target, 1, 2, prefix: true);
+        byte[] fromWithoutNull = await WriteAsync(withoutNull, target, 1, 2, prefix: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Convert.ToHexString(fromWithoutNull), Is.EqualTo(Convert.ToHexString(fromWithNull)));
+            Assert.That(Convert.ToHexString(fromWithNull), Is.EqualTo("0000" + "0002C328" + "0201"));
+        });
+    }
+
+    /// <summary>
     /// A <c>FixedString</c> takes the bytes of a <c>String</c> that a query read only when each value has its width, as
     /// for any <c>byte[]</c>. A column of <c>string</c> values that a caller built goes by the text rules, which pad a
     /// shorter value with zero bytes.
@@ -548,6 +587,52 @@ public class DecodedColumnConversionTests
             "0001000100000000000000020000000000000003000000000000000161016B01637B00000000000000141A99BE1C0000003EFEFFFFFFFFFFFF010000000000000002000000000000000300000000000000",
             "0001000100000000000000020000000000000003000000000000000161016B01637B000000000000003EFEFFFFE8030000000000000000000000000000B80B000000000000",
             "010001000000000000000200000000000000016B0163000000003EFEFFFF0000000000000000B80B000000000000");
+    }
+
+    public static IEnumerable<TestCaseData> SiblingCases()
+    {
+        yield return Bytes(
+            "Tuple(String, Enum8('a' = 1, 'b' = 2))",
+            "Tuple(String, Int8)",
+            3,
+            "01FF0002C328" + "010201",
+            "01FF0002C328" + "010201",
+            "0002C328" + "0201");
+        yield return Bytes(
+            "Tuple(String, Int32)",
+            "Tuple(String, Nullable(Int32))",
+            3,
+            "01FF0002C328" + "07000000FFFFFFFF05000000",
+            "01FF0002C328" + "000000" + "07000000FFFFFFFF05000000",
+            "0002C328" + "0000" + "FFFFFFFF05000000");
+        yield return Bytes(
+            "Map(String, Enum8('a' = 1, 'b' = 2))",
+            "Map(String, Int8)",
+            3,
+            "010000000000000001000000000000000300000000000000" + "01FF0002C328" + "010201",
+            "010000000000000001000000000000000300000000000000" + "01FF0002C328" + "010201",
+            "00000000000000000200000000000000" + "0002C328" + "0201");
+        yield return Bytes(
+            "Array(Tuple(String, Enum8('a' = 1, 'b' = 2)))",
+            "Array(Tuple(String, Int8))",
+            3,
+            "010000000000000001000000000000000300000000000000" + "01FF0002C328" + "010201",
+            "010000000000000001000000000000000300000000000000" + "01FF0002C328" + "010201",
+            "00000000000000000200000000000000" + "0002C328" + "0201");
+        yield return Bytes(
+            "Tuple(LowCardinality(String), Tuple(String, Enum8('a' = 1, 'b' = 2)))",
+            "Tuple(String, Tuple(String, Int8))",
+            3,
+            "0100000000000000" + "000600000000000003000000000000000001FF02C3280300000000000000010002" + "0180" + "00" + "01C0" + "010201",
+            "01FF0002C328" + "0180" + "00" + "01C0" + "010201",
+            "0002C328" + "0001C0" + "0201");
+        yield return Bytes(
+            "Tuple(String)",
+            "Nullable(Tuple(String))",
+            3,
+            "01FF0002C328",
+            "000000" + "01FF0002C328",
+            "0000" + "0002C328");
     }
 
     public static IEnumerable<TestCaseData> StringShapeCases()
