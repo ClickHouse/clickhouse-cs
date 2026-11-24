@@ -111,4 +111,29 @@ public class RefusalMessageTests
 
         Assert.That(message, Is.EqualTo(expected));
     }
+
+    /// <summary>
+    /// A column that a query read as another type, whose part the insert cannot write: the message names the type that the
+    /// column was read as, then the reason of the part.
+    /// </summary>
+    [Test]
+    public void InsertAsync_ReadColumnWithAPartThatCannotBeWritten_NamesTheReadTypeAndTheReasonOfThePart()
+    {
+        const string source = "Tuple(String, Int32)";
+        const string target = "Tuple(String, Int64)";
+        using Block block = ReadRulesTests.DecodeSample(source);
+        IColumn values = block[0];
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(target, Context);
+        InsertColumnWrite write = InsertColumnWrite.For(codec, values, target, Context, ConverterDerivation.Default, out string refusal);
+
+        string message = ClickHouseTcpConnection.DescribeUnconvertedColumn(new InsertColumn("value", target, codec, values, write: null), refusal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write, Is.Null, "the insert plan refuses the column");
+            Assert.That(message, Is.EqualTo(
+                "Column 'value' (Tuple(String, Int64)) was given a column that a query read as Tuple(String, Int32), and the insert writes such a column part by part. " +
+                "'Int64' cannot be written from System.Int32. It is written from: System.Int64."));
+        });
+    }
 }

@@ -1071,14 +1071,14 @@ internal sealed class ClickHouseTcpConnection : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Composes the message for a column that a query read as another type, whose values the insert cannot convert to the
-    /// target type.
+    /// Composes the message for a column that a query read as another type, which the insert writes part by part, when a
+    /// part cannot be written into the target type.
     /// </summary>
     /// <param name="slot">The plan slot: the target's name and type, and the column the caller supplied.</param>
-    /// <param name="refusal">Why the values cannot be converted.</param>
+    /// <param name="refusal">Why the part cannot be written.</param>
     /// <returns>The message.</returns>
     internal static string DescribeUnconvertedColumn(InsertColumn slot, string refusal)
-        => $"Column '{slot.Name}' ({slot.TypeName}) was given a column that a query read as another type, whose values it converts through their meaning (a time, a duration, a label). {refusal}";
+        => $"Column '{slot.Name}' ({slot.TypeName}) was given a column that a query read as {InsertColumnWrite.SourceType(slot.Values)}, and the insert writes such a column part by part. {refusal}";
 
     /// <summary>Composes a message naming the columns the caller failed to supply and the ones it supplied in excess.</summary>
     private static string DescribeSchemaMismatch(IReadOnlyList<IColumn> columns, Block schema, List<string> missing)
