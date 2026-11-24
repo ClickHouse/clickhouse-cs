@@ -588,16 +588,24 @@ insert completes before that block is released.
 - A column that a query of the same type read is written from the data it holds, with no
   conversion. So a `String` value that is not valid UTF-8 goes back to the server with the bytes
   that the server sent. An array column that `ClickHouseTcpColumn.CreateArray` builds over such a
-  column is written in the same way. A column that a query read as a `DateTime64` or `Time64` of
-  another scale, or as an `Enum8` or `Enum16` with other members, is converted through its values
-  (the instants, the durations and the labels); the insert refuses such a column of a scale above 7
-  unless the target has the same scale. In a `Tuple`, `Map`, `Array` or `Nullable`, only those parts
-  are converted, and the other parts keep the bytes that the server sent. A `String` column that a
-  query read, written into a `LowCardinality`, `Nullable` or `FixedString` column (also inside an
-  `Array`, `Map` or `Tuple`), is written from its bytes, so a value that is not valid UTF-8 keeps
-  them; a `FixedString(N)` column takes only values of exactly N bytes. A value that a NULL hides in
-  such a column (for example after `nullIf`) is not converted into another target type: the row gets
-  the placeholder of the target.
+  column is written in the same way. A column that a query read as another type is written part by
+  part: the insert takes the column apart where the two types have the same `Tuple`, `Map` or
+  `Array`, and where one of them has a `Nullable`, and writes each part as follows.
+  - A part of the same type keeps the bytes that the server sent. For example, a `String` next to an
+    `Enum8` that the target has as an `Int8` keeps its bytes.
+  - A part read as a `DateTime64` or `Time64` of another scale, or as an `Enum8` or `Enum16` with
+    other members, is converted through its values (the instants, the durations and the labels).
+    The insert refuses such a part of a scale above 7 unless the target has the same scale.
+  - A `String` or `FixedString` part written into a `LowCardinality`, `Nullable` or `FixedString`
+    type is written from its bytes, so a value that is not valid UTF-8 keeps them. A
+    `FixedString(N)` takes only values of exactly N bytes.
+  - Any other part is converted as the next item says. A `String` part that is converted so, for
+    example into a `Variant` or a `Dynamic`, goes through the text of its values, so a value that
+    is not valid UTF-8 does not keep its bytes.
+
+  A value that a NULL hides in such a column (for example after `nullIf`) is not converted into
+  another target type: the row gets the placeholder of the target. When the insert cannot write a
+  part, it refuses the column before it sends a row, and the message gives the reason.
 - Any other column is converted from the CLR type of its values to the target type, with the
   mappings of [Type mapping: writing to ClickHouse](#type-map-writing) and the
   [write rules](#write-rules). `ClickHouseTcpTypes.CanWrite` gives the answer of this conversion. A

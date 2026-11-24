@@ -66,16 +66,18 @@ Two layers handle a column type:
   writers (`ColumnWriter<T>`), or a refusal with a reason. Every tier uses it: `Block.ReadAs<T>`, `QueryAsync<T>`,
   `InsertAsync` (through `Format/InsertColumnWrite.For`, which gives a storage column to the codec), `InsertRowsAsync<T>`,
   `InsertRowsAsync` with `object[]` rows, and `ClickHouseTcpTypes.CanRead`/`CanWrite`. A column that a query read as
-  a type whose values mean other values in the target (another scale, other enum members) is written part by part
-  (`ConverterDerivation.PlanDecodedPart`, `InsertColumnWrite.For`): only the parts whose values mean other values are
-  converted through the meaning of their values (read as `DateTimeOffset`, `TimeSpan` or the label, then written); a
-  `String` or `FixedString` part into another type of a string (another width, `Nullable`, `LowCardinality`) is read
-  as `byte[]` and written through the `byte[]` tree, so no byte goes through text; the offsets of an `Array` or a
-  `Map`, the null map of a `Nullable` and every other part are written from their storage, so their bytes do not change
-  (`Types/Converters/ConverterDerivation.DecodedColumns.cs`). A row that a NULL of an enclosing `Nullable` hides (also
-  the elements of an `Array` or a `Map` in that row) is marked: every part of another type writes the placeholder of its
-  target there and does not read, convert or check the hidden value; a part of the same type keeps its stored bytes. A
-  read column of another type that holds a `Nullable` is written part by part for this reason too.
+  another type is written part by part (`ConverterDerivation.PlanDecodedPart`, `InsertColumnWrite.For`), decided at each
+  part from the types of the part and the column at that place: a `Tuple`, `Map` or `Array` on both sides and a
+  `Nullable` on either side are taken apart; a part of the same type is written from its storage; a part whose values
+  mean other values in the target (another scale, other enum members) is converted through the meaning of its values
+  (read as `DateTimeOffset`, `TimeSpan` or the label, then written); a `String` or `FixedString` part into another type
+  of a string (another width, `Nullable`, `LowCardinality`) is read as `byte[]` and written through the `byte[]` tree, so
+  no byte goes through text; the offsets of an `Array` or a `Map` and the null map of a `Nullable` are written from their
+  storage, so their bytes do not change; any other part goes to its codec when the codec writes it from its storage,
+  else to the converter tree of its CLR type (`Types/Converters/ConverterDerivation.DecodedColumns.cs`). A row that a
+  NULL of an enclosing `Nullable` hides (also the elements of an `Array` or a `Map` in that row) is marked: every part of
+  another type writes the placeholder of its target there and does not read, convert or check the hidden value; a part
+  of the same type keeps its stored bytes.
 
 When you add or change a type, consider every path that touches it:
 
