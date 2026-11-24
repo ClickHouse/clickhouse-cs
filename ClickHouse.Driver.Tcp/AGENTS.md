@@ -72,8 +72,9 @@ Two layers handle a column type:
   mean other values in the target (another scale, other enum members) is converted through the meaning of its values
   (read as `DateTimeOffset`, `TimeSpan` or the label, then written); a `String` or `FixedString` part into another type
   of a string (another width, `Nullable`, `LowCardinality`) is read as `byte[]` and written through the `byte[]` tree, so
-  no byte goes through text; the offsets of an `Array` or a `Map` and the null map of a `Nullable` are written from their
-  storage, so their bytes do not change; any other part goes to its codec when the codec writes it from its storage,
+  no byte goes through text; a `String` part into a `Variant` whose write places a `string` and a `byte[]` in the same
+  `String` alternative (`VariantWriter.AlternativeOf`) is read as `byte[]` too; the offsets of an `Array` or a `Map` and
+  the null map of a `Nullable` are written from their storage, so their bytes do not change; any other part goes to its codec when the codec writes it from its storage,
   else to the converter tree of its CLR type (`Types/Converters/ConverterDerivation.DecodedColumns.cs`). A row that a
   NULL of an enclosing `Nullable` hides (also the elements of an `Array` or a `Map` in that row) is marked: every part of
   another type writes the placeholder of its target there and does not read, convert or check the hidden value; a part

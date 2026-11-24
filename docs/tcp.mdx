@@ -599,9 +599,14 @@ insert completes before that block is released.
   - A `String` or `FixedString` part written into a `LowCardinality`, `Nullable` or `FixedString`
     type is written from its bytes, so a value that is not valid UTF-8 keeps them. A
     `FixedString(N)` takes only values of exactly N bytes.
+  - A `String` part (also in `Nullable` or `LowCardinality`) written into a `Variant` whose `String`
+    alternative takes both a text and a `byte[]` value, such as `Variant(String, Int64)`, is written
+    from its bytes into that alternative, so a value that is not valid UTF-8 keeps them. A NULL row
+    becomes the NULL of the `Variant`.
   - Any other part is converted as the next item says. A `String` part that is converted so, for
-    example into a `Variant` or a `Dynamic`, goes through the text of its values, so a value that
-    is not valid UTF-8 does not keep its bytes.
+    example into a `Dynamic`, or into a `Variant` that places text in a `FixedString(N)` or a
+    `LowCardinality(String)` alternative or places a `byte[]` in an `Array(UInt8)` alternative, goes
+    through the text of its values, so a value that is not valid UTF-8 does not keep its bytes.
 
   A value that a NULL hides in such a column (for example after `nullIf`) is not converted into
   another target type: the row gets the placeholder of the target. When the insert cannot write a
