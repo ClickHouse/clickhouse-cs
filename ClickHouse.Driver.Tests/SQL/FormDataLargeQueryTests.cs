@@ -17,6 +17,7 @@ namespace ClickHouse.Driver.Tests.SQL;
 /// SQL text larger than the server's default form-field limit (<c>http_max_field_value_size</c>, 128 KiB)
 /// sent with <c>UseFormDataParameters=true</c>.
 /// </summary>
+[Category("Cloud")]
 public class FormDataLargeQueryTests : AbstractConnectionTestFixture
 {
     private const int FormFieldLimit = 128 * 1024;
@@ -63,7 +64,7 @@ public class FormDataLargeQueryTests : AbstractConnectionTestFixture
     {
         const int rows = 20_000;
         var table = CreateTableName();
-        await client.ExecuteNonQueryAsync($"CREATE TABLE {table} (id UInt32, s String) ENGINE = Memory");
+        await client.ExecuteNonQueryAsync($"CREATE TABLE {table} (id UInt32, s String) ENGINE = MergeTree ORDER BY id");
 
         // About 760 KiB of inline rows, which spans several form fields.
         var sql = new StringBuilder($"INSERT INTO {table} FORMAT JSONEachRow\n");
