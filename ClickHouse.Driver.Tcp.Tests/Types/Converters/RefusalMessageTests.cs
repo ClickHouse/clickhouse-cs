@@ -136,4 +136,30 @@ public class RefusalMessageTests
                 "'Int64' cannot be written from System.Int32. It is written from: System.Int64."));
         });
     }
+
+    /// <summary>
+    /// A column that a query read as a <c>DateTime64</c>, into a <c>Time64</c>: the message names the read type, says that
+    /// the values are instants and the target holds durations, and names the two ways to insert the values.
+    /// </summary>
+    [Test]
+    public void InsertAsync_ReadInstantIntoADuration_NamesTheTwoKindsOfCountAndWhatToDo()
+    {
+        const string source = "Array(DateTime64(3))";
+        const string target = "Array(Time64(6))";
+        using Block block = ReadRulesTests.DecodeSample(source);
+        IColumn values = block[0];
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(target, Context);
+        InsertColumnWrite write = InsertColumnWrite.For(codec, values, target, Context, ConverterDerivation.Default, out string refusal);
+
+        string message = ClickHouseTcpConnection.DescribeUnconvertedColumn(new InsertColumn("value", target, codec, values, write: null), refusal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write, Is.Null, "the insert plan refuses the column");
+            Assert.That(message, Is.EqualTo(
+                "Column 'value' (Array(Time64(6))) was given a column that a query read as Array(DateTime64(3)), and the insert writes such a column part by part. " +
+                "A value of DateTime64(3) is an instant and a value of Time64(6) is a duration, so a column read as DateTime64(3) is not written into Time64(6). " +
+                "Convert the values in the query, or insert the counts as a column of System.Int64 values."));
+        });
+    }
 }

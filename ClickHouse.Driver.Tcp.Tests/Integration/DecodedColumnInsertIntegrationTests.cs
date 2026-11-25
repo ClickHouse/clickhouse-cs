@@ -283,6 +283,26 @@ public class DecodedColumnInsertIntegrationTests
         yield return Case("Time64(3)", "Time64(6)", ("'01:02:03.456'", "01:02:03.456000"), ("'-00:00:00.001'", "-00:00:00.001000"));
     }
 
+    // A DateTime64 into a Time64, and the reverse, at the top level, in Nullable, as an Array element, as a Tuple element and
+    // as a Map value: the source type, the target type, and the SQL literal of the source row.
+    public static IEnumerable<TestCaseData> InstantAndDurationCases()
+    {
+        const string Instant = "DateTime64(3, 'UTC')";
+        const string Duration = "Time64(3)";
+        const string Time = "'1970-01-01 00:00:02.345'";
+        const string Span = "'00:00:02.345'";
+        yield return InstantCase(Instant, "Time64(6)", Time);
+        yield return InstantCase(Duration, Instant, Span);
+        yield return InstantCase($"Nullable({Instant})", $"Nullable({Duration})", Time);
+        yield return InstantCase($"Nullable({Duration})", $"Nullable({Instant})", Span);
+        yield return InstantCase($"Array({Instant})", $"Array({Duration})", $"[{Time}]");
+        yield return InstantCase($"Array({Duration})", $"Array({Instant})", $"[{Span}]");
+        yield return InstantCase($"Tuple({Instant}, Int32)", $"Tuple({Duration}, Int32)", $"({Time}, 7)");
+        yield return InstantCase($"Tuple({Duration}, Int32)", $"Tuple({Instant}, Int32)", $"({Span}, 7)");
+        yield return InstantCase($"Map(String, {Instant})", $"Map(String, {Duration})", $"{{'k': {Time}}}");
+        yield return InstantCase($"Map(String, {Duration})", $"Map(String, {Instant})", $"{{'k': {Span}}}");
+    }
+
     [TestCaseSource(nameof(Cases))]
     public Task InsertAsync_ColumnReadAsARelatedType_StoresTheValuesOfTheSource(string source, string target, string[] literals, string[] expected)
         => AssertStoresTheValuesAsync(source, target, literals, expected, settings: null);
@@ -569,6 +589,112 @@ public class DecodedColumnInsertIntegrationTests
             await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {targetTable}");
         }
     }
+
+    /// <summary>
+    /// A column that a query read as a <c>DateTime64</c> (an instant), into a <c>Time64</c> (a duration), or the reverse,
+    /// also in <c>Nullable</c>, <c>Array</c>, <c>Tuple</c> and <c>Map</c>: the insert refuses the column before it sends a
+    /// block, the target stores nothing, and the same connection runs the next query.
+    /// </summary>
+    [TestCaseSource(nameof(InstantAndDurationCases))]
+    [RequiresServerFeature(TcpFeature.Time)]
+    public async Task InsertAsync_ColumnReadAsAnInstantIntoADurationOrTheReverse_IsRefusedAndKeepsTheConnection(string source, string target, string literal)
+    {
+        TcpServerFixture.SkipIfCloudLocksASetting(TimeSettings);
+        string sourceTable = UniqueTableName();
+        string targetTable = UniqueTableName();
+        await using ClickHouseTcpConnection connection = await TcpServerFixture.ConnectAsync(None);
+        try
+        {
+            await CreateAsync(connection, sourceTable, targetTable, source, target, new[] { literal }, TimeSettings);
+
+            ArgumentException refusal = null;
+            await using (ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None))
+            {
+                await foreach (Block block in reader.QueryAsync($"SELECT id, value FROM {sourceTable} ORDER BY id", settings: TimeSettings, cancellationToken: None))
+                {
+                    refusal = Assert.ThrowsAsync<ArgumentException>(
+                        async () => await connection.InsertAsync($"INSERT INTO {targetTable} (id, value) VALUES", new[] { block[0], block[1] }, settings: TimeSettings, cancellationToken: None));
+                }
+            }
+
+            List<string> stored = await ReadStringsAsync(connection, targetTable, TimeSettings);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(refusal?.ParamName, Is.EqualTo("columns"));
+                Assert.That(refusal?.Message, Does.Contain($"was given a column that a query read as {source}"));
+                Assert.That(refusal?.Message, Does.Contain("is an instant").And.Contain("is a duration"));
+                Assert.That(refusal?.Message, Does.Contain("Convert the values in the query, or insert the counts as a column of System.Int64 values."));
+                Assert.That(stored, Is.Empty, "nothing may land from a column that could not be written");
+            });
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {sourceTable}");
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {targetTable}");
+        }
+    }
+
+    /// <summary>
+    /// Counts that the caller gives as <c>long</c> values go into a <c>Time64</c> and a <c>DateTime64</c> as counts, and a
+    /// <c>DateTime64</c> that a query read goes into an <c>Int64</c> as its count.
+    /// </summary>
+    [Test]
+    [RequiresServerFeature(TcpFeature.Time)]
+    public async Task InsertAsync_CountsIntoATimeType_StoresTheCounts()
+    {
+        TcpServerFixture.SkipIfCloudLocksASetting(TimeSettings);
+        string sourceTable = UniqueTableName();
+        string targetTable = UniqueTableName();
+        await using ClickHouseTcpConnection connection = await TcpServerFixture.ConnectAsync(None);
+        try
+        {
+            await CreateAsync(connection, sourceTable, targetTable, "DateTime64(3, 'UTC')", "Int64", new[] { "'1970-01-01 00:00:02.345'" }, TimeSettings);
+            await using (ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None))
+            {
+                await foreach (Block block in reader.QueryAsync($"SELECT id, value FROM {sourceTable} ORDER BY id", settings: TimeSettings, cancellationToken: None))
+                {
+                    await connection.InsertAsync($"INSERT INTO {targetTable} (id, value) VALUES", new[] { block[0], block[1] }, settings: TimeSettings, cancellationToken: None);
+                }
+            }
+
+            string durations = UniqueTableName();
+            string instants = UniqueTableName();
+            try
+            {
+                await ExecuteAsync(connection, $"CREATE TABLE {durations} (id UInt32, value Time64(3)) ENGINE = Memory", TimeSettings);
+                await ExecuteAsync(connection, $"CREATE TABLE {instants} (id UInt32, value DateTime64(3, 'UTC')) ENGINE = Memory", TimeSettings);
+                IColumn[] counts = { ClickHouseTcpColumn.Create("id", new uint[] { 0 }), ClickHouseTcpColumn.Create("value", new long[] { 2345 }) };
+                await connection.InsertAsync($"INSERT INTO {durations} (id, value) VALUES", counts, settings: TimeSettings, cancellationToken: None);
+                await connection.InsertAsync($"INSERT INTO {instants} (id, value) VALUES", counts, settings: TimeSettings, cancellationToken: None);
+
+                List<string> int64 = await ReadStringsAsync(connection, targetTable, TimeSettings);
+                List<string> time64 = await ReadStringsAsync(connection, durations, TimeSettings);
+                List<string> dateTime64 = await ReadStringsAsync(connection, instants, TimeSettings);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(int64, Is.EqualTo(new[] { "2345" }));
+                    Assert.That(time64, Is.EqualTo(new[] { "00:00:02.345" }));
+                    Assert.That(dateTime64, Is.EqualTo(new[] { "1970-01-01 00:00:02.345" }));
+                    Assert.That(ClickHouseTcpTypes.CanWrite("Time64(6)", typeof(long)), Is.True);
+                });
+            }
+            finally
+            {
+                await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {durations}");
+                await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {instants}");
+            }
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {sourceTable}");
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {targetTable}");
+        }
+    }
+
+    private static TestCaseData InstantCase(string source, string target, string literal)
+        => new TestCaseData(source, target, literal).SetArgDisplayNames(source, target);
 
     private static TestCaseData SiblingCase(string source, string target, string[] literals, string readBack, string[] expected, IReadOnlyDictionary<string, string> settings = null)
         => new TestCaseData(source, target, literals, readBack, expected, settings)

@@ -38,7 +38,10 @@ internal enum DecodedPart
     /// </summary>
     Nullable,
 
-    /// <summary>A type that no part of the write converts (a <c>Variant</c>, a <c>Nested</c>); the reason says why.</summary>
+    /// <summary>
+    /// A type that no part of the write converts (a <c>Variant</c>, a <c>Nested</c>), or a <c>DateTime64</c> into a
+    /// <c>Time64</c> or the reverse; the reason says why.
+    /// </summary>
     Refused,
 }
 
@@ -170,6 +173,17 @@ internal sealed partial class ConverterDerivation
         if (SameType(sourceNode, targetNode))
         {
             return new DecodedPartPlan(DecodedPart.Kept, sameType: true);
+        }
+
+        // The count of a DateTime64 is an instant and the count of a Time64 is a duration, so neither is written into the
+        // other.
+        TypeNode sourceLeaf = Unwrapped(sourceNode);
+        TypeNode targetLeaf = Unwrapped(targetNode);
+        if (TimeKind(CanonicalName(sourceLeaf)) is string sourceKind && TimeKind(CanonicalName(targetLeaf)) is string targetKind && sourceKind != targetKind)
+        {
+            return new DecodedPartPlan(
+                DecodedPart.Refused,
+                refusal: $"A value of {sourceLeaf} is {sourceKind} and a value of {targetLeaf} is {targetKind}, so a column read as {sourceLeaf} is not written into {targetLeaf}. Convert the values in the query, or insert the counts as a column of System.Int64 values.");
         }
 
         bool changes = ChangesMeaning(sourceNode, targetNode) || ChangesStringShape(sourceNode, targetNode);
@@ -509,6 +523,14 @@ internal sealed partial class ConverterDerivation
     }
 
     private static bool IsStringLeaf(string name) => name is "String" or "FixedString";
+
+    // What the count of a DateTime64 or a Time64 means, for the refusal of one into the other.
+    private static string TimeKind(string name) => name switch
+    {
+        "DateTime64" => "an instant",
+        "Time64" => "a duration",
+        _ => null,
+    };
 
     // Whether two types are the same type: the same names (under any alias), arguments and wrappers. A
     // SimpleAggregateFunction is the type of its values.
