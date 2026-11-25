@@ -269,8 +269,8 @@ public class DecodedColumnConversionTests
     }
 
     /// <summary>
-    /// No CLR type holds the counts of a scale above 7, and a Variant places its values by their CLR type, so the insert
-    /// refuses these columns and says why.
+    /// No CLR type holds the counts of a scale above 7, and a Variant is written into a Variant only when the target has
+    /// each of its alternatives, so the insert refuses these columns and says why.
     /// </summary>
     [TestCase(
         "DateTime64(9, 'UTC')",
@@ -279,7 +279,7 @@ public class DecodedColumnConversionTests
     [TestCase(
         "Variant(DateTime64(3, 'UTC'), String)",
         "Variant(DateTime64(6, 'UTC'), String)",
-        "The values of Variant(DateTime64(3, 'UTC'), String) are converted to another type only through Nullable, LowCardinality, Array, Map and Tuple, so a column read as Variant(DateTime64(3, 'UTC'), String) is written only into a column whose DateTime64, Time64 and Enum types are the same.")]
+        "A column read as Variant(DateTime64(3, 'UTC'), String) is written into Variant(DateTime64(6, 'UTC'), String) only when each of its alternatives is an alternative of Variant(DateTime64(6, 'UTC'), String), and Variant(DateTime64(6, 'UTC'), String) has no alternative DateTime64(3, 'UTC'). A CAST of the column to Variant(DateTime64(6, 'UTC'), String) in the query converts those values.")]
     public void For_DecodedColumnThatNoClrTypeConverts_IsRefusedWithTheReason(string source, string target, string reason)
     {
         using IColumn decoded = source.StartsWith("Variant", StringComparison.Ordinal)
@@ -402,6 +402,21 @@ public class DecodedColumnConversionTests
         string expected,
         string expectedFromRow1)
         => AssertWritesAsync(source, target, rows, sourceBytes, expected, expectedFromRow1, storageOfTheTarget: null);
+
+    /// <summary>
+    /// A <c>Variant</c> that a query read, into a <c>Variant</c> that has each of its alternatives and others: the
+    /// discriminators go through the map of the alternatives, the NULL marker stays, each alternative is written from its
+    /// storage, and an alternative that only the target has writes its prefix and no row. All rows, and the rows from row 1.
+    /// </summary>
+    [TestCaseSource(nameof(VariantIntoVariantCases))]
+    public Task Write_DecodedVariantIntoAVariantWithItsAlternatives_WritesEachAlternativeFromItsStorage(
+        string source,
+        string target,
+        int rows,
+        string sourceBytes,
+        string expected,
+        string expectedFromRow1)
+        => AssertWritesAsync(source, target, rows, sourceBytes, expected, expectedFromRow1);
 
     /// <summary>
     /// A <c>FixedString</c> takes the bytes of a <c>String</c> that a query read only when each value has its width, as
@@ -672,6 +687,41 @@ public class DecodedColumnConversionTests
             "0000000000000000" + "0100000000000000" + "000000" + "000600000000000003000000000000000001FF02C3280300000000000000010002",
             "0000000000000000" + "0100000000000000" + "0000" + "0006000000000000020000000000000000" + "02C328" + "02000000000000000001");
         yield return Bytes("String", "Variant(FixedString(2), Int64)", 3, "026162" + "026364" + "026566", "0000000000000000" + "000000" + "616263646566", "0000000000000000" + "0000" + "63646566");
+    }
+
+    // Four rows of Variant(Int32, String): the String 41 FF 42, the Int32 7, NULL, and the String C3 28.
+    private const string VariantRows = "0000000000000000" + "0100FF01" + "07000000" + "0341FF42" + "02C328";
+
+    public static IEnumerable<TestCaseData> VariantIntoVariantCases()
+    {
+        yield return Bytes(
+            "Variant(Int32, String)",
+            "Variant(Float64, Int32, String)",
+            4,
+            VariantRows,
+            "0000000000000000" + "0201FF02" + "07000000" + "0341FF42" + "02C328",
+            "0000000000000000" + "01FF02" + "07000000" + "02C328");
+        yield return Bytes(
+            "Variant(Int32, String)",
+            "Variant(Int32, String, UInt64)",
+            4,
+            VariantRows,
+            "0000000000000000" + "0100FF01" + "07000000" + "0341FF42" + "02C328",
+            "0000000000000000" + "00FF01" + "07000000" + "02C328");
+        yield return Bytes(
+            "Variant(Int32, String)",
+            "Variant(Int32, LowCardinality(String), String)",
+            4,
+            VariantRows,
+            "0000000000000000" + "0100000000000000" + "0200FF02" + "07000000" + "0341FF42" + "02C328",
+            "0000000000000000" + "0100000000000000" + "00FF02" + "07000000" + "02C328");
+        yield return Bytes(
+            "Array(Variant(Int32, String))",
+            "Array(Variant(Float64, Int32, String))",
+            3,
+            "0000000000000000" + "020000000000000002000000000000000300000000000000" + "010001" + "07000000" + "0341FF42" + "02C328",
+            "0000000000000000" + "020000000000000002000000000000000300000000000000" + "020102" + "07000000" + "0341FF42" + "02C328",
+            "0000000000000000" + "00000000000000000100000000000000" + "02" + "02C328");
     }
 
     public static IEnumerable<TestCaseData> StringShapeCases()

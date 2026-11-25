@@ -63,11 +63,13 @@ internal sealed class VariantColumnCodec : IColumnCodec
     private const int MaxTypes = 255;
 
     private readonly IColumnCodec[] children;
+    private readonly VariantDenseWrite dense;
 
     private VariantColumnCodec(string typeName, IColumnCodec[] children)
     {
         TypeName = typeName;
         this.children = children;
+        dense = new VariantDenseWrite(typeName, Array.ConvertAll(children, child => (IVariantAlternativeWrite)new AlternativeCodec(child)), targetOfSource: null, unpaired: null);
     }
 
     /// <inheritdoc/>
@@ -210,9 +212,9 @@ internal sealed class VariantColumnCodec : IColumnCodec
     // Each alternative's slice is the contiguous run of its values whose rows fall in [start, start + length), so
     // the prefix and body phases share one set of child slices and states. Every alternative gets a state even when
     // no row selects it: the alternative set is fixed by the type rather than by the data, so each one's prefix
-    // belongs on the wire regardless of which rows arrived.
+    // belongs on the wire regardless of which rows arrived (VariantDenseWrite).
     public IColumnWriteState BeginWrite(IColumn column, int start, int length)
-        => BuildDenseState((VariantColumn)column, start, length);
+        => dense.Begin((VariantColumn)column, start, length);
 
     // Discriminator indices name the same alternatives only when the alternatives and their order are the same.
     private bool HasTheSameAlternatives(VariantColumn dense)
@@ -238,26 +240,12 @@ internal sealed class VariantColumnCodec : IColumnCodec
     // A fixed mode word, then every alternative's own prefix over its child column, including the alternatives no
     // row selected.
     public void WriteStatePrefix(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
-    {
-        var own = state.Expect<VariantWriteState>(TypeName);
-        writer.WriteUInt64(VariantWire.BasicDiscriminatorsMode);
-        for (int i = 0; i < children.Length; i++)
-        {
-            children[i].WriteStatePrefix(writer, own.ChildColumns[i], own.ChildStart[i], own.ChildLength[i], own.ChildStates[i]);
-        }
-    }
+        => dense.WritePrefix(writer, state);
 
     /// <inheritdoc/>
     // The row-order discriminator stream, then each alternative's values in alternative order.
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length, IColumnWriteState state)
-    {
-        var own = state.Expect<VariantWriteState>(TypeName);
-        writer.WriteBytes(((VariantColumn)column).Discriminators.Slice(start, length));
-        for (int i = 0; i < children.Length; i++)
-        {
-            children[i].WriteColumn(writer, own.ChildColumns[i], own.ChildStart[i], own.ChildLength[i], own.ChildStates[i]);
-        }
-    }
+        => dense.Write(writer, (VariantColumn)column, start, length, state);
 
     // How many rows chose each alternative — the length of every run that follows the discriminators.
     private int[] CountRowsPerType(ReadOnlySpan<byte> discriminators, int rowCount, string columnName, string columnType)
@@ -312,103 +300,20 @@ internal sealed class VariantColumnCodec : IColumnCodec
         return typeColumns;
     }
 
-    // The dense path: the discriminators and per-type child columns already exist, so each alternative's slice is
-    // the contiguous run of its values whose originating rows fall in [start, start + length) — found by counting
-    // that type's discriminators before and within the slice, since values are stored in row order. The child
-    // columns are borrowed from the dense column, so nothing is copied and the state owns none of them.
-    private VariantWriteState BuildDenseState(VariantColumn dense, int start, int length)
+    // The write of one alternative by its codec, from the storage of its column.
+    private sealed class AlternativeCodec : IVariantAlternativeWrite
     {
-        int typeCount = children.Length;
-        var childColumns = new IColumn[typeCount];
+        private readonly IColumnCodec codec;
 
-        // Each type's values sit contiguously in its child column in row order, so writing this slice needs, per
-        // type, the count of its values before the slice (the child-column start offset) and within it (the length
-        // to write). Both come from a single pass over the slice: the precomputed LocalIndices give each row its
-        // index within its type's child column, so the first in-slice row of a given discriminator already carries
-        // that type's before-slice count. This avoids rescanning [0, start) per slice, which would make a
-        // multi-block insert quadratic. A length of 0 flags the first in-slice occurrence, and an absent type keeps
-        // start/length 0 — an empty slice its codec still writes a prefix for.
-        var childStart = new int[typeCount];
-        var childLength = new int[typeCount];
-        ReadOnlySpan<byte> discriminators = dense.Discriminators;
-        ReadOnlySpan<int> localIndices = dense.LocalIndices;
-        for (int i = start; i < start + length; i++)
-        {
-            byte d = discriminators[i];
-            if (d == IVariantColumn.NullDiscriminator)
-            {
-                continue;
-            }
+        public AlternativeCodec(IColumnCodec codec) => this.codec = codec;
 
-            if (childLength[d] == 0)
-            {
-                childStart[d] = localIndices[i];
-            }
+        public IColumnWriteState Begin(IColumn values, int start, int length) => codec.BeginWrite(values, start, length);
 
-            childLength[d]++;
-        }
+        public void WritePrefix(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state)
+            => codec.WriteStatePrefix(writer, values, start, length, state);
 
-        for (int i = 0; i < typeCount; i++)
-        {
-            childColumns[i] = dense.GetTypeColumn(i);
-        }
-
-        return OpenChildStates(childColumns, childStart, childLength);
-    }
-
-    // Opens each alternative's own write state over its child column and assembles the slice's state. A later
-    // alternative's BeginWrite throwing must not leak the states already opened.
-    private VariantWriteState OpenChildStates(IColumn[] childColumns, int[] childStart, int[] childLength)
-    {
-        var childStates = new IColumnWriteState[children.Length];
-        int opened = 0;
-        try
-        {
-            for (int i = 0; i < children.Length; i++)
-            {
-                childStates[i] = children[i].BeginWrite(childColumns[i], childStart[i], childLength[i]);
-                opened = i + 1;
-            }
-        }
-        catch
-        {
-            for (int i = 0; i < opened; i++)
-            {
-                childStates[i]?.Dispose();
-            }
-
-            throw;
-        }
-
-        return new VariantWriteState
-        {
-            ChildColumns = childColumns,
-            ChildStart = childStart,
-            ChildLength = childLength,
-            ChildStates = childStates,
-        };
-    }
-
-    // The write scratch of one slice, shared across the prefix and body phases: one child column per alternative,
-    // borrowed from the decoded column, with the slice of it that alternative occupies and its own codec's state. An
-    // alternative no row selected carries an empty slice rather than being absent, so its prefix is still written.
-    private sealed class VariantWriteState : IColumnWriteState
-    {
-        public IColumn[] ChildColumns;
-        public int[] ChildStart;
-        public int[] ChildLength;
-        public IColumnWriteState[] ChildStates;
-
-        public void Dispose()
-        {
-            if (ChildStates is not null)
-            {
-                foreach (IColumnWriteState state in ChildStates)
-                {
-                    state?.Dispose();
-                }
-            }
-        }
+        public void Write(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state)
+            => codec.WriteColumn(writer, values, start, length, state);
     }
 
     // Disposes the first count entries of a partially read run array.

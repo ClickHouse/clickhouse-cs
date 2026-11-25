@@ -519,7 +519,8 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     }
 
     /// <summary>
-    /// Verifies that dense <c>Variant</c> values are remapped when equal-length alternative lists differ.
+    /// Verifies that dense <c>Variant</c> values are remapped when the target has each alternative of the source at
+    /// another discriminator, and an alternative that the source does not have.
     /// </summary>
     [Test]
     public async Task InsertAsync_DenseVariantOfAnotherVariantsAlternatives_LandsInTheAlternativeTheValueNames()
@@ -531,7 +532,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         {
             // The reader uses another connection, so use replicated storage for multi-replica Cloud services.
             await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = MergeTree ORDER BY tuple()");
-            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = MergeTree ORDER BY tuple()");
+            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64, String)) ENGINE = MergeTree ORDER BY tuple()");
             // Force both values into the source Int64 alternative.
             await ExecuteAsync(
                 connection,
@@ -573,7 +574,8 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     }
 
     /// <summary>
-    /// Verifies that an incompatible dense <c>Variant</c> is rejected before writing its discriminators.
+    /// Verifies that a dense <c>Variant</c> with an alternative that the target does not have is rejected before writing
+    /// its discriminators.
     /// </summary>
     [Test]
     public async Task InsertAsync_DenseVariantWhoseValueNoTargetAlternativeAccepts_RefusesBeforeWritingAnything()
@@ -608,7 +610,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
             Assert.Multiple(() =>
             {
                 Assert.That(refusal, Is.Not.Null);
-                Assert.That(refusal.Message, Does.Contain("System.String"), "names the CLR type no alternative accepts");
+                Assert.That(refusal.Message, Does.Contain("has no alternative String"), "names the alternative that the target does not have");
                 Assert.That(refusal.Message, Does.Contain("Variant(Bool, Int64)"), "names the target type");
                 Assert.That(rows, Is.Zero, "nothing may land from a column that could not be written");
             });

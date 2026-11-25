@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using ClickHouse.Driver.Tcp.Protocol;
 using ClickHouse.Driver.Tcp.Types;
+using ClickHouse.Driver.Tcp.Types.Codecs;
 using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Format;
@@ -30,7 +31,7 @@ namespace ClickHouse.Driver.Tcp.Format;
 /// are not copied into arrays of their own.
 /// </para>
 /// </remarks>
-internal abstract class InsertColumnWrite
+internal abstract class InsertColumnWrite : IVariantAlternativeWrite
 {
     // One converter write for each cached tree. The write holds no state, so every insert of the tree shares it.
     private static readonly ConditionalWeakTable<ColumnWriter, InsertColumnWrite> ConverterWrites = new();
@@ -202,6 +203,37 @@ internal abstract class InsertColumnWrite
                 return part is null ? null : new NullableParts(part, plan.SourceHoldsNull, plan.TargetHoldsNull, target, hidden);
             }
 
+            // Each alternative of the source is a part, written into the alternative of the target of the same type; an
+            // alternative that only the target has holds no row. A value is hidden when its row is.
+            case DecodedPart.Variant when values is VariantColumn variant && variant.TypeCount == plan.SourceParts.Length:
+            {
+                var alternatives = new IVariantAlternativeWrite[plan.TargetParts.Length];
+                var unpaired = new IColumn[plan.TargetParts.Length];
+                for (int i = 0; i < plan.SourceParts.Length; i++)
+                {
+                    int j = plan.Alternatives[i];
+                    alternatives[j] = PartWrite(variant.GetTypeColumn(i), plan.SourceParts[i], plan.TargetParts[j], in context, derivation, hidden?.Alternative(variant, i), out refusal);
+                    if (alternatives[j] is null)
+                    {
+                        return null;
+                    }
+                }
+
+                for (int j = 0; j < alternatives.Length; j++)
+                {
+                    if (alternatives[j] is null)
+                    {
+                        alternatives[j] = EmptyAlternativeWrite(variant.Name, plan.TargetParts[j], in context, derivation, out unpaired[j], out refusal);
+                        if (alternatives[j] is null)
+                        {
+                            return null;
+                        }
+                    }
+                }
+
+                return new VariantParts(new VariantDenseWrite(target, alternatives, plan.Alternatives, unpaired));
+            }
+
             case DecodedPart.Refused:
                 refusal = plan.Refusal;
                 return null;
@@ -243,6 +275,16 @@ internal abstract class InsertColumnWrite
         }
 
         return tree;
+    }
+
+    // The write of an alternative of a Variant that no value of the source selects: the converter tree of the canonical CLR
+    // type of the alternative, over an empty column, so the alternative writes its prefix and no row.
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private static InsertColumnWrite EmptyAlternativeWrite(string name, string type, in ResolveContext context, ConverterDerivation derivation, out IColumn empty, out string refusal)
+    {
+        Type elementType = derivation.ResolvePart(type, in context).ElementType;
+        empty = (IColumn)Activator.CreateInstance(typeof(ArrayColumn<>).MakeGenericType(elementType), name, type, Array.CreateInstance(elementType, 0));
+        return ConverterTreeWrite(empty, type, in context, derivation, hidden: null, out refusal);
     }
 
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
@@ -593,6 +635,23 @@ internal abstract class InsertColumnWrite
         private IColumn Inner(IColumn values) => sourceHoldsNull ? ((INullableColumn)values).Inner : values;
     }
 
+    // A Variant into a Variant of more alternatives, from the storage of the column (VariantDenseWrite): the discriminators
+    // through the map of the alternatives, then each alternative through its own write.
+    private sealed class VariantParts : InsertColumnWrite
+    {
+        private readonly VariantDenseWrite dense;
+
+        public VariantParts(VariantDenseWrite dense) => this.dense = dense;
+
+        public override IColumnWriteState Begin(IColumn values, int start, int length) => dense.Begin((IVariantColumn)values, start, length);
+
+        public override void WritePrefix(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state)
+            => dense.WritePrefix(writer, state);
+
+        public override void Write(ClickHouseBinaryWriter writer, IColumn values, int start, int length, IColumnWriteState state)
+            => dense.Write(writer, (IVariantColumn)values, start, length, state);
+    }
+
     // The rows of a part that an enclosing Nullable hides: one byte for each row of the part, not zero where the row holds
     // no value. Built when the write is planned, from the column of the plan.
     private sealed class HiddenRows
@@ -617,6 +676,25 @@ internal abstract class InsertColumnWrite
             }
 
             return any ? new HiddenRows(marks) : null;
+        }
+
+        // The values of one alternative of a Variant: a value is hidden when its row is. Null when no value is.
+        public HiddenRows Alternative(VariantColumn column, int alternative)
+        {
+            ReadOnlySpan<byte> rows = column.Discriminators;
+            ReadOnlySpan<int> localIndices = column.LocalIndices;
+            var values = new byte[column.GetTypeColumn(alternative).RowCount];
+            bool any = false;
+            for (int row = 0; row < rows.Length; row++)
+            {
+                if (rows[row] == alternative && marks[row] != 0)
+                {
+                    values[localIndices[row]] = 1;
+                    any = true;
+                }
+            }
+
+            return any ? new HiddenRows(values) : null;
         }
 
         // The elements of the rows of an Array or a Map: an element is hidden when its row is. The offsets have one more

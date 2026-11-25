@@ -162,4 +162,30 @@ public class RefusalMessageTests
                 "Convert the values in the query, or insert the counts as a column of System.Int64 values."));
         });
     }
+
+    /// <summary>
+    /// A <c>Variant</c> that a query read, into a <c>Variant</c> that does not have one of its alternatives: the message
+    /// names the alternative and the cast that converts its values.
+    /// </summary>
+    [Test]
+    public void InsertAsync_ReadVariantIntoAVariantWithoutOneOfItsAlternatives_NamesTheAlternativeAndTheCast()
+    {
+        const string source = "Variant(Int32, String)";
+        const string target = "Variant(Int64, String)";
+        using Block block = ReadRulesTests.DecodeSample(source);
+        IColumn values = block[0];
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(target, Context);
+        InsertColumnWrite write = InsertColumnWrite.For(codec, values, target, Context, ConverterDerivation.Default, out string refusal);
+
+        string message = ClickHouseTcpConnection.DescribeUnconvertedColumn(new InsertColumn("value", target, codec, values, write: null), refusal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write, Is.Null, "the insert plan refuses the column");
+            Assert.That(message, Is.EqualTo(
+                "Column 'value' (Variant(Int64, String)) was given a column that a query read as Variant(Int32, String), and the insert writes such a column part by part. " +
+                "A column read as Variant(Int32, String) is written into Variant(Int64, String) only when each of its alternatives is an alternative of Variant(Int64, String), " +
+                "and Variant(Int64, String) has no alternative Int32. A CAST of the column to Variant(Int64, String) in the query converts those values."));
+        });
+    }
 }

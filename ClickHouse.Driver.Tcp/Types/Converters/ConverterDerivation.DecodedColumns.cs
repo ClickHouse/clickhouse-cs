@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using ClickHouse.Driver.Tcp.Types.Codecs;
@@ -39,8 +40,15 @@ internal enum DecodedPart
     Nullable,
 
     /// <summary>
-    /// A type that no part of the write converts (a <c>Variant</c>, a <c>Nested</c>), or a <c>DateTime64</c> into a
-    /// <c>Time64</c> or the reverse; the reason says why.
+    /// A <c>Variant</c> on both sides, where each alternative of the source is an alternative of the target: the
+    /// discriminators through the map of the alternatives (<see cref="DecodedPartPlan.Alternatives"/>), then each
+    /// alternative of the source as a part. An alternative that only the target has holds no row.
+    /// </summary>
+    Variant,
+
+    /// <summary>
+    /// A type that no part of the write converts (a <c>Nested</c>, a <c>Variant</c> with an alternative that the target
+    /// does not have), or a <c>DateTime64</c> into a <c>Time64</c> or the reverse; the reason says why.
     /// </summary>
     Refused,
 }
@@ -60,6 +68,7 @@ internal readonly struct DecodedPartPlan
     /// For <see cref="DecodedPart.Tuple"/>, <see cref="DecodedPart.Array"/> and <see cref="DecodedPart.Map"/>: whether no
     /// part in it changes meaning or string shape and no <c>Nullable</c> in the source hides a value.
     /// </param>
+    /// <param name="alternatives">For <see cref="DecodedPart.Variant"/>: the target alternative of each source alternative.</param>
     public DecodedPartPlan(
         DecodedPart kind,
         string[] sourceParts = null,
@@ -68,7 +77,8 @@ internal readonly struct DecodedPartPlan
         bool targetHoldsNull = false,
         string refusal = null,
         bool sameType = false,
-        bool keepsStorage = false)
+        bool keepsStorage = false,
+        int[] alternatives = null)
     {
         Kind = kind;
         SameType = sameType;
@@ -78,6 +88,7 @@ internal readonly struct DecodedPartPlan
         TargetHoldsNull = targetHoldsNull;
         Refusal = refusal;
         KeepsStorage = keepsStorage;
+        Alternatives = alternatives ?? System.Array.Empty<int>();
     }
 
     /// <summary>The kind of the part.</summary>
@@ -114,6 +125,13 @@ internal readonly struct DecodedPartPlan
     /// bytes that the write of each part gives.
     /// </summary>
     public bool KeepsStorage { get; }
+
+    /// <summary>
+    /// For <see cref="DecodedPart.Variant"/>: for each alternative of the source, in its discriminator order, the
+    /// discriminator of the alternative of the target of the same type. <see cref="SourceParts"/> and
+    /// <see cref="TargetParts"/> are the alternatives of the two types, in discriminator order.
+    /// </summary>
+    public int[] Alternatives { get; }
 }
 
 /// <summary>
@@ -240,6 +258,9 @@ internal sealed partial class ConverterDerivation
                     System.Array.ConvertAll(NamedElementParser.Split(targetNode), element => element.Type.ToString()),
                     keepsStorage: keepsStorage);
 
+            case "Variant" when name == CanonicalName(targetNode):
+                return PlanVariant(sourceNode, targetNode);
+
             default:
                 return changes
                     ? new DecodedPartPlan(
@@ -247,6 +268,56 @@ internal sealed partial class ConverterDerivation
                         refusal: $"The values of {sourceNode} are converted to another type only through Nullable, LowCardinality, Array, Map and Tuple, so a column read as {sourceNode} is written only into a column whose DateTime64, Time64 and Enum types are the same.")
                     : new DecodedPartPlan(DecodedPart.Kept);
         }
+    }
+
+    // A Variant into a Variant of other alternatives: each alternative of the source goes to the alternative of the target of
+    // the same type, from its storage. The decision uses the two types only, so a column with no row of an alternative
+    // that the target does not have is refused too.
+    private DecodedPartPlan PlanVariant(TypeNode source, TypeNode target)
+    {
+        var map = new int[source.Arguments.Count];
+        List<string> missing = null;
+        for (int i = 0; i < map.Length; i++)
+        {
+            map[i] = -1;
+            for (int j = 0; j < target.Arguments.Count; j++)
+            {
+                if (SameType(source.Arguments[i], target.Arguments[j]))
+                {
+                    map[i] = j;
+                    break;
+                }
+            }
+
+            if (map[i] < 0)
+            {
+                (missing ??= new List<string>()).Add(source.Arguments[i].ToString());
+            }
+        }
+
+        if (missing is not null)
+        {
+            return new DecodedPartPlan(
+                DecodedPart.Refused,
+                refusal: $"A column read as {source} is written into {target} only when each of its alternatives is an alternative of {target}, and {target} has no alternative {string.Join(", ", missing)}. A CAST of the column to {target} in the query converts those values.");
+        }
+
+        return new DecodedPartPlan(
+            DecodedPart.Variant,
+            Names(source.Arguments),
+            Names(target.Arguments),
+            alternatives: map);
+    }
+
+    private static string[] Names(IReadOnlyList<TypeNode> nodes)
+    {
+        var names = new string[nodes.Count];
+        for (int i = 0; i < names.Length; i++)
+        {
+            names[i] = nodes[i].ToString();
+        }
+
+        return names;
     }
 
     // Whether the type is a Variant whose write places a string and a byte[] in the same alternative, each with no tie, and

@@ -260,6 +260,42 @@ public class DecodedColumnInsertIntegrationTests
             VariantSettings);
     }
 
+    // A Variant that a query read, into a Variant that has each of its alternatives and others: the alternative of each
+    // row and its value (the hex of a String, the text of an Int32). The String values are not UTF-8. A target with a
+    // Float64 alternative moves the discriminators of Int32 and String; a target with a UInt64 alternative does not.
+    public static IEnumerable<TestCaseData> VariantIntoVariantCases()
+    {
+        const string Value = "concat(variantType({0}), ' ', ifNull(hex(variantElement({0}, 'String')), ''), ifNull(toString(variantElement({0}, 'Int32')), ''))";
+        string top = string.Format(System.Globalization.CultureInfo.InvariantCulture, Value, "value");
+        string[] rows = { "unhex('41FF42')", "toInt32(7)", "NULL", "unhex('C328')" };
+        string[] stored = { "String 41FF42", "Int32 7", "None ", "String C328" };
+        yield return SiblingCase("Variant(Int32, String)", "Variant(Int32, String, UInt64)", rows, top, stored, VariantSettings);
+        yield return SiblingCase("Variant(Int32, String)", "Variant(Float64, Int32, String)", rows, top, stored, VariantSettings);
+
+        const string V = "Variant(Int32, String)";
+        yield return SiblingCase(
+            $"Array({V})",
+            "Array(Variant(Float64, Int32, String))",
+            new[] { $"[CAST(unhex('41FF42') AS {V}), CAST(toInt32(7) AS {V}), NULL]", "[]", $"[CAST(unhex('C328') AS {V})]" },
+            $"toString(arrayMap(x -> {string.Format(System.Globalization.CultureInfo.InvariantCulture, Value, "x")}, value))",
+            new[] { "['String 41FF42','Int32 7','None ']", "[]", "['String C328']" },
+            VariantSettings);
+        yield return SiblingCase(
+            $"Tuple({V}, UInt8)",
+            "Tuple(Variant(Float64, Int32, String), UInt8)",
+            new[] { $"(CAST(unhex('41FF42') AS {V}), 1)", $"(CAST(toInt32(7) AS {V}), 2)", $"(CAST(NULL AS {V}), 3)" },
+            $"concat({string.Format(System.Globalization.CultureInfo.InvariantCulture, Value, "value.1")}, ' ', toString(value.2))",
+            new[] { "String 41FF42 1", "Int32 7 2", "None  3" },
+            VariantSettings);
+        yield return SiblingCase(
+            $"Map(String, {V})",
+            "Map(String, Variant(Int32, String, UInt64))",
+            new[] { $"map('a', CAST(unhex('41FF42') AS {V}), 'b', CAST(toInt32(7) AS {V}))", "map()", $"map('c', CAST(unhex('C328') AS {V}))" },
+            $"toString(arrayMap(x -> {string.Format(System.Globalization.CultureInfo.InvariantCulture, Value, "x")}, mapValues(value)))",
+            new[] { "['String 41FF42','Int32 7']", "[]", "['String C328']" },
+            VariantSettings);
+    }
+
     // A String that a query read, into a Variant whose alternative for text is not a String, or into a Dynamic: these
     // parts go through the text of their values. Every String value is valid UTF-8, so the stored values are the source.
     public static IEnumerable<TestCaseData> TextRouteCases()
@@ -411,6 +447,75 @@ public class DecodedColumnInsertIntegrationTests
         string[] expected,
         IReadOnlyDictionary<string, string> settings)
         => AssertStoresInBlocksAsync(source, target, literals, readBack, expected, settings);
+
+    /// <summary>
+    /// A <c>Variant</c> column that a query read, into a <c>Variant</c> that has each of its alternatives and others, also
+    /// in an <c>Array</c>, a <c>Tuple</c> and a <c>Map</c>: each value keeps its alternative and its bytes, and a NULL row
+    /// stays NULL. The insert sends two rows in each block.
+    /// </summary>
+    [TestCaseSource(nameof(VariantIntoVariantCases))]
+    [RequiresServerFeature(TcpFeature.Variant)]
+    public Task InsertAsync_VariantReadIntoAVariantWithItsAlternatives_StoresEachValueInItsAlternative(
+        string source,
+        string target,
+        string[] literals,
+        string readBack,
+        string[] expected,
+        IReadOnlyDictionary<string, string> settings)
+        => AssertStoresInBlocksAsync(source, target, literals, readBack, expected, settings);
+
+    /// <summary>
+    /// A <c>Variant</c> column that a query read, into a <c>Variant</c> that does not have one of its alternatives: the
+    /// insert refuses the column before it sends a block, the target stores nothing, and the same connection runs the next
+    /// query.
+    /// </summary>
+    [TestCase("Variant(String, UInt64)", "Variant(FixedString(3), UInt64)", "unhex('FF')", "String")]
+    [TestCase("Variant(Int32, String)", "Variant(Int64, String)", "'abc'", "Int32")]
+    [RequiresServerFeature(TcpFeature.Variant)]
+    public async Task InsertAsync_VariantReadIntoAVariantWithoutOneOfItsAlternatives_IsRefusedAndKeepsTheConnection(string source, string target, string literal, string missing)
+    {
+        string sourceTable = UniqueTableName();
+        string targetTable = UniqueTableName();
+        await using ClickHouseTcpConnection connection = await TcpServerFixture.ConnectAsync(None);
+        try
+        {
+            await CreateAsync(connection, sourceTable, targetTable, source, target, new[] { literal }, VariantSettings);
+
+            ArgumentException refusal = null;
+            await using (ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None))
+            {
+                await foreach (Block block in reader.QueryAsync($"SELECT id, value FROM {sourceTable} ORDER BY id", settings: VariantSettings, cancellationToken: None))
+                {
+                    refusal = Assert.ThrowsAsync<ArgumentException>(
+                        async () => await connection.InsertAsync($"INSERT INTO {targetTable} (id, value) VALUES", new[] { block[0], block[1] }, settings: VariantSettings, cancellationToken: None));
+                }
+            }
+
+            var one = new List<string>();
+            await foreach (Block block in connection.QueryAsync("SELECT toString(1)", cancellationToken: None))
+            {
+                for (int row = 0; row < block.RowCount; row++)
+                {
+                    one.Add((string)block[0].GetValue(row));
+                }
+            }
+
+            List<string> stored = await ReadStringsAsync(connection, targetTable, VariantSettings);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(refusal?.Message, Does.Contain($"was given a column that a query read as {source}"));
+                Assert.That(refusal?.Message, Does.Contain($"has no alternative {missing}"));
+                Assert.That(one, Is.EqualTo(new[] { "1" }), "the connection runs the next query");
+                Assert.That(stored, Is.Empty, "nothing may land from a column that could not be written");
+            });
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {sourceTable}");
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {targetTable}");
+        }
+    }
 
     // Reads the source rows through one connection and inserts the block through the client, two rows in each block.
     private static async Task AssertStoresInBlocksAsync(
