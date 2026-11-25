@@ -201,7 +201,7 @@ Connection-string values for `TimeSpan` properties are expressed in seconds.
 | Username | `string` | `"default"` | `Username` | Authentication username |
 | Password | `string` | `""` | `Password` | Authentication password |
 | BearerToken | `string` | `null` | `BearerToken` | JWT sent in the handshake instead of `Username`/`Password`; see [JWT authentication](#jwt-authentication) |
-| CredentialsProvider | `ClickHouseCredentialsProvider` | `null` | — | Gives the credentials of each new connection, for tokens that expire and passwords that rotate; see [Token refresh](#jwt-token-refresh) |
+| CredentialsProvider | `IClickHouseCredentialsProvider` | `null` | — | Gives the credentials of each new connection, for tokens that expire and passwords that rotate; see [Token refresh](#jwt-token-refresh) |
 | Database | `string` | `"default"` | `Database` | Default database for operations |
 | QuotaKey | `string` | `""` | `QuotaKey` | Key used with a ClickHouse keyed quota |
 | DialTimeout | `TimeSpan` | 30 seconds | `DialTimeout` | Timeout for the socket connection, TLS negotiation, and native-protocol handshake; also covers the wait for the `CredentialsProvider` and a second connect after a rejection |
@@ -291,9 +291,9 @@ tokens, set a `CredentialsProvider`.
 #### Token refresh {#jwt-token-refresh}
 
 Set `ClickHouseTcpClientOptions.CredentialsProvider` to give the client new credentials when they
-expire or when the server rejects them. It is the same delegate as in the HTTP client
-(see [Token refresh](./http#jwt-token-refresh)): it returns
-`ClickHouseCredentials.CreateBearer(token, expiresAt)` or
+expire or when the server rejects them. It is the same interface, `IClickHouseCredentialsProvider`, as
+in the HTTP client (see [Token refresh](./http#jwt-token-refresh)): its method `GetCredentialsAsync`
+returns `ClickHouseCredentials.CreateBearer(token, expiresAt)` or
 `ClickHouseCredentials.CreateBasic(username, password)`, or `null` to use `BearerToken` or
 `Username` and `Password` of the options. The provider has no connection string key.
 
@@ -302,18 +302,24 @@ var options = new ClickHouseTcpClientOptions
 {
     Host = "your-service.clickhouse.cloud",
     UseTls = true,
-    CredentialsProvider = async (request, cancellationToken) =>
+    CredentialsProvider = new IdentityProviderCredentials(),
+};
+await using var client = new ClickHouseTcpClient(options);
+
+sealed class IdentityProviderCredentials : IClickHouseCredentialsProvider
+{
+    public async ValueTask<ClickHouseCredentials> GetCredentialsAsync(
+        ClickHouseCredentialsRequest request, CancellationToken cancellationToken)
     {
-        // GetTokenAsync is your code: it gets a JWT and its expiry from your identity provider.
+        // GetTokenAsync is your code (a method of this class): it gets a JWT and its expiry from your identity provider.
         // request.Reason is Initial, Expiring or Rejected.
         (string accessToken, DateTimeOffset expiresAt) = await GetTokenAsync(request.Reason, cancellationToken);
         return ClickHouseCredentials.CreateBearer(accessToken, expiresAt);
-    },
-};
-await using var client = new ClickHouseTcpClient(options);
+    }
+}
 ```
 
-With Azure.Identity, call `TokenCredential.GetTokenAsync` in the provider and return
+With Azure.Identity, call `TokenCredential.GetTokenAsync` in `GetCredentialsAsync` and return
 `ClickHouseCredentials.CreateBearer(accessToken.Token, accessToken.ExpiresOn)`. The
 [token refresh example](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Tcp/Connection/Tcp_005_TokenRefresh.cs)
 does an OAuth 2.0 refresh-token grant with `HttpClient`.

@@ -5,7 +5,7 @@ using ClickHouse.Driver.Authentication;
 namespace ClickHouse.Driver;
 
 /// <summary>
-/// Credentials that a <see cref="ClickHouseCredentialsProvider"/> returns: a username and a password,
+/// Credentials that an <see cref="IClickHouseCredentialsProvider"/> returns: a username and a password,
 /// or a bearer token (a JWT). Create an instance with <see cref="CreateBasic"/> or
 /// <see cref="CreateBearer"/>.
 /// </summary>

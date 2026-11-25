@@ -35,7 +35,7 @@ public class CredentialsProviderHttpTests
     /// A provider that records the reason of each call and returns the next credentials of a list (the last
     /// one again when the list is used up).
     /// </summary>
-    private sealed class ScriptedProvider
+    private sealed class ScriptedProvider : IClickHouseCredentialsProvider
     {
         private readonly ClickHouseCredentials[] script;
         private readonly ConcurrentQueue<ClickHouseCredentialsRefreshReason> reasons = new();
@@ -44,7 +44,7 @@ public class CredentialsProviderHttpTests
 
         public IReadOnlyList<ClickHouseCredentialsRefreshReason> Reasons => reasons.ToList();
 
-        public ValueTask<ClickHouseCredentials> InvokeAsync(ClickHouseCredentialsRequest request, CancellationToken token)
+        public ValueTask<ClickHouseCredentials> GetCredentialsAsync(ClickHouseCredentialsRequest request, CancellationToken token)
         {
             reasons.Enqueue(request.Reason);
             return new ValueTask<ClickHouseCredentials>(script[Math.Min(reasons.Count, script.Length) - 1]);
@@ -74,7 +74,7 @@ public class CredentialsProviderHttpTests
     }
 
     private static (ClickHouseClient Client, TrackingHandler Handler) CreateClient(
-        ClickHouseCredentialsProvider provider,
+        IClickHouseCredentialsProvider provider,
         Func<HttpRequestMessage, HttpResponseMessage> respond = null,
         string bearerToken = null,
         bool useFormDataParameters = false)
@@ -113,7 +113,7 @@ public class CredentialsProviderHttpTests
     {
         var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer(RejectedToken), ClickHouseCredentials.CreateBearer("new-token"));
         var rejections = new List<ResponseDisposalTrackingHandler.DisposalTrackingContent>();
-        var (client, handler) = CreateClient(provider.InvokeAsync, r => Respond(r, rejections: rejections), useFormDataParameters: useFormDataParameters);
+        var (client, handler) = CreateClient(provider, r => Respond(r, rejections: rejections), useFormDataParameters: useFormDataParameters);
         using var _ = client;
         var parameters = new ClickHouseParameterCollection();
         parameters.AddParameter("id", 42UL);
@@ -158,7 +158,7 @@ public class CredentialsProviderHttpTests
         // Credentials without an expiry are not cached, but the next provider call must still say that the
         // server rejected the last ones: a provider that caches a password reads its store again only then.
         var provider = new ScriptedProvider(rejected, ClickHouseCredentials.CreateBasic("user", "rotated"));
-        var (client, handler) = CreateClient(provider.InvokeAsync, r => Respond(r, rejectionHeader, code: code));
+        var (client, handler) = CreateClient(provider, r => Respond(r, rejectionHeader, code: code));
         using var _ = client;
 
         var ex = Assert.ThrowsAsync<ClickHouseServerException>(() => client.ExecuteNonQueryAsync("SELECT 1"));
@@ -178,7 +178,7 @@ public class CredentialsProviderHttpTests
     public void ExecuteNonQueryAsync_EveryCallRejected_SendsOneRequestPerCall()
     {
         var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer(RejectedToken));
-        var (client, handler) = CreateClient(provider.InvokeAsync);
+        var (client, handler) = CreateClient(provider);
         using var _ = client;
 
         for (var i = 0; i < 3; i++)
@@ -204,7 +204,7 @@ public class CredentialsProviderHttpTests
         var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer("token", expiresAt), ClickHouseCredentials.CreateBearer("other-token", expiresAt));
         var requests = 0;
         var (client, handler) = CreateClient(
-            provider.InvokeAsync,
+            provider,
             r => ++requests == 1
                 ? new HttpResponseMessage(HttpStatusCode.NotFound)
                 {
@@ -247,7 +247,7 @@ public class CredentialsProviderHttpTests
     {
         var expiresAt = DateTimeOffset.UtcNow.AddHours(1);
         var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer(RejectedToken, expiresAt), ClickHouseCredentials.CreateBearer("new-token", expiresAt));
-        var (client, handler) = CreateClient(provider.InvokeAsync, r => Respond(r, code: code));
+        var (client, handler) = CreateClient(provider, r => Respond(r, code: code));
         using var _ = client;
 
         var first = await client.PingAsync();
@@ -274,7 +274,7 @@ public class CredentialsProviderHttpTests
         using var client = new ClickHouseClient(new ClickHouseClientSettings
         {
             Host = "localhost",
-            CredentialsProvider = provider.InvokeAsync,
+            CredentialsProvider = provider,
             HttpClient = new HttpClient(handler),
             // Debug level is on by default in the capturing factory. EnableDebugMode is not set: it turns on
             // a process-wide network trace that other tests check.
@@ -308,7 +308,7 @@ public class CredentialsProviderHttpTests
         var expiresAt = DateTimeOffset.UtcNow.AddHours(1);
         var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer(RejectedToken, expiresAt), ClickHouseCredentials.CreateBearer("new-token", expiresAt));
         var rejections = new List<ResponseDisposalTrackingHandler.DisposalTrackingContent>();
-        var (client, handler) = CreateClient(provider.InvokeAsync, r => Respond(r, rejections: rejections));
+        var (client, handler) = CreateClient(provider, r => Respond(r, rejections: rejections));
         using var _ = client;
 
         var ex = Assert.ThrowsAsync<ClickHouseServerException>(() => send(client, new MemoryStream(Encoding.UTF8.GetBytes("1\n"))));
@@ -345,7 +345,7 @@ public class CredentialsProviderHttpTests
     public void StreamedRequest_ProviderThrows_DisposesStreamOnceAndThrows(bool insertRawStream)
     {
         var failure = new InvalidOperationException("identity provider down");
-        var (client, handler) = CreateClient((_, _) => throw failure);
+        var (client, handler) = CreateClient(new FuncCredentialsProvider((_, _) => throw failure));
         using var _ = client;
         var stream = new DisposeCountingStream();
 
@@ -365,7 +365,7 @@ public class CredentialsProviderHttpTests
     public void ExecuteNonQueryAsync_ProviderThrows_ThrowsProviderExceptionWithoutRequest()
     {
         var failure = new InvalidOperationException("identity provider down");
-        var (client, handler) = CreateClient((_, _) => throw failure);
+        var (client, handler) = CreateClient(new FuncCredentialsProvider((_, _) => throw failure));
         using var _ = client;
 
         var thrown = Assert.ThrowsAsync<InvalidOperationException>(() => client.ExecuteNonQueryAsync("SELECT 1"));
@@ -382,11 +382,11 @@ public class CredentialsProviderHttpTests
     {
         var blockFor = TimeSpan.FromSeconds(10);
         using var release = new ManualResetEventSlim();
-        var (client, handler) = CreateClient((_, _) =>
+        var (client, handler) = CreateClient(new FuncCredentialsProvider((_, _) =>
         {
             release.Wait(blockFor);
             return new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBearer("provider-token"));
-        });
+        }));
         using var _ = client;
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
 
@@ -427,7 +427,7 @@ public class CredentialsProviderHttpTests
     public async Task Authorization_Precedence(string perQueryToken, ClickHouseCredentials provided, string settingsToken, string expected)
     {
         var (client, handler) = CreateClient(
-            (_, _) => new ValueTask<ClickHouseCredentials>(provided),
+            new FuncCredentialsProvider((_, _) => new ValueTask<ClickHouseCredentials>(provided)),
             bearerToken: settingsToken);
         using var _ = client;
 
@@ -450,7 +450,7 @@ public class CredentialsProviderHttpTests
     [Test]
     public async Task Command_EmptyBearerToken_UsesProvider()
     {
-        var (client, handler) = CreateClient((_, _) => new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBearer("provider-token")));
+        var (client, handler) = CreateClient(new FuncCredentialsProvider((_, _) => new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBearer("provider-token"))));
         using var _ = client;
         using var connection = client.CreateConnection();
         using var command = connection.CreateCommand();
@@ -466,7 +466,7 @@ public class CredentialsProviderHttpTests
     public async Task Command_ProviderTokenRejected_ThrowsAfterOneRequestAndNextCommandGetsNewToken()
     {
         var provider = new ScriptedProvider(ClickHouseCredentials.CreateBearer(RejectedToken), ClickHouseCredentials.CreateBearer("new-token"));
-        var (client, handler) = CreateClient(provider.InvokeAsync);
+        var (client, handler) = CreateClient(provider);
         using var _ = client;
         using var connection = client.CreateConnection();
         using var command = connection.CreateCommand();
@@ -494,7 +494,7 @@ public class CredentialsProviderHttpTests
         {
             Host = "localhost",
             HttpClient = httpClient,
-            CredentialsProvider = (_, _) => new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBearer("provider-token")),
+            CredentialsProvider = new FuncCredentialsProvider((_, _) => new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBearer("provider-token"))),
         };
         using var connection = new ClickHouseConnection(settings);
 
@@ -509,7 +509,7 @@ public class CredentialsProviderHttpTests
     {
         var tokenCancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var providerStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var (client, _) = CreateClient(async (_, token) =>
+        var (client, _) = CreateClient(new FuncCredentialsProvider(async (_, token) =>
         {
             providerStarted.TrySetResult(true);
             try
@@ -525,7 +525,7 @@ public class CredentialsProviderHttpTests
             }
 
             return null;
-        });
+        }));
         var query = client.ExecuteNonQueryAsync("SELECT 1");
 
         await providerStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -538,7 +538,7 @@ public class CredentialsProviderHttpTests
     [Test]
     public void Settings_CopyConstructor_KeepsProvider()
     {
-        ClickHouseCredentialsProvider provider = (_, _) => default;
+        var provider = new FuncCredentialsProvider((_, _) => default);
         var original = new ClickHouseClientSettings { CredentialsProvider = provider };
 
         var copy = new ClickHouseClientSettings(original);
@@ -549,19 +549,30 @@ public class CredentialsProviderHttpTests
     [Test]
     public void Settings_Equals_ComparesProviderByReference()
     {
-        var instance = new ScriptedProvider();
-        ClickHouseCredentialsProvider provider = instance.InvokeAsync;
-        ClickHouseCredentialsProvider sameMethodOtherDelegate = instance.InvokeAsync;
+        var provider = new EqualByValueProvider();
+        var equalOtherInstance = new EqualByValueProvider();
 
         var a = new ClickHouseClientSettings { CredentialsProvider = provider };
         var b = new ClickHouseClientSettings { CredentialsProvider = provider };
-        var c = new ClickHouseClientSettings { CredentialsProvider = sameMethodOtherDelegate };
+        var c = new ClickHouseClientSettings { CredentialsProvider = equalOtherInstance };
 
         Assert.Multiple(() =>
         {
+            Assert.That(equalOtherInstance, Is.EqualTo(provider));
             Assert.That(a, Is.EqualTo(b));
             Assert.That(a.GetHashCode(), Is.EqualTo(b.GetHashCode()));
             Assert.That(a, Is.Not.EqualTo(c));
         });
+    }
+
+    /// <summary>A provider whose instances are all equal, so that only a reference comparison tells two apart.</summary>
+    private sealed class EqualByValueProvider : IClickHouseCredentialsProvider
+    {
+        public ValueTask<ClickHouseCredentials> GetCredentialsAsync(ClickHouseCredentialsRequest request, CancellationToken cancellationToken)
+            => default;
+
+        public override bool Equals(object obj) => obj is EqualByValueProvider;
+
+        public override int GetHashCode() => 0;
     }
 }

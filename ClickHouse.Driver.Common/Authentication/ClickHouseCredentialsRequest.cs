@@ -1,7 +1,7 @@
 namespace ClickHouse.Driver;
 
 /// <summary>
-/// The request that a client passes to a <see cref="ClickHouseCredentialsProvider"/>.
+/// The request that a client passes to an <see cref="IClickHouseCredentialsProvider"/>.
 /// </summary>
 public sealed class ClickHouseCredentialsRequest
 {

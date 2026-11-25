@@ -90,7 +90,7 @@ Below is a full list of all the settings, their default values, and their effect
 | Username | `string` | `"default"` | `Username` | Authentication username |
 | Password | `string` | `""` | `Password` | Authentication password |
 | BearerToken | `string` | `null` | `BearerToken` | Token (for example a JWT) sent as `Authorization: Bearer <token>` instead of `Username`/`Password`; see [JWT authentication](#jwt-authentication) |
-| CredentialsProvider | `ClickHouseCredentialsProvider` | `null` | — | Gives the credentials of each request, for tokens that expire and passwords that rotate; see [Token refresh](#jwt-token-refresh) |
+| CredentialsProvider | `IClickHouseCredentialsProvider` | `null` | — | Gives the credentials of each request, for tokens that expire and passwords that rotate; see [Token refresh](#jwt-token-refresh) |
 | Database | `string` | `""` | `Database` | Default database; empty uses server/user default |
 | Protocol | `string` | `"http"` | `Protocol` | Connection protocol: `"http"` or `"https"` |
 | Path | `string` | `null` | `Path` | URL path for reverse proxy scenarios (e.g., `/clickhouse`) |
@@ -180,23 +180,29 @@ JWT authentication is intended for user-to-service access. For service-to-servic
 
 #### Token refresh {#jwt-token-refresh}
 
-Set `ClickHouseClientSettings.CredentialsProvider` to give the client new credentials when they expire or when the server rejects them. The provider is a delegate that returns `ClickHouseCredentials.CreateBearer(token, expiresAt)` or `ClickHouseCredentials.CreateBasic(username, password)`. It can also return `null`: the client then uses `BearerToken` or `Username` and `Password` of the settings. The provider has no connection string key.
+Set `ClickHouseClientSettings.CredentialsProvider` to give the client new credentials when they expire or when the server rejects them. The provider is an object that implements the interface `IClickHouseCredentialsProvider`. Its method `GetCredentialsAsync(request, cancellationToken)` returns `ClickHouseCredentials.CreateBearer(token, expiresAt)` or `ClickHouseCredentials.CreateBasic(username, password)`. It can also return `null`: the client then uses `BearerToken` or `Username` and `Password` of the settings. The provider has no connection string key.
 
 ```csharp
 var settings = new ClickHouseClientSettings("Host=your-service.clickhouse.cloud;Protocol=https")
 {
-    CredentialsProvider = async (request, cancellationToken) =>
+    CredentialsProvider = new IdentityProviderCredentials(),
+};
+using var client = new ClickHouseClient(settings);
+
+sealed class IdentityProviderCredentials : IClickHouseCredentialsProvider
+{
+    public async ValueTask<ClickHouseCredentials> GetCredentialsAsync(
+        ClickHouseCredentialsRequest request, CancellationToken cancellationToken)
     {
-        // GetTokenAsync is your code: it gets a JWT and its expiry from your identity provider.
+        // GetTokenAsync is your code (a method of this class): it gets a JWT and its expiry from your identity provider.
         // request.Reason is Initial, Expiring or Rejected.
         (string accessToken, DateTimeOffset expiresAt) = await GetTokenAsync(request.Reason, cancellationToken);
         return ClickHouseCredentials.CreateBearer(accessToken, expiresAt);
-    },
-};
-using var client = new ClickHouseClient(settings);
+    }
+}
 ```
 
-With Azure.Identity, call `TokenCredential.GetTokenAsync` in the provider and return `ClickHouseCredentials.CreateBearer(accessToken.Token, accessToken.ExpiresOn)`. The [token refresh example](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Http/Core/Auth_002_TokenRefresh.cs) does an OAuth 2.0 refresh-token grant with `HttpClient`.
+With Azure.Identity, call `TokenCredential.GetTokenAsync` in `GetCredentialsAsync` and return `ClickHouseCredentials.CreateBearer(accessToken.Token, accessToken.ExpiresOn)`. The [token refresh example](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Http/Core/Auth_002_TokenRefresh.cs) does an OAuth 2.0 refresh-token grant with `HttpClient`.
 
 When the client calls the provider:
 

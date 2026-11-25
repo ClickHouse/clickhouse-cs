@@ -41,58 +41,7 @@ public static class TcpTokenRefresh
 
             // The handshake sends the token as it sends a password: use TLS (port 9440).
             UseTls = true,
-            CredentialsProvider = async (request, cancellationToken) =>
-            {
-                // Initial: the first call. Expiring: the token expires soon. Rejected: the server rejected the token.
-                // A refresh-token grant always returns a new token, so this provider handles the three in one way.
-                Console.WriteLine($"   Provider called: {request.Reason}");
-
-                var form = new Dictionary<string, string>
-                {
-                    ["grant_type"] = "refresh_token",
-                    ["refresh_token"] = refreshToken,
-                };
-                using var tokenRequest = new HttpRequestMessage(HttpMethod.Post, tokenEndpoint);
-                if (string.IsNullOrEmpty(clientSecret))
-                {
-                    // A public client names itself in the body.
-                    form["client_id"] = clientId;
-                }
-                else
-                {
-                    // A confidential client authenticates with HTTP Basic (RFC 6749, section 2.3.1), which every
-                    // identity provider supports. The ID and the secret are form-encoded first.
-                    var basic = $"{WebUtility.UrlEncode(clientId)}:{WebUtility.UrlEncode(clientSecret)}";
-                    tokenRequest.Headers.Authorization =
-                        new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(basic)));
-                }
-
-                tokenRequest.Content = new FormUrlEncodedContent(form);
-
-                // expires_in counts from the response; take the time before the request, so the expiry is not late.
-                var requestedAt = DateTimeOffset.UtcNow;
-                using var response = await http.SendAsync(tokenRequest, cancellationToken);
-                response.EnsureSuccessStatusCode();
-                var token = await response.Content.ReadFromJsonAsync<TokenResponse>(cancellationToken)
-                            ?? throw new InvalidOperationException("The token endpoint returned no token.");
-                if (!string.Equals(token.TokenType, "Bearer", StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new InvalidOperationException($"Expected a Bearer token, got the token type '{token.TokenType}'.");
-                }
-
-                // Some identity providers give a new refresh token with each grant, and the old one stops working.
-                // One client calls its provider at most once at a time, so the closure can keep it without a lock. Add a
-                // lock (for example a SemaphoreSlim) if several clients share this provider.
-                if (!string.IsNullOrEmpty(token.RefreshToken))
-                {
-                    refreshToken = token.RefreshToken;
-                }
-
-                // ClickHouse Cloud accepts only a JWT access token, from the identity provider of its JWT provider.
-                // expires_in is the lifetime in seconds. Without it, the client reads the exp claim of the JWT.
-                DateTimeOffset? expiresAt = token.ExpiresIn > 0 ? requestedAt.AddSeconds(token.ExpiresIn.Value) : null;
-                return ClickHouseCredentials.CreateBearer(token.AccessToken, expiresAt);
-            },
+            CredentialsProvider = new OAuthRefreshTokenProvider(http, tokenEndpoint, clientId, clientSecret, refreshToken),
         };
 
         await using var client = new ClickHouseTcpClient(options);
@@ -108,6 +57,83 @@ public static class TcpTokenRefresh
         Console.WriteLine($"   Current user: {user}");
 
         Console.WriteLine("\nToken refresh example completed successfully!");
+    }
+
+    /// <summary>
+    /// Gets an access token with an OAuth 2.0 refresh-token grant. The client calls
+    /// <see cref="GetCredentialsAsync"/> for the first token, before the token expires, and after the server rejects it.
+    /// </summary>
+    private sealed class OAuthRefreshTokenProvider : IClickHouseCredentialsProvider
+    {
+        private readonly HttpClient _http;
+        private readonly string _tokenEndpoint;
+        private readonly string _clientId;
+        private readonly string? _clientSecret;
+        private string _refreshToken;
+
+        public OAuthRefreshTokenProvider(
+            HttpClient http, string tokenEndpoint, string clientId, string? clientSecret, string refreshToken)
+        {
+            _http = http;
+            _tokenEndpoint = tokenEndpoint;
+            _clientId = clientId;
+            _clientSecret = clientSecret;
+            _refreshToken = refreshToken;
+        }
+
+        public async ValueTask<ClickHouseCredentials> GetCredentialsAsync(
+            ClickHouseCredentialsRequest request, CancellationToken cancellationToken)
+        {
+            // Initial: the first call. Expiring: the token expires soon. Rejected: the server rejected the token.
+            // A refresh-token grant always returns a new token, so this provider handles the three in one way.
+            Console.WriteLine($"   Provider called: {request.Reason}");
+
+            var form = new Dictionary<string, string>
+            {
+                ["grant_type"] = "refresh_token",
+                ["refresh_token"] = _refreshToken,
+            };
+            using var tokenRequest = new HttpRequestMessage(HttpMethod.Post, _tokenEndpoint);
+            if (string.IsNullOrEmpty(_clientSecret))
+            {
+                // A public client names itself in the body.
+                form["client_id"] = _clientId;
+            }
+            else
+            {
+                // A confidential client authenticates with HTTP Basic (RFC 6749, section 2.3.1), which every
+                // identity provider supports. The ID and the secret are form-encoded first.
+                var basic = $"{WebUtility.UrlEncode(_clientId)}:{WebUtility.UrlEncode(_clientSecret)}";
+                tokenRequest.Headers.Authorization =
+                    new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(basic)));
+            }
+
+            tokenRequest.Content = new FormUrlEncodedContent(form);
+
+            // expires_in counts from the response; take the time before the request, so the expiry is not late.
+            var requestedAt = DateTimeOffset.UtcNow;
+            using var response = await _http.SendAsync(tokenRequest, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            var token = await response.Content.ReadFromJsonAsync<TokenResponse>(cancellationToken)
+                        ?? throw new InvalidOperationException("The token endpoint returned no token.");
+            if (!string.Equals(token.TokenType, "Bearer", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Expected a Bearer token, got the token type '{token.TokenType}'.");
+            }
+
+            // Some identity providers give a new refresh token with each grant, and the old one stops working.
+            // One client calls its provider at most once at a time, so the field needs no lock. Add a lock (for
+            // example a SemaphoreSlim) if several clients share this provider.
+            if (!string.IsNullOrEmpty(token.RefreshToken))
+            {
+                _refreshToken = token.RefreshToken;
+            }
+
+            // ClickHouse Cloud accepts only a JWT access token, from the identity provider of its JWT provider.
+            // expires_in is the lifetime in seconds. Without it, the client reads the exp claim of the JWT.
+            DateTimeOffset? expiresAt = token.ExpiresIn > 0 ? requestedAt.AddSeconds(token.ExpiresIn.Value) : null;
+            return ClickHouseCredentials.CreateBearer(token.AccessToken, expiresAt);
+        }
     }
 
     private sealed class TokenResponse

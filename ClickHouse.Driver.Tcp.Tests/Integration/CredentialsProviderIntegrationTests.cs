@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
@@ -35,7 +36,7 @@ public class CredentialsProviderIntegrationTests
             {
                 // Each operation gets a new connection, so the second one authenticates after the rotation.
                 MaxConnectionLifetime = TimeSpan.FromTicks(1),
-                CredentialsProvider = (request, _) =>
+                CredentialsProvider = new FuncCredentialsProvider((request, _) =>
                 {
                     reasons.Enqueue(request.Reason);
                     if (request.Reason == ClickHouseCredentialsRefreshReason.Rejected)
@@ -44,7 +45,7 @@ public class CredentialsProviderIntegrationTests
                     }
 
                     return new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBasic(user, known));
-                },
+                }),
             };
             await using var client = new ClickHouseTcpClient(options);
 
@@ -84,11 +85,11 @@ public class CredentialsProviderIntegrationTests
             int calls = 0;
             ClickHouseTcpClientOptions options = TcpServerFixture.Options() with
             {
-                CredentialsProvider = (_, _) =>
+                CredentialsProvider = new FuncCredentialsProvider((_, _) =>
                 {
                     Interlocked.Increment(ref calls);
                     return new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBasic(user, "wrong"));
-                },
+                }),
             };
             await using var client = new ClickHouseTcpClient(options);
 

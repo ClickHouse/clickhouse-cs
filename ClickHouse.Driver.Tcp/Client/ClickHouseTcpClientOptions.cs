@@ -15,10 +15,11 @@ namespace ClickHouse.Driver.Tcp;
 /// <remarks>
 /// Being a record, two instances compare equal when every property does. <see cref="CustomSettings"/>,
 /// <see cref="Compressor"/>, <see cref="LoggerFactory"/>, <see cref="ConfigureTls"/> and
-/// <see cref="CredentialsProvider"/> are not compared by content: the first three are interfaces with no
-/// value-equality contract, compared by reference, and the last two are delegates, compared by method and target. Two options that hold equal-but-distinct
-/// dictionaries, or equivalent-but-distinct lambdas, are <b>not</b> equal. Do not use these options as a cache or
-/// pool key; use a purpose-built key type.
+/// <see cref="CredentialsProvider"/> are not compared by content: <see cref="ConfigureTls"/> is a delegate, compared
+/// by method and target, and the others are interfaces with no value-equality contract, compared with their own
+/// <see cref="object.Equals(object)"/> (by reference, unless the implementation overrides it). Two options that hold
+/// equal-but-distinct dictionaries, distinct provider instances, or equivalent-but-distinct lambdas are <b>not</b>
+/// equal. Do not use these options as a cache or pool key; use a purpose-built key type.
 /// </remarks>
 public sealed record ClickHouseTcpClientOptions
 {
@@ -122,7 +123,7 @@ public sealed record ClickHouseTcpClientOptions
     /// operation that needed the connection, with the provider's exception.
     /// </para>
     /// </remarks>
-    public ClickHouseCredentialsProvider CredentialsProvider { get; init; }
+    public IClickHouseCredentialsProvider CredentialsProvider { get; init; }
 
     /// <summary>
     /// Whether to encrypt the transport with TLS, negotiated before the handshake. Defaults to false. The

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.Tests.Utilities;
 using ClickHouse.Driver.Utility;
 using NUnit.Framework;
 
@@ -153,12 +154,12 @@ public class BearerAuthenticationTests
         var reasons = new ConcurrentQueue<ClickHouseCredentialsRefreshReason>();
         var settings = new ClickHouseClientSettings(connectionString)
         {
-            CredentialsProvider = (request, _) =>
+            CredentialsProvider = new FuncCredentialsProvider((request, _) =>
             {
                 reasons.Enqueue(request.Reason);
                 var token = request.Reason == ClickHouseCredentialsRefreshReason.Initial ? expiredToken : bearerToken;
                 return new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBearer(token));
-            },
+            }),
         };
         using var client = new ClickHouseClient(settings);
 

@@ -1177,7 +1177,7 @@ public class ConnectionPoolTests
         {
             IdleTimeout = TimeSpan.Zero,
             MaxConnectionLifetime = TimeSpan.Zero,
-            CredentialsProvider = (_, _) => default,
+            CredentialsProvider = new FuncCredentialsProvider((_, _) => default),
         };
 
         Assert.That(ConnectionPool.SweepInterval(options), Is.EqualTo(TimeSpan.FromSeconds(30)));

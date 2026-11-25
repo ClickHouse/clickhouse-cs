@@ -1,7 +1,7 @@
 namespace ClickHouse.Driver;
 
 /// <summary>
-/// Why a client asks its <see cref="ClickHouseCredentialsProvider"/> for credentials.
+/// Why a client asks its <see cref="IClickHouseCredentialsProvider"/> for credentials.
 /// </summary>
 public enum ClickHouseCredentialsRefreshReason
 {

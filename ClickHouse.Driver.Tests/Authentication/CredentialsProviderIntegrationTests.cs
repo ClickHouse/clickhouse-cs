@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
+using ClickHouse.Driver.Tests.Utilities;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver.Tests.Authentication;
@@ -36,7 +37,7 @@ public class CredentialsProviderIntegrationTests : AbstractConnectionTestFixture
             var reasons = new ConcurrentQueue<ClickHouseCredentialsRefreshReason>();
             var settings = new ClickHouseClientSettings(TestUtilities.GetConnectionStringBuilder())
             {
-                CredentialsProvider = (request, _) =>
+                CredentialsProvider = new FuncCredentialsProvider((request, _) =>
                 {
                     reasons.Enqueue(request.Reason);
                     if (request.Reason == ClickHouseCredentialsRefreshReason.Rejected)
@@ -45,7 +46,7 @@ public class CredentialsProviderIntegrationTests : AbstractConnectionTestFixture
                     }
 
                     return new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBasic(userName, known));
-                },
+                }),
             };
             using var rotatingClient = new ClickHouseClient(settings);
 
@@ -89,11 +90,11 @@ public class CredentialsProviderIntegrationTests : AbstractConnectionTestFixture
             var calls = 0;
             var settings = new ClickHouseClientSettings(TestUtilities.GetConnectionStringBuilder())
             {
-                CredentialsProvider = (_, _) =>
+                CredentialsProvider = new FuncCredentialsProvider((_, _) =>
                 {
                     calls++;
                     return new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBasic(userName, "wrong"));
-                },
+                }),
             };
             using var rotatingClient = new ClickHouseClient(settings);
 
@@ -125,13 +126,13 @@ public class CredentialsProviderIntegrationTests : AbstractConnectionTestFixture
         var reasons = new ConcurrentQueue<ClickHouseCredentialsRefreshReason>();
         var settings = new ClickHouseClientSettings(builder)
         {
-            CredentialsProvider = (request, _) =>
+            CredentialsProvider = new FuncCredentialsProvider((request, _) =>
             {
                 reasons.Enqueue(request.Reason);
                 return new ValueTask<ClickHouseCredentials>(request.Reason == ClickHouseCredentialsRefreshReason.Rejected
                     ? ClickHouseCredentials.CreateBasic(builder.Username, builder.Password)
                     : ClickHouseCredentials.CreateBasic("default", $"Stale_{Guid.NewGuid():N}"));
-            },
+            }),
         };
         using var rotatingClient = new ClickHouseClient(settings);
 
@@ -174,11 +175,11 @@ public class CredentialsProviderIntegrationTests : AbstractConnectionTestFixture
             var calls = 0;
             var settings = new ClickHouseClientSettings(builder)
             {
-                CredentialsProvider = (_, _) =>
+                CredentialsProvider = new FuncCredentialsProvider((_, _) =>
                 {
                     Interlocked.Increment(ref calls);
                     return new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBasic(builder.Username, builder.Password));
-                },
+                }),
             };
             using var providerClient = new ClickHouseClient(settings);
 

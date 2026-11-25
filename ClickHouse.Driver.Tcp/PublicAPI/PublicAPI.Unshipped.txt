@@ -111,7 +111,7 @@ ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Password.get -> string
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Password.init -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.BearerToken.get -> string
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.BearerToken.init -> void
-ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.CredentialsProvider.get -> ClickHouse.Driver.ClickHouseCredentialsProvider
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.CredentialsProvider.get -> ClickHouse.Driver.IClickHouseCredentialsProvider
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.CredentialsProvider.init -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.PoolReusePolicy.get -> ClickHouse.Driver.Tcp.ClickHouseTcpPoolReusePolicy
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.PoolReusePolicy.init -> void

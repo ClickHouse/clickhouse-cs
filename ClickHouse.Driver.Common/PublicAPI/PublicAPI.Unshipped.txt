@@ -3,7 +3,6 @@ ClickHouse.Driver.ClickHouseCredentials.BearerToken.get -> string
 ClickHouse.Driver.ClickHouseCredentials.ExpiresAt.get -> System.DateTimeOffset?
 ClickHouse.Driver.ClickHouseCredentials.Password.get -> string
 ClickHouse.Driver.ClickHouseCredentials.Username.get -> string
-ClickHouse.Driver.ClickHouseCredentialsProvider
 ClickHouse.Driver.ClickHouseCredentialsRefreshReason
 ClickHouse.Driver.ClickHouseCredentialsRefreshReason.Expiring = 1 -> ClickHouse.Driver.ClickHouseCredentialsRefreshReason
 ClickHouse.Driver.ClickHouseCredentialsRefreshReason.Initial = 0 -> ClickHouse.Driver.ClickHouseCredentialsRefreshReason
@@ -59,6 +58,8 @@ ClickHouse.Driver.Compression.ZstdCompressor.Encode(System.ReadOnlySpan<byte> so
 ClickHouse.Driver.Compression.ZstdCompressor.MaxEncodedLength(int sourceLength) -> int
 ClickHouse.Driver.Compression.ZstdCompressor.MethodByte.get -> byte
 ClickHouse.Driver.Compression.ZstdCompressor.ZstdCompressor(int level = 3, int bufferSize = 262144) -> void
+ClickHouse.Driver.IClickHouseCredentialsProvider
+ClickHouse.Driver.IClickHouseCredentialsProvider.GetCredentialsAsync(ClickHouse.Driver.ClickHouseCredentialsRequest request, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.ClickHouseCredentials>
 const ClickHouse.Driver.Compression.Lz4Compressor.Lz4MethodByte = 130 -> byte
 const ClickHouse.Driver.Compression.ZstdCompressor.DefaultLevel = 3 -> int
 const ClickHouse.Driver.Compression.ZstdCompressor.ZstdMethodByte = 144 -> byte
@@ -72,4 +73,3 @@ static readonly ClickHouse.Driver.Compression.BrotliCompressor.Default -> ClickH
 static readonly ClickHouse.Driver.Compression.GZipCompressor.Default -> ClickHouse.Driver.Compression.GZipCompressor
 static readonly ClickHouse.Driver.Compression.Lz4Compressor.Default -> ClickHouse.Driver.Compression.Lz4Compressor
 static readonly ClickHouse.Driver.Compression.ZstdCompressor.Default -> ClickHouse.Driver.Compression.ZstdCompressor
-virtual ClickHouse.Driver.ClickHouseCredentialsProvider.Invoke(ClickHouse.Driver.ClickHouseCredentialsRequest request, System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.ClickHouseCredentials>

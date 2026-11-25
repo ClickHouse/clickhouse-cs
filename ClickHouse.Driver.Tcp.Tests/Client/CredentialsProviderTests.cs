@@ -61,7 +61,7 @@ public class CredentialsProviderTests
             Username = "alice",
             Password = "password",
             BearerToken = bearerToken,
-            CredentialsProvider = withProvider ? (_, _) => new(provided) : null,
+            CredentialsProvider = withProvider ? new FuncCredentialsProvider((_, _) => new(provided)) : null,
         };
         using var factory = new TcpConnectionFactory(options);
 
@@ -85,11 +85,11 @@ public class CredentialsProviderTests
         ClickHouseTcpClientOptions options = Options(server) with
         {
             LoggerFactory = logs,
-            CredentialsProvider = (request, _) =>
+            CredentialsProvider = new FuncCredentialsProvider((request, _) =>
             {
                 reasons.Enqueue(request.Reason);
                 return new(ClickHouseCredentials.CreateBearer($"token-{reasons.Count}"));
-            },
+            }),
         };
         using var factory = new TcpConnectionFactory(options);
 
@@ -113,11 +113,11 @@ public class CredentialsProviderTests
         int calls = 0;
         ClickHouseTcpClientOptions options = Options(server) with
         {
-            CredentialsProvider = (_, _) =>
+            CredentialsProvider = new FuncCredentialsProvider((_, _) =>
             {
                 Interlocked.Increment(ref calls);
                 return new(ClickHouseCredentials.CreateBearer("wrong"));
-            },
+            }),
         };
         using var factory = new TcpConnectionFactory(options);
 
@@ -141,11 +141,11 @@ public class CredentialsProviderTests
         var reasons = new ConcurrentQueue<ClickHouseCredentialsRefreshReason>();
         ClickHouseTcpClientOptions options = Options(server) with
         {
-            CredentialsProvider = (request, _) =>
+            CredentialsProvider = new FuncCredentialsProvider((request, _) =>
             {
                 reasons.Enqueue(request.Reason);
                 return new(ClickHouseCredentials.CreateBearer($"token-{reasons.Count}", DateTimeOffset.UtcNow.AddHours(1)));
-            },
+            }),
         };
         using var factory = new TcpConnectionFactory(options);
 
@@ -177,8 +177,8 @@ public class CredentialsProviderTests
         {
             CredentialsProvider = provider switch
             {
-                ProviderResult.Null => (_, _) => new((ClickHouseCredentials)null),
-                ProviderResult.Bearer => (_, _) => new(ClickHouseCredentials.CreateBearer("token")),
+                ProviderResult.Null => new FuncCredentialsProvider((_, _) => new((ClickHouseCredentials)null)),
+                ProviderResult.Bearer => new FuncCredentialsProvider((_, _) => new(ClickHouseCredentials.CreateBearer("token"))),
                 _ => null,
             },
         };
@@ -206,7 +206,7 @@ public class CredentialsProviderTests
             Host = "127.0.0.1",
             Port = ((IPEndPoint)listener.LocalEndpoint).Port,
             DialTimeout = TimeSpan.FromMilliseconds(250),
-            CredentialsProvider = async (_, cancellationToken) =>
+            CredentialsProvider = new FuncCredentialsProvider(async (_, cancellationToken) =>
             {
                 if (providerHangs)
                 {
@@ -214,7 +214,7 @@ public class CredentialsProviderTests
                 }
 
                 return ClickHouseCredentials.CreateBearer("token");
-            },
+            }),
         };
 
         try
@@ -250,11 +250,11 @@ public class CredentialsProviderTests
             Host = "127.0.0.1",
             Port = 9,
             DialTimeout = TimeSpan.FromMilliseconds(250),
-            CredentialsProvider = (_, _) =>
+            CredentialsProvider = new FuncCredentialsProvider((_, _) =>
             {
                 release.Wait(blockFor);
                 return new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBearer("token"));
-            },
+            }),
         };
 
         try
@@ -287,7 +287,7 @@ public class CredentialsProviderTests
             Host = "127.0.0.1",
             Port = 9,
             PoolTimeout = TimeSpan.FromSeconds(5),
-            CredentialsProvider = async (_, cancellationToken) =>
+            CredentialsProvider = new FuncCredentialsProvider(async (_, cancellationToken) =>
             {
                 providerStarted.TrySetResult();
                 try
@@ -303,7 +303,7 @@ public class CredentialsProviderTests
                 }
 
                 return null;
-            },
+            }),
         };
         var pool = new ConnectionPool(options);
         ValueTask<IConnectionLease> rent = pool.RentAsync(None);
@@ -325,7 +325,7 @@ public class CredentialsProviderTests
         {
             Host = "127.0.0.1",
             Port = 9,
-            CredentialsProvider = (_, _) => throw failure,
+            CredentialsProvider = new FuncCredentialsProvider((_, _) => throw failure),
         };
         using var factory = new TcpConnectionFactory(options);
 
@@ -400,11 +400,11 @@ public class CredentialsProviderTests
     public async Task DisposeAsync_OperationFailedWithAServerError(int code, bool fromProvider, bool expectInvalidated, int expectedEventId)
     {
         var reasons = new ConcurrentQueue<ClickHouseCredentialsRefreshReason>();
-        using var cache = new CredentialsCache((request, _) =>
+        using var cache = new CredentialsCache(new FuncCredentialsProvider((request, _) =>
         {
             reasons.Enqueue(request.Reason);
             return new(ClickHouseCredentials.CreateBearer("token", DateTimeOffset.UtcNow.AddHours(1)));
-        });
+        }));
         ClickHouseCredentials used = await cache.GetAsync(None);
         using var logs = new CapturingLoggerFactory();
         var connections = new FakeConnectionFactory
@@ -449,7 +449,7 @@ public class CredentialsProviderTests
     // Credentials with a known expiry, `lifetime` after the current time of `time`.
     private static ConnectionCredentials ExpiringCredentials(ControlledTimeProvider time, TimeSpan lifetime)
     {
-        var cache = new CredentialsCache((_, _) => default);
+        var cache = new CredentialsCache(new FuncCredentialsProvider((_, _) => default));
         return new ConnectionCredentials(cache, ClickHouseCredentials.CreateBearer("token", time.GetUtcNow() + lifetime));
     }
 

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Authentication;
+using ClickHouse.Driver.Tests.Utilities;
 
 namespace ClickHouse.Driver.Tests.Authentication;
 
@@ -21,7 +22,7 @@ public class CredentialsCacheTests
     /// <summary>
     /// A provider that records each call and returns the next credentials from <see cref="Next"/>.
     /// </summary>
-    private sealed class FakeProvider
+    private sealed class FakeProvider : IClickHouseCredentialsProvider
     {
         private readonly ConcurrentQueue<ClickHouseCredentialsRequest> requests = new();
 
@@ -33,7 +34,7 @@ public class CredentialsCacheTests
 
         public int Calls => requests.Count;
 
-        public async ValueTask<ClickHouseCredentials> InvokeAsync(ClickHouseCredentialsRequest request, CancellationToken token)
+        public async ValueTask<ClickHouseCredentials> GetCredentialsAsync(ClickHouseCredentialsRequest request, CancellationToken token)
         {
             requests.Enqueue(request);
             Tokens.Add(token);
@@ -42,7 +43,7 @@ public class CredentialsCacheTests
     }
 
     private CredentialsCache CreateCache(FakeProvider provider, Action<Exception> onBackgroundRefreshFailed = null)
-        => new(provider.InvokeAsync, onBackgroundRefreshFailed, () => now);
+        => new(provider, onBackgroundRefreshFailed, () => now);
 
     private ClickHouseCredentials Bearer(int n, TimeSpan lifetime) => ClickHouseCredentials.CreateBearer($"token-{n}", now + lifetime);
 
@@ -259,7 +260,7 @@ public class CredentialsCacheTests
     public void GetAsync_ProviderThrowsSynchronously_ThrowsTheProviderException()
     {
         var failure = new InvalidOperationException("bad configuration");
-        using var cache = new CredentialsCache((_, _) => throw failure, utcNow: () => now);
+        using var cache = new CredentialsCache(new FuncCredentialsProvider((_, _) => throw failure), utcNow: () => now);
 
         var thrown = Assert.ThrowsAsync<InvalidOperationException>(async () => await cache.GetAsync(CancellationToken.None));
 
@@ -512,11 +513,11 @@ public class CredentialsCacheTests
     {
         SynchronizationContext seen = new RecordingSynchronizationContext();
         using var cache = new CredentialsCache(
-            (_, _) =>
+            new FuncCredentialsProvider((_, _) =>
             {
                 seen = SynchronizationContext.Current;
                 return new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBearer("token"));
-            },
+            }),
             utcNow: () => now);
         var callerContext = new RecordingSynchronizationContext();
         var original = SynchronizationContext.Current;

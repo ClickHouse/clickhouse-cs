@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 namespace ClickHouse.Driver.Authentication;
 
 /// <summary>
-/// The credentials of one client, from its <see cref="ClickHouseCredentialsProvider"/>. Both clients use
+/// The credentials of one client, from its <see cref="IClickHouseCredentialsProvider"/>. Both clients use
 /// it: the HTTP client for each request, the native TCP client for each new connection.
 /// </summary>
 /// <remarks>
@@ -38,7 +38,7 @@ internal sealed class CredentialsCache : IDisposable
     internal static readonly TimeSpan MaxRefreshWindow = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan FailedRefreshBackoff = TimeSpan.FromSeconds(5);
 
-    private readonly ClickHouseCredentialsProvider provider;
+    private readonly IClickHouseCredentialsProvider provider;
     private readonly Action<Exception> onBackgroundRefreshFailed;
     private readonly Func<DateTimeOffset> utcNow;
     private readonly CancellationTokenSource disposal = new();
@@ -62,7 +62,7 @@ internal sealed class CredentialsCache : IDisposable
     /// </param>
     /// <param name="utcNow">The clock. Tests replace it.</param>
     internal CredentialsCache(
-        ClickHouseCredentialsProvider provider,
+        IClickHouseCredentialsProvider provider,
         Action<Exception> onBackgroundRefreshFailed = null,
         Func<DateTimeOffset> utcNow = null)
     {
@@ -236,7 +236,7 @@ internal sealed class CredentialsCache : IDisposable
         ClickHouseCredentials credentials;
         try
         {
-            credentials = await provider(new ClickHouseCredentialsRequest(run.Reason), disposal.Token).ConfigureAwait(false);
+            credentials = await provider.GetCredentialsAsync(new ClickHouseCredentialsRequest(run.Reason), disposal.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

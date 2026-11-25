@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using ClickHouse.Driver.Compression;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClickHouse.Driver.Tcp.Tests.Client;
@@ -465,7 +466,7 @@ public class ClickHouseTcpClientOptionsTests
             Username = "copy-user",
             Password = "copy-password",
             BearerToken = "copy-token",
-            CredentialsProvider = (_, _) => default,
+            CredentialsProvider = new FuncCredentialsProvider((_, _) => default),
             Database = "copy-db",
             QuotaKey = "copy-quota",
             UseTls = true,

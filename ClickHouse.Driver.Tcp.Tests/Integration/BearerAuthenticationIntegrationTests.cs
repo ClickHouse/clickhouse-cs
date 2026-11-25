@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 
 namespace ClickHouse.Driver.Tcp.Tests.Integration;
 
@@ -72,12 +73,12 @@ public class BearerAuthenticationIntegrationTests
         var reasons = new ConcurrentQueue<ClickHouseCredentialsRefreshReason>();
         ClickHouseTcpClientOptions options = TcpServerFixture.Options() with
         {
-            CredentialsProvider = (request, _) =>
+            CredentialsProvider = new FuncCredentialsProvider((request, _) =>
             {
                 reasons.Enqueue(request.Reason);
                 string token = request.Reason == ClickHouseCredentialsRefreshReason.Initial ? expiredToken : bearerToken;
                 return new ValueTask<ClickHouseCredentials>(ClickHouseCredentials.CreateBearer(token));
-            },
+            }),
         };
         await using var client = new ClickHouseTcpClient(options);
 

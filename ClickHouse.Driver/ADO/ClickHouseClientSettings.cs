@@ -175,7 +175,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// <see cref="ClickHouseConnection.ConnectionString"/> has no provider.
     /// Default: null
     /// </summary>
-    public ClickHouseCredentialsProvider CredentialsProvider { get; init; }
+    public IClickHouseCredentialsProvider CredentialsProvider { get; init; }
 
     /// <summary>
     /// Gets or sets whether to use compression for data transfer. This is the master switch: when false

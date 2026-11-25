@@ -4,16 +4,9 @@ using System.Threading.Tasks;
 namespace ClickHouse.Driver;
 
 /// <summary>
-/// Gets the credentials that a client authenticates with. Use it for tokens that expire (refresh
-/// them here) and for passwords that rotate.
+/// Gives the credentials that a client authenticates with. Use it for tokens that expire (refresh them in
+/// <see cref="GetCredentialsAsync"/>) and for passwords that rotate.
 /// </summary>
-/// <param name="request">Why the client asks for credentials.</param>
-/// <param name="cancellationToken">
-/// Cancelled when the client is disposed. A caller that stops waiting does not cancel the call.
-/// </param>
-/// <returns>
-/// The credentials, or <see langword="null"/> to use the static credentials of the client settings.
-/// </returns>
 /// <remarks>
 /// <para>
 /// A client calls the provider at most once at a time. It caches credentials that have a known expiry
@@ -39,6 +32,20 @@ namespace ClickHouse.Driver;
 /// own timeout.
 /// </para>
 /// </remarks>
-public delegate ValueTask<ClickHouseCredentials> ClickHouseCredentialsProvider(
-    ClickHouseCredentialsRequest request,
-    CancellationToken cancellationToken);
+public interface IClickHouseCredentialsProvider
+{
+    /// <summary>
+    /// Gets new credentials for the client. The client calls this method only when it needs new credentials (see the
+    /// remarks of <see cref="IClickHouseCredentialsProvider"/>).
+    /// </summary>
+    /// <param name="request">Why the client asks for credentials.</param>
+    /// <param name="cancellationToken">
+    /// Cancelled when the client is disposed. A caller that stops waiting does not cancel the call.
+    /// </param>
+    /// <returns>
+    /// The credentials, or <see langword="null"/> to use the static credentials of the client settings.
+    /// </returns>
+    ValueTask<ClickHouseCredentials> GetCredentialsAsync(
+        ClickHouseCredentialsRequest request,
+        CancellationToken cancellationToken);
+}
