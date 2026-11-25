@@ -363,14 +363,15 @@ public class Time64TypeTests
         Assert.That(result, Is.EqualTo("1:05:07"));
     }
 
-    [Test]
-    public void ToClickHouseDecimal_Scale0_NoDecimalPlaces()
+    [TestCase(1999, 1)]
+    [TestCase(-1999, -1)]
+    public void ToClickHouseDecimal_ScaleZero_TruncatesTowardZero(int milliseconds, int expectedSeconds)
     {
         var type = new Time64Type { Scale = 0 };
-        var timeSpan = TimeSpan.FromSeconds(1.999); // Should round to 2
+        var timeSpan = TimeSpan.FromMilliseconds(milliseconds);
 
         var result = type.ToClickHouseDecimal(timeSpan);
 
-        Assert.That(result, Is.EqualTo(2m));
+        Assert.That(result, Is.EqualTo(expectedSeconds));
     }
 }

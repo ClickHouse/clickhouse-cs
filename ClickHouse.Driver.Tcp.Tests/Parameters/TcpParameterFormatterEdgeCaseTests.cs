@@ -113,9 +113,9 @@ public class TcpParameterFormatterEdgeCaseTests
         => Format(seconds, "Time");
 
     [Test]
-    public void FormatSqlText_TimeFromATimeSpan_RoundsToWholeSeconds()
+    public void FormatSqlText_TimeFromATimeSpan_TruncatesToWholeSeconds()
     {
-        Assert.That(Format(new TimeSpan(0, 1, 2, 3, 600), "Time"), Is.EqualTo("1:02:04"));
+        Assert.That(Format(new TimeSpan(0, 1, 2, 3, 600), "Time"), Is.EqualTo("1:02:03"));
     }
 
     [Test]
@@ -135,13 +135,12 @@ public class TcpParameterFormatterEdgeCaseTests
     public string FormatSqlText_TimeFromATimeOnly_UsesTheClockReading(string typeName)
         => Format(new TimeOnly(1, 2, 3, 123), typeName);
 
-    // Match the HTTP driver's midpoint-to-even rounding at the declared scale.
-    [TestCase("Time64(1)", 150, ExpectedResult = "1:02:03.2", TestName = "A midpoint rounds to even, upward")]
-    [TestCase("Time64(1)", 250, ExpectedResult = "1:02:03.2", TestName = "A midpoint rounds to even, downward")]
-    [TestCase("Time64(1)", 149, ExpectedResult = "1:02:03.1", TestName = "Below the midpoint")]
-    [TestCase("Time64(2)", 999, ExpectedResult = "1:02:04.00", TestName = "Rounding carries into the second")]
-    [TestCase("Time", 600, ExpectedResult = "1:02:04", TestName = "Rounding carries into the second at scale 0")]
-    public string FormatSqlText_TimeOnlyFinerThanTheScale_IsRoundedToIt(string typeName, int milliseconds)
+    [TestCase("Time64(1)", 150, ExpectedResult = "1:02:03.1")]
+    [TestCase("Time64(1)", 250, ExpectedResult = "1:02:03.2")]
+    [TestCase("Time64(1)", 149, ExpectedResult = "1:02:03.1")]
+    [TestCase("Time64(2)", 999, ExpectedResult = "1:02:03.99")]
+    [TestCase("Time", 600, ExpectedResult = "1:02:03")]
+    public string FormatSqlText_TimeOnlyFinerThanTheScale_IsTruncated(string typeName, int milliseconds)
         => Format(new TimeOnly(1, 2, 3, milliseconds), typeName);
 
     [Test]
@@ -153,9 +152,8 @@ public class TcpParameterFormatterEdgeCaseTests
             Assert.That(Format(TimeOnly.MaxValue, "Time64(9)"), Is.EqualTo("23:59:59.999999900"));
             Assert.That(Format(TimeOnly.MinValue, "Time64(3)"), Is.EqualTo("0:00:00.000"));
 
-            // The final half-second rounds to the legal Time value 24:00:00.
-            Assert.That(Format(TimeOnly.MaxValue, "Time"), Is.EqualTo("24:00:00"), "rounded, not clamped to the day");
-            Assert.That(Format(TimeOnly.MaxValue, "Time64(3)"), Is.EqualTo("23:59:60.000"));
+            Assert.That(Format(TimeOnly.MaxValue, "Time"), Is.EqualTo("23:59:59"));
+            Assert.That(Format(TimeOnly.MaxValue, "Time64(3)"), Is.EqualTo("23:59:59.999"));
         });
     }
 
@@ -437,13 +435,12 @@ public class TcpParameterFormatterEdgeCaseTests
         => Format(text, "Decimal64(4)");
 
     [Test]
-    public void FormatSqlText_Time64AtAMidpoint_RoundsToEven()
+    public void FormatSqlText_Time64AtAMidpoint_TruncatesTowardZero()
     {
-        // Pre-round because decimal formatting otherwise rounds midpoints away from zero.
         Assert.Multiple(() =>
         {
             Assert.That(Format(TimeSpan.FromSeconds(0.5), "Time64(0)"), Is.EqualTo("0:00:00"));
-            Assert.That(Format(TimeSpan.FromSeconds(1.5), "Time64(0)"), Is.EqualTo("0:00:02"));
+            Assert.That(Format(TimeSpan.FromSeconds(1.5), "Time64(0)"), Is.EqualTo("0:00:01"));
         });
     }
 
@@ -496,7 +493,7 @@ public class TcpParameterFormatterEdgeCaseTests
         // When several alternatives accept a value, declaration order wins.
         Assert.Multiple(() =>
         {
-            Assert.That(Format(new TimeSpan(0, 1, 1, 1, 500), "Variant(Time, Time64(3))"), Is.EqualTo("1:01:02"));
+            Assert.That(Format(new TimeSpan(0, 1, 1, 1, 500), "Variant(Time, Time64(3))"), Is.EqualTo("1:01:01"));
             Assert.That(
                 Format(new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc), "Variant(Date, DateTime64(3))"),
                 Is.EqualTo("2024-01-02"));
