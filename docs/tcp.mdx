@@ -587,8 +587,7 @@ insert completes before that block is released.
 - Any other column is converted from the CLR type of its values to the target type, with the
   mappings of [Type mapping: writing to ClickHouse](#type-map-writing). `ClickHouseTcpTypes.CanWrite`
   gives the answer of this conversion. A value that the target type cannot hold (a text that is too
-  long for a `FixedString(N)`, a decimal past its precision) is refused with its row, and the insert
-  stops.
+  long for a `FixedString(N)`, a decimal past its precision) is refused, and the insert stops.
 
 #### Row inserts {#row-inserts}
 
@@ -1319,8 +1318,8 @@ goes to `IPv4` or `IPv6` by its address family, and any other such value is refu
 runtime type is the default type of no alternative goes to the alternative that is written from
 that type, with the same rule when there are several: for example a `byte[]` goes to a `String`
 alternative, and a `DateTimeOffset` to a `DateTime` alternative. The values of one `Array`, `Map`,
-or `Tuple` alternative must have one CLR type in one insert block. `Dynamic` supports scalar and
-recursively supported array, map, and tuple values.
+`Tuple`, or `LowCardinality` alternative must have one CLR type in one insert block. `Dynamic`
+supports scalar and recursively supported array, map, and tuple values.
 
 #### Geometry types {#type-map-writing-geometry}
 
