@@ -596,6 +596,9 @@ insert completes before that block is released.
   - A part read as a `DateTime64` or `Time64` of another scale, or as an `Enum8` or `Enum16` with
     other members, is converted through its values (the instants, the durations and the labels).
     The insert refuses such a part of a scale above 7 unless the target has the same scale.
+    The insert also refuses a `DateTime64` part (an instant) written into a `Time64` (a duration),
+    and the reverse: convert the values in the query, or insert the counts as a column of `long`
+    values.
   - A `String` or `FixedString` part written into a `LowCardinality`, `Nullable` or `FixedString`
     type is written from its bytes, so a value that is not valid UTF-8 keeps them. A
     `FixedString(N)` takes only values of exactly N bytes.
