@@ -208,6 +208,21 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
 
     public object Clone() => new ClickHouseConnection(ClickHouseClient);
 
+    /// <summary>
+    /// Returns the client that this connection uses, for example to call
+    /// <see cref="IClickHouseClient.InsertBinaryAsync(string, IEnumerable{string}, IEnumerable{object[]}, InsertOptions, CancellationToken)"/>
+    /// with the settings and the HTTP connection pool of the connection. For a connection from a
+    /// <see cref="ClickHouseDataSource"/>, this is the client of the data source.
+    /// </summary>
+    /// <remarks>
+    /// Do not dispose the client: the connection or the data source owns it. A change to
+    /// <see cref="Settings"/> or <see cref="ConnectionString"/> gives the connection a new client, so
+    /// call this method again after such a change. The client uses the database of its settings, not a
+    /// database selected with <see cref="ChangeDatabase(string)"/>; pass that database in
+    /// <see cref="QueryOptions.Database"/> or <see cref="InsertOptions"/> if you need it.
+    /// </remarks>
+    public IClickHouseClient GetClient() => ClickHouseClient;
+
     public override void Close() => state = ConnectionState.Closed;
 
     public override void Open() => OpenAsync().ConfigureAwait(false).GetAwaiter().GetResult();
