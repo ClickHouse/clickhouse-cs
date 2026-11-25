@@ -14,8 +14,8 @@ internal static class TupleShape
 {
     /// <summary>
     /// The most elements that this client reads or writes in one tuple. The cost to build the CLR type of a tuple and the
-    /// converters over it grows quickly with the depth of the <c>TRest</c> nesting, and a very deep nesting makes the
-    /// runtime overflow the stack.
+    /// converters over it grows quickly with the depth of the <c>TRest</c> nesting, and this cap bounds that cost. The
+    /// cap applies to the elements of one tuple only. It does not bound the stack that a read of a row needs.
     /// </summary>
     public const int MaxElements = 256;
 
