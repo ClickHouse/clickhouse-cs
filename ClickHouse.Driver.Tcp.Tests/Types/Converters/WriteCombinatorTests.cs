@@ -278,6 +278,34 @@ public class WriteCombinatorTests
         });
     }
 
+    /// <summary>
+    /// A lone surrogate and U+FFFD are two different strings with the same UTF-8 bytes (EF BF BD). In
+    /// <c>LowCardinality(Nullable(String))</c> they share one dictionary key after the two reserved slots, so both
+    /// rows have key 2. The current writer keys on the string and gives them two entries with the same bytes.
+    /// </summary>
+    [Test]
+    public async Task Write_LowCardinalityNullableStringValuesThatEncodeToTheSameBytes_ShareOneDictionaryKey()
+    {
+        const string type = "LowCardinality(Nullable(String))";
+        string[] values = { "\uD800", "\uFFFD" };
+        ColumnWriter<string> writer = Derivation.Writer<string>(type, ConverterHarness.Context);
+
+        byte[] actual = await ConverterHarness.WriteNewAsync(writer, values, 0, values.Length);
+        byte[] current = await ConverterHarness.WriteOldAsync(type, values, 0, values.Length);
+
+        // Prefix: version 1. Body: flags with key width 1 byte, the dictionary (NULL slot, default slot, then the
+        // entries), the key count, the keys.
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                Convert.ToHexString(actual),
+                Is.EqualTo("0100000000000000" + "0006000000000000" + "0300000000000000" + "0000" + "03EFBFBD" + "0200000000000000" + "0202"));
+            Assert.That(
+                Convert.ToHexString(current),
+                Is.EqualTo("0100000000000000" + "0006000000000000" + "0400000000000000" + "0000" + "03EFBFBD" + "03EFBFBD" + "0200000000000000" + "0203"));
+        });
+    }
+
     private static TestCaseData Column<T>(string type, T[] values) => new TestCaseData(type, values).SetArgDisplayNames(type);
 
     private static TestCaseData Refused<T>(string type, T[] values, int start) => new TestCaseData(type, values, start).SetArgDisplayNames(type, $"start {start}");
