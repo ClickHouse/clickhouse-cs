@@ -11,8 +11,8 @@ public class ClickHouseParameterCollection : DbParameterCollection
 {
     private const int MinimumIndexedCount = 64;
     private readonly List<ClickHouseDbParameter> parameters = new();
-    private NameIndex nameIndex;
-    private bool scanNames;
+    private volatile NameIndex nameIndex;
+    private volatile bool scanNames;
 
     public override int Count => parameters.Count;
 
@@ -23,7 +23,7 @@ public class ClickHouseParameterCollection : DbParameterCollection
         var parameter = (ClickHouseDbParameter)value;
         var index = parameters.Count;
         parameters.Add(parameter);
-        if (nameIndex?.IsValid == true && !nameIndex.TryAdd(parameter, index))
+        if (nameIndex is { IsValid: true } cache && !cache.TryAdd(parameter, index))
             ResetNameIndex(scan: true);
         return index;
     }
@@ -112,21 +112,38 @@ public class ClickHouseParameterCollection : DbParameterCollection
 
     private NameIndex GetNameIndex(string name)
     {
-        if (name is null || scanNames || parameters.Count < MinimumIndexedCount)
+        if (name is null || parameters.Count < MinimumIndexedCount || scanNames)
             return null;
-        if (nameIndex?.IsValid == true)
-            return nameIndex;
 
-        nameIndex = new NameIndex(parameters.Count);
-        for (var index = 0; index < parameters.Count; index++)
+        var cache = nameIndex;
+        return cache?.IsValid == true ? cache : BuildNameIndex();
+    }
+
+    private NameIndex BuildNameIndex()
+    {
+        // Serialize construction and observer registration before publishing the index.
+        lock (parameters)
         {
-            if (!nameIndex.TryAdd(parameters[index], index))
-            {
-                ResetNameIndex(scan: true);
+            if (scanNames)
                 return null;
+            var cache = nameIndex;
+            if (cache?.IsValid == true)
+                return cache;
+
+            cache = new NameIndex(parameters.Count);
+            for (var index = 0; index < parameters.Count; index++)
+            {
+                if (!cache.TryAdd(parameters[index], index))
+                {
+                    cache.Invalidate();
+                    ResetNameIndex(scan: true);
+                    return null;
+                }
             }
+
+            nameIndex = cache;
+            return cache;
         }
-        return nameIndex;
     }
 
     private void ResetNameIndex(bool scan = false)

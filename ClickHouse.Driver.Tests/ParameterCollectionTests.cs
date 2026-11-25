@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using ClickHouse.Driver.ADO.Parameters;
 using NUnit.Framework;
 
@@ -132,10 +134,36 @@ public class ParameterCollectionTests
         Assert.That(collection["p63"], Is.SameAs(parameter));
     }
 
-    private static ClickHouseParameterCollection CreateLargeCollection()
+    [Test]
+    public async Task NamedLookup_ConcurrentFirstReaders_FindTheExistingParameter()
+    {
+        const int count = 16_384;
+        var collection = CreateLargeCollection(count);
+        var expected = collection[count - 1];
+        var name = expected.ParameterName;
+
+        using var start = new Barrier(3);
+        var contains = ReadTogether(() => collection.Contains(name));
+        var position = ReadTogether(() => collection.IndexOf(name) == count - 1);
+        var parameter = ReadTogether(() => ReferenceEquals(collection[name], expected));
+
+        Assert.That(await Task.WhenAll(contains, position, parameter), Is.All.True);
+
+        Task<bool> ReadTogether(Func<bool> lookup) => Task.Factory.StartNew(
+            () =>
+            {
+                start.SignalAndWait();
+                return lookup();
+            },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+    }
+
+    private static ClickHouseParameterCollection CreateLargeCollection(int count = 64)
     {
         var collection = new ClickHouseParameterCollection();
-        for (var i = 0; i < 64; i++)
+        for (var i = 0; i < count; i++)
             collection.Add(new ClickHouseDbParameter { ParameterName = $"p{i}" });
         return collection;
     }
