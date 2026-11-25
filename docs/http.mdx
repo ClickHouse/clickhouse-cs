@@ -238,7 +238,7 @@ catch (ClickHouseServerException ex) when (ex.ErrorCode is 516 or 194)
 ```
 
 - **A read** (`SELECT`) is safe to repeat.
-- **An insert** is safe to repeat only when the server deduplicates it: the table needs a deduplication window (for example the `non_replicated_deduplication_window` setting of a `MergeTree` table), and an `INSERT ... SELECT` needs the same `insert_deduplication_token` setting in both sends. Without them, an insert that is sent twice can store its rows twice.
+- **An insert** is safe to repeat only when the server deduplicates it in every table that it writes to, including the target table of each materialized view. Each of these tables needs a deduplication window, for example the `non_replicated_deduplication_window` setting of a `MergeTree` table. On a table without a window, the `insert_deduplication_token` setting has no effect. An `INSERT ... SELECT` also needs the same `insert_deduplication_token` in both sends. A second send with the same token runs the materialized views again, also when the table of the insert skips the rows. A view target without a window can then store the rows twice.
 - **Other writes** (`ALTER`, `DELETE`, `CREATE`, `DROP`, ...): check that running the statement twice gives the same result before you retry it.
 
 ### HTTP client configuration {#http-client-configuration}

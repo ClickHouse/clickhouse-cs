@@ -1531,7 +1531,11 @@ await client.InsertAsync(
     insertOptions);
 ```
 
-Reuse the same token for retries of that batch and use a different token for new data. For other
+Reuse the same token for retries of that batch and use a different token for new data. The server uses the
+token only in a table with a deduplication window, for example the `non_replicated_deduplication_window` setting of
+a `MergeTree` table. Every table that the insert writes to needs one, including the target table of each
+materialized view: a second send with the same token runs the views again, also when the table of the insert skips
+the rows. For other
 operations, retry only when the statement is safe to repeat and the specific failure is transient;
 most server errors require changing the query or configuration instead.
 
