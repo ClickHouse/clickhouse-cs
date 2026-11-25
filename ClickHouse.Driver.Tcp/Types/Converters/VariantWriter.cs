@@ -369,7 +369,7 @@ internal sealed class VariantWriter : ColumnWriter<object>
             firstRun[alternative] = runs.Count;
             if (count == 0)
             {
-                runs.Add(canonicalChild.Begin(grouped, first, 0, column));
+                runs.Add(canonicalChild.Begin(grouped, first, 0, 0, column));
                 firstRun[alternative + 1] = runs.Count;
                 return;
             }
@@ -390,7 +390,7 @@ internal sealed class VariantWriter : ColumnWriter<object>
                         $"({groupedChildren[first].ValueType} and {groupedChildren[start].ValueType}). Give the values of that alternative as one CLR type.");
                 }
 
-                runs.Add(groupedChildren[start].Begin(grouped, start, i - start, column));
+                runs.Add(groupedChildren[start].Begin(grouped, start, i - start, start - first, column));
                 start = i;
             }
 
@@ -439,9 +439,10 @@ internal abstract class VariantChild
     /// <param name="bucket">The values of the alternative, in row order.</param>
     /// <param name="start">The first value of the run in the bucket.</param>
     /// <param name="count">The number of values of the run.</param>
+    /// <param name="firstRow">The position of the first value of the run among the values of the alternative, for the messages.</param>
     /// <param name="column">The column name, for the messages.</param>
     /// <returns>The run.</returns>
-    public abstract VariantRun Begin(object[] bucket, int start, int count, string column);
+    public abstract VariantRun Begin(object[] bucket, int start, int count, int firstRow, string column);
 
     /// <summary>Writes the prefix of the alternative.</summary>
     /// <param name="writer">The writer to encode into.</param>
@@ -476,10 +477,10 @@ internal sealed class VariantChild<T> : VariantChild
     public override void ReturnBuffer(Array buffer) => WriteBuffers.Return((T[])buffer);
 
     /// <inheritdoc/>
-    public override VariantRun Begin(object[] bucket, int start, int count, string column)
+    public override VariantRun Begin(object[] bucket, int start, int count, int firstRow, string column)
     {
         T[] values = WriteBuffers.Rent<T>(count);
-        var run = new VariantRun(this, values, count);
+        var run = new VariantRun(this, values, count, firstRow);
         try
         {
             for (int i = 0; i < count; i++)
@@ -506,7 +507,8 @@ internal sealed class VariantChild<T> : VariantChild
         => writer.Write(output, Source(run, column), run.State);
 
     // The values of one alternative are a column of their own, so a refused value is named by its position in it.
-    private static ValueSource<T> Source(VariantRun run, string column) => ValueSource<T>.Of(((T[])run.Values).AsSpan(0, run.Count), 0, column);
+    private static ValueSource<T> Source(VariantRun run, string column)
+        => ValueSource<T>.Of(((T[])run.Values).AsSpan(0, run.Count), run.FirstRow, column);
 }
 
 /// <summary>One run of values of one Variant alternative: a typed buffer and the state of its write.</summary>
@@ -516,11 +518,13 @@ internal sealed class VariantRun : IDisposable
     /// <param name="child">The writer of the run.</param>
     /// <param name="values">The typed buffer, pooled.</param>
     /// <param name="count">The number of values.</param>
-    public VariantRun(VariantChild child, Array values, int count)
+    /// <param name="firstRow">The position of the first value among the values of the alternative.</param>
+    public VariantRun(VariantChild child, Array values, int count, int firstRow)
     {
         Child = child;
         Values = values;
         Count = count;
+        FirstRow = firstRow;
     }
 
     /// <summary>The writer of the run.</summary>
@@ -531,6 +535,9 @@ internal sealed class VariantRun : IDisposable
 
     /// <summary>The number of values.</summary>
     public int Count { get; }
+
+    /// <summary>The position of the first value among the values of the alternative, for the messages.</summary>
+    public int FirstRow { get; }
 
     /// <summary>The state of the write.</summary>
     public IColumnWriteState State { get; set; }

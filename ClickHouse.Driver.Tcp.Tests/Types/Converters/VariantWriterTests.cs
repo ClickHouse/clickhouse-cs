@@ -78,6 +78,30 @@ public class VariantWriterTests
         Assert.That(Convert.ToHexString(actual), Is.EqualTo(expected));
     }
 
+    /// <summary>
+    /// A refused value is named by its position among all values of its alternative, also when the values before it
+    /// in that alternative have another CLR type. <c>"XYZ"</c> is the third <c>FixedString(2)</c> value in both inputs.
+    /// </summary>
+    [Test]
+    public void Write_RefusedValueAfterValuesOfAnotherClrType_IsNamedByItsPositionInTheAlternative()
+    {
+        const string type = "Variant(FixedString(2), UInt64)";
+        ColumnWriter<object> writer = Derivation.Writer<object>(type, ConverterHarness.Context);
+        object[] afterTwoArrays = { new byte[] { 0x78, 0x79 }, 12UL, new byte[] { 0x61, 0x62 }, "XYZ" };
+        object[] afterArrayAndText = { new byte[] { 0x78, 0x79 }, 12UL, "uv", "XYZ" };
+
+        Exception first = ConverterHarness.Catch(() => ConverterHarness.WriteNewAsync(writer, afterTwoArrays, 0, afterTwoArrays.Length).GetAwaiter().GetResult());
+        Exception second = ConverterHarness.Catch(() => ConverterHarness.WriteNewAsync(writer, afterArrayAndText, 0, afterArrayAndText.Length).GetAwaiter().GetResult());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.TypeOf<ArgumentException>());
+            Assert.That(first?.Message, Does.StartWith("A FixedString(2) value at row 2 is 3 bytes in UTF-8"));
+            Assert.That(second, Is.TypeOf<ArgumentException>());
+            Assert.That(second?.Message, Does.StartWith("A FixedString(2) value at row 2 is 3 bytes in UTF-8"));
+        });
+    }
+
     /// <summary>A composite alternative takes the values of one CLR type in one write, and refuses two.</summary>
     [Test]
     public void Write_CompositeAlternativeFromTwoClrTypes_IsRefused()
