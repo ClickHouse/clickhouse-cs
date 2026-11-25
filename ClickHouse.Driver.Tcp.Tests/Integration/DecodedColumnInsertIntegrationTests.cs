@@ -199,6 +199,30 @@ public class DecodedColumnInsertIntegrationTests
             new[] { "(unhex('FE'), (unhex('FF'), 'a'))", "(unhex('C328'), (unhex('80'), 'b'))", "(unhex('61C0AF'), (unhex('C0'), 'a'))" },
             "concat(hex(value.1), ' ', hex(value.2.1), ' ', toString(value.2.2))",
             new[] { "FE FF 1", "C328 80 2", "61C0AF C0 1" });
+
+        // Tuples of 8 and 9 elements, whose CLR type nests the elements after the seventh in TRest: the Enum8 as the
+        // second element, and as the ninth (in TRest).
+        string int8s6 = string.Join(", ", System.Linq.Enumerable.Repeat("Int8", 6));
+        string int8s7 = string.Join(", ", System.Linq.Enumerable.Repeat("Int8", 7));
+        string int8s8 = string.Join(", ", System.Linq.Enumerable.Repeat("Int8", 8));
+        yield return SiblingCase(
+            $"Tuple(String, {Enum}, {int8s6})",
+            $"Tuple(String, {int8s7})",
+            new[] { "(unhex('FF'), 'a', 1, 2, 3, 4, 5, 6)", "(unhex('C328'), 'b', 1, 2, 3, 4, 5, 7)", "(unhex('61C0AF'), 'a', 1, 2, 3, 4, 5, 8)" },
+            "concat(hex(value.1), ' ', toString(value.2), ' ', toString(value.8))",
+            new[] { "FF 1 6", "C328 2 7", "61C0AF 1 8" });
+        yield return SiblingCase(
+            $"Tuple(String, {Enum}, {int8s7})",
+            $"Tuple(String, {int8s8})",
+            new[] { "(unhex('FF'), 'a', 1, 2, 3, 4, 5, 6, 7)", "(unhex('C328'), 'b', 1, 2, 3, 4, 5, 6, 8)", "(unhex('61C0AF'), 'a', 1, 2, 3, 4, 5, 6, 9)" },
+            "concat(hex(value.1), ' ', toString(value.2), ' ', toString(value.9))",
+            new[] { "FF 1 7", "C328 2 8", "61C0AF 1 9" });
+        yield return SiblingCase(
+            $"Tuple(String, {int8s7}, {Enum})",
+            $"Tuple(String, {int8s8})",
+            new[] { "(unhex('FF'), 1, 2, 3, 4, 5, 6, 7, 'a')", "(unhex('C328'), 2, 2, 3, 4, 5, 6, 7, 'b')", "(unhex('61C0AF'), 3, 2, 3, 4, 5, 6, 7, 'a')" },
+            "concat(hex(value.1), ' ', toString(value.2), ' ', toString(value.9))",
+            new[] { "FF 1 1", "C328 2 2", "61C0AF 3 1" });
     }
 
     // As SiblingCases, for a Nullable(Tuple) on either side.
@@ -226,6 +250,16 @@ public class DecodedColumnInsertIntegrationTests
             new[] { "tuple(unhex('FF'))", "tuple(unhex('C328'))", "tuple(unhex('61C0AF'))" },
             "hex(tupleElement(assumeNotNull(value), 1))",
             new[] { "FF", "C328", "61C0AF" },
+            NullableTupleSettings);
+
+        // A Tuple of 9 elements, whose CLR type nests the ninth element in TRest, into a Nullable(Tuple).
+        string wide = $"Tuple(String, {string.Join(", ", System.Linq.Enumerable.Repeat("Int8", 8))})";
+        yield return SiblingCase(
+            wide,
+            $"Nullable({wide})",
+            new[] { "(unhex('FF'), 1, 2, 3, 4, 5, 6, 7, 8)", "(unhex('C328'), 2, 2, 3, 4, 5, 6, 7, 9)", "(unhex('61C0AF'), 3, 2, 3, 4, 5, 6, 7, 10)" },
+            "concat(hex(tupleElement(assumeNotNull(value), 1)), ' ', toString(tupleElement(assumeNotNull(value), 2)), ' ', toString(tupleElement(assumeNotNull(value), 9)))",
+            new[] { "FF 1 8", "C328 2 9", "61C0AF 3 10" },
             NullableTupleSettings);
     }
 
