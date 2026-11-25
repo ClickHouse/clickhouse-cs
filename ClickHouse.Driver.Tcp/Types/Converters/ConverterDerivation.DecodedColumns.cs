@@ -250,7 +250,7 @@ internal sealed partial class ConverterDerivation
     }
 
     // Whether the type is a Variant whose write places a string and a byte[] in the same alternative, each with no tie, and
-    // that alternative is a String.
+    // that alternative is a String or a LowCardinality(String).
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     private bool PlacesStringBytesAsString(TypeNode target, in ResolveContext context)
     {
@@ -271,7 +271,14 @@ internal sealed partial class ConverterDerivation
             return false;
         }
 
+        // A LowCardinality(String) alternative writes a byte[] value with one dictionary entry for each distinct value. A
+        // FixedString(N) alternative pads a text and takes a byte[] of exactly N bytes only, so the two give other values.
         TypeNode type = TypeParser.Parse(variant.AlternativeType(alternative));
+        if (CanonicalName(type) == "LowCardinality" && type.Arguments.Count == 1)
+        {
+            type = type.Arguments[0];
+        }
+
         return CanonicalName(type) == "String" && type.Arguments.Count == 0;
     }
 

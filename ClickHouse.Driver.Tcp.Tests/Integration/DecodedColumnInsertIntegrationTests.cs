@@ -251,6 +251,13 @@ public class DecodedColumnInsertIntegrationTests
             "concat(hex(arrayStringConcat(mapKeys(value), ',')), ' ', toString(arrayMap(x -> variantType(x), mapValues(value))), ' ', hex(arrayStringConcat(arrayMap(x -> assumeNotNull(variantElement(x, 'String')), mapValues(value)), ',')))",
             new[] { "FF ['String'] 41FF42", " [] ", "C328 ['String'] 61C0AF" },
             VariantSettings);
+        yield return SiblingCase(
+            "String",
+            "Variant(LowCardinality(String), UInt64)",
+            strings,
+            "concat(variantType(value), ' ', ifNull(hex(variantElement(value, 'LowCardinality(String)')), ''))",
+            new[] { "LowCardinality(String) 41FF42", "LowCardinality(String) C328", "LowCardinality(String) 61C0AF" },
+            VariantSettings);
     }
 
     // A String that a query read, into a Variant whose alternative for text is not a String, or into a Dynamic: these
