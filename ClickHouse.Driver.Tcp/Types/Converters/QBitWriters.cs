@@ -84,26 +84,24 @@ internal abstract class QBitWriter<T> : ColumnWriter<T[]>
     protected abstract void Transpose(byte[] scratch, T[] vector, int rowBase, int planeStride);
 
     // The parameter name is "vector": the refused value is the vector of a row.
-#pragma warning disable CA2208 // Instantiate argument exceptions correctly
     private T[] Validate(T[] vector, int row)
     {
         if (vector is null)
         {
             throw new ArgumentException(
                 $"A {TypeName} column cannot hold a null vector (at row {row}); wrap the type in Nullable to write nulls.",
-                "vector");
+                nameof(vector));
         }
 
         if (vector.Length != Dimension)
         {
             throw new ArgumentException(
                 $"A {TypeName} vector at row {row} has {vector.Length} element(s); every vector must have exactly {Dimension}.",
-                "vector");
+                nameof(vector));
         }
 
         return vector;
     }
-#pragma warning restore CA2208
 }
 
 /// <summary><c>QBit(Int8, N)</c>: eight planes over the two's-complement byte of each element.</summary>
