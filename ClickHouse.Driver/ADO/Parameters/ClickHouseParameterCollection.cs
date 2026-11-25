@@ -9,7 +9,10 @@ namespace ClickHouse.Driver.ADO.Parameters;
 
 public class ClickHouseParameterCollection : DbParameterCollection
 {
+    private const int MinimumIndexedCount = 64;
     private readonly List<ClickHouseDbParameter> parameters = new();
+    private NameIndex nameIndex;
+    private bool scanNames;
 
     public override int Count => parameters.Count;
 
@@ -17,17 +20,32 @@ public class ClickHouseParameterCollection : DbParameterCollection
 
     public override int Add(object value)
     {
-        parameters.Add((ClickHouseDbParameter)value);
-        return parameters.Count - 1;
+        var parameter = (ClickHouseDbParameter)value;
+        var index = parameters.Count;
+        parameters.Add(parameter);
+        if (nameIndex?.IsValid == true && !nameIndex.TryAdd(parameter, index))
+            ResetNameIndex(scan: true);
+        return index;
     }
 
-    public override void AddRange(Array values) => parameters.AddRange(values.Cast<ClickHouseDbParameter>());
+    public override void AddRange(Array values)
+    {
+        ResetNameIndex();
+        parameters.AddRange(values.Cast<ClickHouseDbParameter>());
+    }
 
-    public override void Clear() => parameters.Clear();
+    public override void Clear()
+    {
+        ResetNameIndex();
+        parameters.Clear();
+    }
 
     public override bool Contains(object value) => parameters.Contains(value as ClickHouseDbParameter);
 
-    public override bool Contains(string value) => parameters.Any(p => p.ParameterName == value);
+    public override bool Contains(string value) =>
+        GetNameIndex(value)?.IndexOf(value) is int index ? index >= 0 : ContainsNameByScan(value);
+
+    private bool ContainsNameByScan(string value) => parameters.Any(p => p.ParameterName == value);
 
     public override void CopyTo(Array array, int index)
     {
@@ -41,21 +59,45 @@ public class ClickHouseParameterCollection : DbParameterCollection
 
     public override int IndexOf(object value) => parameters.IndexOf(value as ClickHouseDbParameter);
 
-    public override int IndexOf(string parameterName) => parameters.FindIndex(x => x.ParameterName == parameterName);
+    public override int IndexOf(string parameterName) =>
+        GetNameIndex(parameterName)?.IndexOf(parameterName) ?? IndexOfNameByScan(parameterName);
 
-    public override void Insert(int index, object value) => parameters.Insert(index, (ClickHouseDbParameter)value);
+    private int IndexOfNameByScan(string parameterName) =>
+        parameters.FindIndex(x => x.ParameterName == parameterName);
 
-    public override void Remove(object value) => parameters.Remove(value as ClickHouseDbParameter);
+    public override void Insert(int index, object value)
+    {
+        ResetNameIndex();
+        parameters.Insert(index, (ClickHouseDbParameter)value);
+    }
 
-    public override void RemoveAt(int index) => parameters.RemoveAt(index);
+    public override void Remove(object value)
+    {
+        if (parameters.Remove(value as ClickHouseDbParameter))
+            ResetNameIndex();
+    }
 
-    public override void RemoveAt(string parameterName) => parameters.RemoveAll(p => p.ParameterName == parameterName);
+    public override void RemoveAt(int index)
+    {
+        ResetNameIndex();
+        parameters.RemoveAt(index);
+    }
+
+    public override void RemoveAt(string parameterName)
+    {
+        ResetNameIndex();
+        parameters.RemoveAll(p => p.ParameterName == parameterName);
+    }
 
     protected override DbParameter GetParameter(int index) => parameters[index];
 
     protected override DbParameter GetParameter(string parameterName) => parameters[IndexOf(parameterName)];
 
-    protected override void SetParameter(int index, DbParameter value) => parameters[index] = (ClickHouseDbParameter)value;
+    protected override void SetParameter(int index, DbParameter value)
+    {
+        ResetNameIndex();
+        parameters[index] = (ClickHouseDbParameter)value;
+    }
 
     protected override void SetParameter(string parameterName, DbParameter value)
     {
@@ -67,6 +109,62 @@ public class ClickHouseParameterCollection : DbParameterCollection
     }
 
     public override string ToString() => string.Join(";", parameters);
+
+    private NameIndex GetNameIndex(string name)
+    {
+        if (name is null || scanNames || parameters.Count < MinimumIndexedCount)
+            return null;
+        if (nameIndex?.IsValid == true)
+            return nameIndex;
+
+        nameIndex = new NameIndex(parameters.Count);
+        for (var index = 0; index < parameters.Count; index++)
+        {
+            if (!nameIndex.TryAdd(parameters[index], index))
+            {
+                ResetNameIndex(scan: true);
+                return null;
+            }
+        }
+        return nameIndex;
+    }
+
+    private void ResetNameIndex(bool scan = false)
+    {
+        nameIndex?.Invalidate();
+        nameIndex = null;
+        scanNames = scan;
+    }
+
+    internal sealed class NameIndex
+    {
+        private readonly Dictionary<string, int> positions;
+        private readonly WeakReference<NameIndex> observer;
+        private volatile bool isValid = true;
+
+        internal NameIndex(int capacity)
+        {
+            positions = new Dictionary<string, int>(capacity, StringComparer.Ordinal);
+            observer = new WeakReference<NameIndex>(this);
+        }
+
+        internal bool IsValid => isValid;
+
+        internal void Invalidate() => isValid = false;
+
+        internal int IndexOf(string name) => positions.TryGetValue(name, out var index) ? index : -1;
+
+        internal bool TryAdd(ClickHouseDbParameter parameter, int index)
+        {
+            // A subclass can override the getter without calling the base setter.
+            if (parameter?.GetType() != typeof(ClickHouseDbParameter) || !parameter.TryObserveName(observer))
+                return false;
+
+            if (parameter.ParameterName is { } name)
+                positions.TryAdd(name, index);
+            return true;
+        }
+    }
 
     /// <summary>
     /// Resolves the ClickHouse type name for each parameter exactly once.
