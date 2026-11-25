@@ -48,6 +48,42 @@ public class LeafReaderTests
     }
 
     /// <summary>
+    /// A null row of a <c>FixedString</c> column that a caller built has no text. The text read throws
+    /// <see cref="ArgumentNullException"/> with the column and the row, through <c>Fill</c> from row 0, <c>Fill</c>
+    /// from a later row, and a compiled <c>Emit</c>.
+    /// </summary>
+    [TestCase("Fill", 0, 4)]
+    [TestCase("Fill", 2, 2)]
+    [TestCase("Emit", 0, 4)]
+    public void Read_FixedStringAsTextFromACallerBuiltColumnWithANullRow_ThrowsArgumentNullException(string path, int start, int count)
+    {
+        ColumnReader<string> reader = Derivation.Reader<string>("FixedString(3)", ConverterHarness.Context);
+
+        var thrown = Assert.Throws<ArgumentNullException>(() => ReadPath(path, reader, CallerBuiltWithANullRow(), start, count));
+        Assert.That(thrown.Message, Does.Contain("column 'c'").And.Contain("row 2"));
+    }
+
+    /// <summary>
+    /// A null row of a <c>FixedString</c> column that a caller built reads as a null array, through <c>Fill</c> from
+    /// row 0, <c>Fill</c> from a later row, and a compiled <c>Emit</c>.
+    /// </summary>
+    [TestCase("Fill", 0, 4)]
+    [TestCase("Fill", 2, 2)]
+    [TestCase("Emit", 0, 4)]
+    public void Read_FixedStringAsBytesFromACallerBuiltColumnWithANullRow_GivesNull(string path, int start, int count)
+    {
+        ColumnReader<byte[]> reader = Derivation.Reader<byte[]>("FixedString(3)", ConverterHarness.Context);
+
+        byte[][] values = ReadPath(path, reader, CallerBuiltWithANullRow(), start, count);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(values[2 - start], Is.Null);
+            Assert.That(values[3 - start], Is.EqualTo("abc"u8.ToArray()));
+        });
+    }
+
+    /// <summary>
     /// A column without the storage that a leaf reads is refused with a message that names the column and the
     /// missing surface, in both paths.
     /// </summary>
@@ -133,6 +169,16 @@ public class LeafReaderTests
             }
         }
     }
+
+    private static ArrayColumn<byte[]> CallerBuiltWithANullRow()
+    {
+        byte[] value = "abc"u8.ToArray();
+        return new ArrayColumn<byte[]>("c", "FixedString(3)", new[] { value, value, null, value });
+    }
+
+    private static T[] ReadPath<T>(string path, ColumnReader<T> reader, IColumn column, int start, int count) => path == "Fill"
+        ? ConverterHarness.ReadFill(reader, column, start, count)
+        : ConverterHarness.ReadEmit(reader, column, start, count);
 
     private static IColumn EmptySource(string type)
     {

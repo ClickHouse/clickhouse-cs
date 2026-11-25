@@ -174,7 +174,27 @@ internal sealed class FixedStringLeafReader<T, TConv> : ColumnReader<T>
 
     private static T ReadDense(FixedStringColumn column, int row) => default(TConv).Convert(column.GetBytes(row));
 
-    private static T ReadIndexed(IColumn<byte[]> column, int row) => default(TConv).Convert(column[row]);
+    private static T ReadIndexed(IColumn<byte[]> column, int row) => ConvertIndexed(column, row);
+
+    // A column that a caller built can hold a null array, which a span cannot show. Only the byte array read can
+    // give a null value, so each other read throws.
+    private static T ConvertIndexed(IColumn<byte[]> column, int row)
+    {
+        byte[] value = column[row];
+        if (value is not null)
+        {
+            return default(TConv).Convert(value);
+        }
+
+        if (typeof(T) == typeof(byte[]))
+        {
+            return default;
+        }
+
+        throw new ArgumentNullException(
+            nameof(column),
+            $"The value at row {row} of column '{column.Name}' ({column.TypeName}) is null and cannot be read as {typeof(T).Name}.");
+    }
 
     private sealed class DenseBound : BoundReader<T>
     {
@@ -209,10 +229,9 @@ internal sealed class FixedStringLeafReader<T, TConv> : ColumnReader<T>
                     $"Rows [{start}, {start + (long)destination.Length}) lie outside the {column.RowCount} row(s) of column '{column.Name}'.");
             }
 
-            TConv convert = default;
             for (int i = 0; i < destination.Length; i++)
             {
-                destination[i] = convert.Convert(column[start + i]);
+                destination[i] = ConvertIndexed(column, start + i);
             }
         }
     }
