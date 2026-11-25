@@ -74,7 +74,10 @@ Two layers handle a column type:
   is refused; a `String` or `FixedString` part into another type
   of a string (another width, `Nullable`, `LowCardinality`) is read as `byte[]` and written through the `byte[]` tree, so
   no byte goes through text; a `String` part into a `Variant` whose write places a `string` and a `byte[]` in the same
-  `String` alternative (`VariantWriter.AlternativeOf`) is read as `byte[]` too; the offsets of an `Array` or a `Map` and
+  `String` or `LowCardinality(String)` alternative (`VariantWriter.AlternativeOf`) is read as `byte[]` too; a `Variant`
+  part into a `Variant` that has each of its alternatives is written from its storage through a map of the
+  discriminators (`Types/Codecs/VariantDenseWrite.cs`, the same write as the codec's), and is refused when the target
+  does not have one of them; the offsets of an `Array` or a `Map` and
   the null map of a `Nullable` are written from their storage, so their bytes do not change; any other part goes to its codec when the codec writes it from its storage,
   else to the converter tree of its CLR type (`Types/Converters/ConverterDerivation.DecodedColumns.cs`). A row that a
   NULL of an enclosing `Nullable` hides (also the elements of an `Array` or a `Map` in that row) is marked: every part of
