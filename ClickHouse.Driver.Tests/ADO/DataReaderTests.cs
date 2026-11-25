@@ -128,6 +128,21 @@ public class DataReaderTests : AbstractConnectionTestFixture
         ClassicAssert.IsFalse(reader.Read());
     }
 
+    [TestCase("anySimpleState(toDateTime('2024-01-15 12:30:45', 'Europe/Amsterdam'))")]
+    [TestCase("toLowCardinality(toNullable(toDateTime('2024-01-15 12:30:45', 'Europe/Amsterdam')))")]
+    public async Task GetDateTimeOffset_WrappedDateTime_ReturnsInstantAndOffset(string expression)
+    {
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync($"SELECT {expression}");
+        Assert.That(reader.Read(), Is.True);
+
+        var result = reader.GetDateTimeOffset(0);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.UtcDateTime, Is.EqualTo(new DateTime(2024, 1, 15, 11, 30, 45, DateTimeKind.Utc)));
+            Assert.That(result.Offset, Is.EqualTo(TimeSpan.FromHours(1)));
+        });
+    }
+
     [Test]
     public async Task ShouldReadString()
     {
@@ -254,11 +269,11 @@ public class DataReaderTests : AbstractConnectionTestFixture
         ClassicAssert.IsFalse(reader.Read());
     }
 
-    [Test]
-    public async Task TryGetEnumOrdinal_NullableEnum8WithValue_ReturnsOrdinal()
+    [TestCase("CAST('Active', 'Nullable(Enum8(''Active'' = 1, ''Inactive'' = 2))')")]
+    [TestCase("anySimpleState(CAST('Active', 'Enum8(''Active'' = 1, ''Inactive'' = 2)'))")]
+    public async Task TryGetEnumOrdinal_WrappedEnum8WithValue_ReturnsOrdinal(string expression)
     {
-        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
-            "SELECT CAST('Active', 'Nullable(Enum8(''Active'' = 1, ''Inactive'' = 2))') AS value");
+        using var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync($"SELECT {expression} AS value");
         ClassicAssert.IsTrue(reader.Read());
         Assert.That(reader.TryGetEnumOrdinal(0, out var ordinal), Is.True);
         Assert.That(ordinal, Is.EqualTo(1));

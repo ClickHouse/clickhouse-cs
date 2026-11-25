@@ -119,6 +119,21 @@ public class SqlSchemaTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task GetSchemaTable_SimpleAggregateColumns_ReportsUnderlyingColumnMetadata()
+    {
+        using var reader = await connection.ExecuteReaderAsync(
+            "SELECT anySimpleState(toDecimal64('1.2500', 4)) AS d, anySimpleState(toDateTime64(0, 3)) AS t");
+        var rows = reader.GetSchemaTable().Rows;
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows[0]["NumericPrecision"], Is.EqualTo(18));
+            Assert.That(rows[0]["NumericScale"], Is.EqualTo(4));
+            Assert.That(rows[0]["ColumnSize"], Is.EqualTo(8));
+            Assert.That(rows[1]["NumericScale"], Is.EqualTo(3));
+        });
+    }
+
+    [Test]
     public void ShouldGetSchemaTableAsDataTable()
     {
         using var command = connection.CreateCommand();
