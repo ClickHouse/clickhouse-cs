@@ -1,0 +1,1 @@
+* Fixed the connection string silently replacing a value it cannot read with the default, so that, for example, `Compression=1` or `Compression=yes` turned compression off. Such a value (also `Port=abc`, `JsonReadMode=bogus`) now throws an `ArgumentException` that names the key; boolean keys accept `true`, `false`, `1` and `0` (#732).

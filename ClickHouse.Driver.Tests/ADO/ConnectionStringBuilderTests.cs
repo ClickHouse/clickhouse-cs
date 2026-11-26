@@ -112,6 +112,53 @@ public class ConnectionStringBuilderTests
         Assert.That(builder.UseFormDataParameters, Is.EqualTo(useFormDataParameters));
     }
     
+    [TestCase("true", true)]
+    [TestCase("TRUE", true)]
+    [TestCase("1", true)]
+    [TestCase("false", false)]
+    [TestCase("False", false)]
+    [TestCase("0", false)]
+    public void ConnectionStringBuilder_BooleanValue_ShouldParseAcceptedSpellings(string value, bool expected)
+    {
+        // Compression defaults to true and UseSession to false, so neither result can come from the default.
+        var settings = ClickHouseClientSettings.FromConnectionString($"Host=localhost;Compression={value};UseSession={value}");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.UseCompression, Is.EqualTo(expected));
+            Assert.That(settings.UseSession, Is.EqualTo(expected));
+        });
+    }
+
+    [TestCase("string")]
+    [TestCase("1")]
+    public void ConnectionStringBuilder_EnumValue_ShouldParseNameInAnyCaseOrDefinedNumber(string value)
+    {
+        var settings = ClickHouseClientSettings.FromConnectionString($"Host=localhost;JsonReadMode={value}");
+
+        Assert.That(settings.JsonReadMode, Is.EqualTo(JsonReadMode.String));
+    }
+
+    [TestCase("Compression=yes", "Compression")]
+    [TestCase("Compression=ture", "Compression")]
+    [TestCase("Compression=lz4", "Compression")]
+    [TestCase("UseSession=on", "UseSession")]
+    [TestCase("Port=abc", "Port")]
+    [TestCase("Port=65536", "Port")]
+    [TestCase("Port=-1", "Port")]
+    [TestCase("ReadBufferSize=lots", "ReadBufferSize")]
+    [TestCase("Timeout=abc", "Timeout")]
+    [TestCase("JsonReadMode=bogus", "JsonReadMode")]
+    [TestCase("JsonReadMode=42", "JsonReadMode")]
+    [TestCase("JsonWriteMode=xyz", "JsonWriteMode")]
+    [TestCase("MapReadMode=nonsense", "MapReadMode")]
+    public void ConnectionStringBuilder_UnparseableValue_ShouldThrowNamingTheKey(string pair, string key)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new ClickHouseClient($"Host=localhost;{pair}"));
+
+        Assert.That(ex.Message, Does.Contain($"'{key}'"));
+    }
+
     [Test]
     public void ConnectionStringBuilder_ShouldParseRoles_SingleRole()
     {
