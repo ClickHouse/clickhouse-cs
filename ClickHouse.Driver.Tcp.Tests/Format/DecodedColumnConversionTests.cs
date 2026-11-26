@@ -387,11 +387,10 @@ public class DecodedColumnConversionTests
     }
 
     /// <summary>
-    /// A <c>String</c> that a query read, into a <c>Variant</c>: through its bytes when the <c>String</c> alternative takes
-    /// both the text and the bytes of a value, so bytes that are not UTF-8 keep their value, a NULL is the NULL of the
-    /// <c>Variant</c>, and a value that an enclosing NULL hides is not read. Through its text when the alternative for text
-    /// and the alternative for bytes differ (an <c>Array(UInt8)</c> alternative takes the bytes), or when the alternative
-    /// for text is a <c>FixedString</c>. All rows, and the rows from row 1.
+    /// A <c>String</c> that a query read, into a <c>Variant</c> whose <c>String</c> or <c>LowCardinality(String)</c>
+    /// alternative takes both the text and the bytes of a value: through its bytes, so bytes that are not UTF-8 keep their
+    /// value, a NULL is the NULL of the <c>Variant</c>, and a value that an enclosing NULL hides is not read. All rows, and
+    /// the rows from row 1.
     /// </summary>
     [TestCaseSource(nameof(VariantCases))]
     public Task Write_DecodedStringIntoAVariant_WritesItsBytesOnlyIntoAStringAlternativeForBoth(
@@ -402,6 +401,32 @@ public class DecodedColumnConversionTests
         string expected,
         string expectedFromRow1)
         => AssertWritesAsync(source, target, rows, sourceBytes, expected, expectedFromRow1, storageOfTheTarget: null);
+
+    /// <summary>
+    /// A <c>String</c> that a query read, into a part that only the converter tree of its CLR type writes (an
+    /// <c>Array(UInt8)</c> alternative for the bytes, a <c>FixedString(N)</c> alternative for the text, a
+    /// <c>Dynamic</c>): the tree would read the String as text, so the insert refuses the column with the reason.
+    /// </summary>
+    [TestCase("String", "Variant(Array(UInt8), String)", "02616200" + "0178")]
+    [TestCase("String", "Variant(FixedString(2), Int64)", "026162" + "026364" + "026566")]
+    [TestCase("String", "Dynamic", "026162" + "026364" + "026566")]
+    [TestCase("Tuple(String, Int32)", "Tuple(Dynamic, Int32)", "026162" + "026364" + "026566" + "010000000200000003000000")]
+    public async Task For_DecodedStringIntoAPartThatTakesItsText_IsRefusedWithTheReason(string source, string target, string sourceBytes)
+    {
+        using IColumn decoded = await ConverterHarness.ReadBackAsync(source, Convert.FromHexString(sourceBytes), 3);
+        string part = source.StartsWith("Tuple", StringComparison.Ordinal) ? "String" : source;
+        string partTarget = target.StartsWith("Tuple", StringComparison.Ordinal) ? "Dynamic" : target;
+
+        InsertColumnWrite write = InsertColumnWrite.For(Codec(target), decoded, target, Utc, ConverterDerivation.Default, out string refusal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write, Is.Null);
+            Assert.That(refusal, Is.EqualTo(
+                $"A part read as {part} is written into {partTarget} only through the text of its String values, but the insert writes a String that a query read only with its bytes. " +
+                $"Convert the values with a CAST to {partTarget} in the query, or insert a column of string values that you build from them with ClickHouseTcpColumn.Create."));
+        });
+    }
 
     /// <summary>
     /// A <c>Variant</c> that a query read, into a <c>Variant</c> that has each of its alternatives and others: the
@@ -678,7 +703,6 @@ public class DecodedColumnConversionTests
             "010000" + "0141" + "01FF" + "02C328",
             "0000000000000000" + "010000" + "FF0000" + "01FF02C328",
             "0000000000000000" + "0000" + "0000" + "01FF02C328");
-        yield return Bytes("String", "Variant(Array(UInt8), String)", 3, "02616200" + "0178", "0000000000000000" + "010101" + "026162000178", "0000000000000000" + "0101" + "000178");
         yield return Bytes(
             "String",
             "Variant(LowCardinality(String), UInt64)",
@@ -686,7 +710,6 @@ public class DecodedColumnConversionTests
             "01FF0002C328",
             "0000000000000000" + "0100000000000000" + "000000" + "000600000000000003000000000000000001FF02C3280300000000000000010002",
             "0000000000000000" + "0100000000000000" + "0000" + "0006000000000000020000000000000000" + "02C328" + "02000000000000000001");
-        yield return Bytes("String", "Variant(FixedString(2), Int64)", 3, "026162" + "026364" + "026566", "0000000000000000" + "000000" + "616263646566", "0000000000000000" + "0000" + "63646566");
     }
 
     // Four rows of Variant(Int32, String): the String 41 FF 42, the Int32 7, NULL, and the String C3 28.

@@ -111,6 +111,15 @@ internal abstract class InsertColumnWrite : IVariantAlternativeWrite
             {
                 return PlannedWrite(plan, codec, values, source, typeName, in context, derivation, hidden: null, out refusal);
             }
+
+            if (!plan.SameType && !codec.WritesFromStorage(values))
+            {
+                // A tree that would read a String of the column as text is refused; a column that no tree writes keeps
+                // the refusal that names the CLR types.
+                InsertColumnWrite tree = ConverterTreeWrite(values, typeName, in context, derivation, hidden: null, out _);
+                refusal = tree is null ? null : derivation.RefusalOfStringText(source, typeName);
+                return refusal is null ? tree : null;
+            }
         }
 
         return codec.WritesFromStorage(values) ? new CodecWrite(codec) : ConverterTreeWrite(values, typeName, in context, derivation, hidden: null, out _);
@@ -241,18 +250,20 @@ internal abstract class InsertColumnWrite : IVariantAlternativeWrite
             // The same type, a type with no structure in common with the target, or a composite whose column is not of the
             // class that a query of the type reads.
             default:
-                return KeptWrite(codec, values, target, plan.SameType, in context, derivation, hidden, out refusal);
+                return KeptWrite(codec, values, source, target, plan.SameType, in context, derivation, hidden, out refusal);
         }
     }
 
     // A part of the same type, or with no structure in common with its target: its codec writes it from its storage. A part
     // of another type under hidden rows goes through the converter tree with those rows marked, so a hidden value is not
     // converted into the target type; the codec writes it when no tree does. A part of the same type keeps the bytes of
-    // its hidden values.
+    // its hidden values. A part of another type that holds a String is not written through the tree, which would read the
+    // String as text (ConverterDerivation.RefusalOfStringText); it is refused when its codec does not write it either.
     [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     private static InsertColumnWrite KeptWrite(
         IColumnCodec codec,
         IColumn values,
+        string source,
         string target,
         bool sameType,
         in ResolveContext context,
@@ -268,6 +279,12 @@ internal abstract class InsertColumnWrite : IVariantAlternativeWrite
         }
 
         InsertColumnWrite tree = ConverterTreeWrite(values, target, in context, derivation, hidden, out refusal);
+        if (tree is not null && !sameType && derivation.RefusalOfStringText(source, target) is string text)
+        {
+            tree = null;
+            refusal = text;
+        }
+
         if (tree is null && stored)
         {
             refusal = null;

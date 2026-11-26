@@ -51,6 +51,22 @@ public class DecodedColumnInsertIntegrationTests
         ["allow_experimental_dynamic_type"] = "1",
     };
 
+    private static readonly Dictionary<string, string> DynamicVariantSettings = new(StringComparer.Ordinal)
+    {
+        ["allow_experimental_dynamic_type"] = "1",
+        ["allow_experimental_variant_type"] = "1",
+        ["allow_suspicious_variant_types"] = "1",
+        ["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1",
+    };
+
+    private static readonly Dictionary<string, string> JsonSettings = new(StringComparer.Ordinal)
+    {
+        ["allow_experimental_json_type"] = "1",
+        ["allow_experimental_dynamic_type"] = "1",
+        ["output_format_native_write_json_as_string"] = "1",
+        ["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1",
+    };
+
     public static IEnumerable<TestCaseData> Cases()
     {
         yield return Case(
@@ -296,29 +312,43 @@ public class DecodedColumnInsertIntegrationTests
             VariantSettings);
     }
 
-    // A String that a query read, into a Variant whose alternative for text is not a String, or into a Dynamic: these
-    // parts go through the text of their values. Every String value is valid UTF-8, so the stored values are the source.
-    public static IEnumerable<TestCaseData> TextRouteCases()
+    // A column that a query read, whose type holds a String, into a part that only the converter tree of its CLR type writes
+    // (a Dynamic, a Variant whose alternative for the value is not a String that takes its bytes): the source type, the
+    // target type and the SQL literal of the source row.
+    public static IEnumerable<TestCaseData> StringTextDynamicCases()
     {
-        string[] strings = { "'abc'", "'xyz'", "'def'" };
-        yield return SiblingCase(
-            "String",
-            "Variant(FixedString(3), Int64)",
-            strings,
-            "concat(variantType(value), ' ', hex(variantElement(value, 'FixedString(3)')))",
-            new[] { "FixedString(3) 616263", "FixedString(3) 78797A", "FixedString(3) 646566" },
-            VariantSettings);
+        const string V = "Variant(Int32, String)";
+        yield return TextCase("String", "Dynamic", "'abc'");
+        yield return TextCase("Nullable(String)", "Dynamic", "'abc'");
+        yield return TextCase("LowCardinality(String)", "Dynamic", "'abc'");
+        yield return TextCase("Tuple(String, Int32)", "Tuple(Dynamic, Int32)", "('abc', 1)");
+        yield return TextCase("Tuple(String, Int32)", "Dynamic", "('abc', 1)");
+        yield return TextCase("Map(String, Int32)", "Dynamic", "map('a', 1)");
+        yield return TextCase("Array(String)", "Dynamic", "['abc']");
+        yield return TextCase("Array(String)", "Array(Dynamic)", "['abc']");
+        yield return TextCase(V, "Dynamic", "'abc'");
+        yield return TextCase($"Array({V})", "Array(Dynamic)", $"[CAST('abc' AS {V})]");
+        yield return TextCase("Dynamic", "Variant(String, Int64)", "'abc'");
+        yield return TextCase("Tuple(Dynamic, Int32)", "Tuple(Variant(String, Int64), Int32)", "('abc', 1)");
     }
 
-    public static IEnumerable<TestCaseData> DynamicTextRouteCases()
+    // A column that a query read as JSON, or as a LowCardinality(String), into a part that only the converter tree writes.
+    public static IEnumerable<TestCaseData> StringTextJsonCases()
     {
-        yield return SiblingCase(
-            "String",
-            "Dynamic",
-            new[] { "'abc'", "'xyz'", "'def'" },
-            "concat(dynamicType(value), ' ', hex(dynamicElement(value, 'String')))",
-            new[] { "String 616263", "String 78797A", "String 646566" },
-            DynamicSettings);
+        yield return TextCase("LowCardinality(String)", "JSON", "'{\"a\":1}'");
+        yield return TextCase("LowCardinality(Nullable(String))", "JSON", "'{\"a\":1}'");
+        yield return TextCase("JSON", "LowCardinality(String)", "'{\"a\":1}'");
+        yield return TextCase("JSON", "Dynamic", "'{\"a\":1}'");
+    }
+
+    public static IEnumerable<TestCaseData> StringTextVariantCases()
+    {
+        yield return TextCase("String", "Variant(FixedString(3), UInt64)", "'abc'");
+        yield return TextCase("Tuple(String, Int32)", "Tuple(Variant(FixedString(3), UInt64), Int32)", "('abc', 1)");
+        yield return TextCase("String", "Variant(String, Array(UInt8))", "'abc'");
+        yield return TextCase("Array(String)", "Array(Variant(String, Array(UInt8)))", "['abc']");
+        yield return TextCase("String", "Variant(Enum8('a' = 1, 'b' = 2), Int32)", "'a'");
+        yield return TextCase("Tuple(String, Int32)", "Variant(Tuple(String, Int32), UInt64)", "('abc', 1)");
     }
 
     public static IEnumerable<TestCaseData> TimeCases()
@@ -422,31 +452,201 @@ public class DecodedColumnInsertIntegrationTests
         => AssertStoresInBlocksAsync(source, target, literals, readBack, expected, settings);
 
     /// <summary>
-    /// A <c>String</c> column that a query read, into a <c>Variant</c> whose alternative for text is a
-    /// <c>FixedString(N)</c>: the values go through their text into that alternative.
+    /// A column that a query read, whose type holds a <c>String</c>, into a <c>Dynamic</c>, also inside a <c>Tuple</c>
+    /// and an <c>Array</c>: only the text of the String values could go there, so the insert refuses the column before it
+    /// sends a block, the target stores nothing, and the same connection runs the next query.
     /// </summary>
-    [TestCaseSource(nameof(TextRouteCases))]
-    [RequiresServerFeature(TcpFeature.Variant)]
-    public Task InsertAsync_StringReadIntoAVariantWithNoStringAlternative_StoresItsText(
-        string source,
-        string target,
-        string[] literals,
-        string readBack,
-        string[] expected,
-        IReadOnlyDictionary<string, string> settings)
-        => AssertStoresInBlocksAsync(source, target, literals, readBack, expected, settings);
-
-    /// <summary>A <c>String</c> column that a query read, into a <c>Dynamic</c>: the values go through their text.</summary>
-    [TestCaseSource(nameof(DynamicTextRouteCases))]
+    [TestCaseSource(nameof(StringTextDynamicCases))]
     [RequiresServerFeature(TcpFeature.Dynamic)]
-    public Task InsertAsync_StringReadIntoADynamic_StoresItsText(
-        string source,
-        string target,
-        string[] literals,
-        string readBack,
-        string[] expected,
-        IReadOnlyDictionary<string, string> settings)
-        => AssertStoresInBlocksAsync(source, target, literals, readBack, expected, settings);
+    public Task InsertAsync_StringReadIntoADynamic_IsRefusedAndKeepsTheConnection(string source, string target, string literal)
+        => AssertRefusedAsync(source, target, literal, DynamicVariantSettings, "only through the text of its String values");
+
+    /// <summary>
+    /// A column that a query read, whose type holds a <c>String</c>, into a <c>Variant</c> that would take the text of
+    /// the String values (a <c>FixedString(N)</c> alternative, an <c>Array(UInt8)</c> alternative for the bytes, an
+    /// <c>Enum8</c> alternative, a <c>Tuple</c> alternative): the insert refuses the column before it sends a block.
+    /// </summary>
+    [TestCaseSource(nameof(StringTextVariantCases))]
+    [RequiresServerFeature(TcpFeature.Variant)]
+    public Task InsertAsync_StringReadIntoAVariantThatTakesItsText_IsRefusedAndKeepsTheConnection(string source, string target, string literal)
+        => AssertRefusedAsync(source, target, literal, VariantSettings, "only through the text of its String values");
+
+    /// <summary>
+    /// A column that a query read as a <c>LowCardinality(String)</c> into a <c>JSON</c>, or as a <c>JSON</c> into a
+    /// <c>LowCardinality(String)</c> or a <c>Dynamic</c>: only the text of the String values could go there, so the
+    /// insert refuses the column before it sends a block.
+    /// </summary>
+    [TestCaseSource(nameof(StringTextJsonCases))]
+    [RequiresServerFeature(TcpFeature.Json | TcpFeature.Dynamic)]
+    public Task InsertAsync_StringOrJsonReadIntoAPartThatTakesItsText_IsRefusedAndKeepsTheConnection(string source, string target, string literal)
+        => AssertRefusedAsync(source, target, literal, JsonSettings, "only through the text of its String values");
+
+    /// <summary>
+    /// A <c>String</c> column that a query read into a <c>JSON</c>, a <c>JSON</c> column into a <c>String</c>, and a
+    /// <c>Dynamic</c> column into the same <c>Dynamic</c>: the codec writes each from its storage, as before.
+    /// </summary>
+    [TestCase("String", "JSON", "'{\"a\":1}'", "toString(value)", "{\"a\":1}")]
+    [TestCase("JSON", "String", "'{\"a\":1}'", "value", "{\"a\":1}")]
+    [TestCase("Dynamic", "Dynamic", "'abc'", "concat(dynamicType(value), ' ', toString(value))", "String abc")]
+    [RequiresServerFeature(TcpFeature.Json | TcpFeature.Dynamic)]
+    public Task InsertAsync_StringJsonOrDynamicReadIntoAColumnThatItsCodecWrites_StoresTheValues(string source, string target, string literal, string readBack, string expected)
+        => AssertStoresInBlocksAsync(source, target, new[] { literal, literal, literal }, readBack, new[] { expected, expected, expected }, JsonSettings);
+
+    /// <summary>
+    /// A column of string values that the caller builds from a <c>String</c> column that a query read goes into a
+    /// <c>Dynamic</c> through its text, as any column of string values: a value that is not UTF-8 is stored as U+FFFD.
+    /// </summary>
+    [Test]
+    [RequiresServerFeature(TcpFeature.Dynamic)]
+    public async Task InsertAsync_StringValuesBuiltFromAReadColumnIntoADynamic_StoresTheText()
+    {
+        string sourceTable = UniqueTableName();
+        string targetTable = UniqueTableName();
+        await using ClickHouseTcpConnection connection = await TcpServerFixture.ConnectAsync(None);
+        try
+        {
+            await CreateAsync(connection, sourceTable, targetTable, "String", "Dynamic", new[] { "'abc'", "unhex('41FF42')" }, DynamicSettings);
+            await using (ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None))
+            {
+                await foreach (Block block in reader.QueryAsync($"SELECT id, value FROM {sourceTable} ORDER BY id", settings: DynamicSettings, cancellationToken: None))
+                {
+                    IColumn<string> text = block.ReadAs<string>(1);
+                    var values = new string[block.RowCount];
+                    for (int row = 0; row < values.Length; row++)
+                    {
+                        values[row] = text[row];
+                    }
+
+                    IColumn[] columns = { block[0], ClickHouseTcpColumn.Create("value", values) };
+                    await connection.InsertAsync($"INSERT INTO {targetTable} (id, value) VALUES", columns, settings: DynamicSettings, cancellationToken: None);
+                }
+            }
+
+            var stored = new List<string>();
+            await foreach (Block block in connection.QueryAsync($"SELECT concat(dynamicType(value), ' ', hex(dynamicElement(value, 'String'))) FROM {targetTable} ORDER BY id", settings: DynamicSettings, cancellationToken: None))
+            {
+                for (int row = 0; row < block.RowCount; row++)
+                {
+                    stored.Add((string)block[0].GetValue(row));
+                }
+            }
+
+            Assert.That(stored, Is.EqualTo(new[] { "String 616263", "String 41EFBFBD42" }));
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {sourceTable}");
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {targetTable}");
+        }
+    }
+
+    /// <summary>
+    /// A <c>String</c> column that a query read, into an <c>Enum8</c>: the text is the label, so the insert writes the
+    /// labels; a value that is not a label is refused, and nothing is stored.
+    /// </summary>
+    [Test]
+    public async Task InsertAsync_StringReadIntoAnEnum_WritesTheLabelsAndRefusesAnotherValue()
+    {
+        await AssertStoresInBlocksAsync(
+            "String",
+            "Enum8('a' = 1, 'b' = 2)",
+            new[] { "'a'", "'b'", "'a'" },
+            "concat(toString(value), ' ', toString(CAST(value AS Int8)))",
+            new[] { "a 1", "b 2", "a 1" },
+            null);
+
+        string sourceTable = UniqueTableName();
+        string targetTable = UniqueTableName();
+        await using ClickHouseTcpConnection connection = await TcpServerFixture.ConnectAsync(None);
+        try
+        {
+            await CreateAsync(connection, sourceTable, targetTable, "String", "Enum8('a' = 1, 'b' = 2)", new[] { "'c'" }, settings: null);
+            ArgumentException refusal = null;
+            await using (ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None))
+            {
+                await foreach (Block block in reader.QueryAsync($"SELECT id, value FROM {sourceTable} ORDER BY id", cancellationToken: None))
+                {
+                    refusal = Assert.ThrowsAsync<ArgumentException>(
+                        async () => await connection.InsertAsync($"INSERT INTO {targetTable} (id, value) VALUES", new[] { block[0], block[1] }, cancellationToken: None));
+                }
+            }
+
+            // A write that fails inside the block ends its connection, so count on another one.
+            await using ClickHouseTcpConnection counter = await TcpServerFixture.ConnectAsync(None);
+            List<string> stored = await ReadStringsAsync(counter, targetTable, settings: null);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(refusal?.Message, Does.Contain("'c' is not a label of 'Enum8('a' = 1, 'b' = 2)'"));
+                Assert.That(stored, Is.Empty);
+            });
+        }
+        finally
+        {
+            await using ClickHouseTcpConnection cleanup = await TcpServerFixture.ConnectAsync(None);
+            await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {sourceTable}");
+            await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {targetTable}");
+        }
+    }
+
+    /// <summary>A column that a query read, whose type holds no <c>String</c>, goes into a <c>Dynamic</c> as before.</summary>
+    [Test]
+    [RequiresServerFeature(TcpFeature.Dynamic)]
+    public Task InsertAsync_ReadColumnWithNoStringIntoADynamic_StoresTheValues()
+        => AssertStoresInBlocksAsync(
+            "Tuple(Int32, Float64)",
+            "Dynamic",
+            new[] { "(1, 1.5)", "(2, -2.5)", "(3, 0.5)" },
+            "concat(dynamicType(value), ' ', toString(value))",
+            new[] { "Tuple(Int32, Float64) (1,1.5)", "Tuple(Int32, Float64) (2,-2.5)", "Tuple(Int32, Float64) (3,0.5)" },
+            DynamicSettings);
+
+    // Reads the source row through one connection and inserts its block through another: the insert must refuse the column
+    // before it sends a block, the target must store nothing, and the connection must run the next query.
+    private static async Task AssertRefusedAsync(string source, string target, string literal, IReadOnlyDictionary<string, string> settings, string reason)
+    {
+        string sourceTable = UniqueTableName();
+        string targetTable = UniqueTableName();
+        await using ClickHouseTcpConnection connection = await TcpServerFixture.ConnectAsync(None);
+        try
+        {
+            await CreateAsync(connection, sourceTable, targetTable, source, target, new[] { literal }, settings);
+
+            ArgumentException refusal = null;
+            await using (ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None))
+            {
+                await foreach (Block block in reader.QueryAsync($"SELECT id, value FROM {sourceTable} ORDER BY id", settings: settings, cancellationToken: None))
+                {
+                    refusal = Assert.ThrowsAsync<ArgumentException>(
+                        async () => await connection.InsertAsync($"INSERT INTO {targetTable} (id, value) VALUES", new[] { block[0], block[1] }, settings: settings, cancellationToken: None));
+                }
+            }
+
+            var one = new List<string>();
+            await foreach (Block block in connection.QueryAsync("SELECT toString(1)", cancellationToken: None))
+            {
+                for (int row = 0; row < block.RowCount; row++)
+                {
+                    one.Add((string)block[0].GetValue(row));
+                }
+            }
+
+            List<string> stored = await ReadStringsAsync(connection, targetTable, settings);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(refusal?.Message, Does.Contain($"was given a column that a query read as {source}"));
+                Assert.That(refusal?.Message, Does.Contain(reason));
+                Assert.That(one, Is.EqualTo(new[] { "1" }), "the connection runs the next query");
+                Assert.That(stored, Is.Empty, "nothing may land from a column that could not be written");
+            });
+        }
+        finally
+        {
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {sourceTable}");
+            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {targetTable}");
+        }
+    }
 
     /// <summary>
     /// A <c>Variant</c> column that a query read, into a <c>Variant</c> that has each of its alternatives and others, also
@@ -811,6 +1011,9 @@ public class DecodedColumnInsertIntegrationTests
     private static TestCaseData SiblingCase(string source, string target, string[] literals, string readBack, string[] expected, IReadOnlyDictionary<string, string> settings = null)
         => new TestCaseData(source, target, literals, readBack, expected, settings)
             .SetArgDisplayNames(source, target, Array.IndexOf(literals, "NULL") < 0 ? "no NULL row" : "a NULL row");
+
+    private static TestCaseData TextCase(string source, string target, string literal)
+        => new TestCaseData(source, target, literal).SetArgDisplayNames(source, target);
 
     private static TestCaseData PartCase(string source, string target, string literal, string readBack, string expected)
         => new TestCaseData(source, target, literal, readBack, expected).SetArgDisplayNames(source, target);

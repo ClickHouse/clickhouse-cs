@@ -270,6 +270,73 @@ internal sealed partial class ConverterDerivation
         }
     }
 
+    /// <summary>
+    /// Why a part read as <paramref name="source"/> is not written into <paramref name="target"/> through the converter
+    /// tree of its CLR type: the type holds a <c>String</c> (also a <c>Dynamic</c>, which can hold one, and a <c>JSON</c>,
+    /// whose documents are a String column), which the tree reads as text, so bytes that are not UTF-8 would change. A <c>String</c> into an <c>Enum8</c> or <c>Enum16</c> (also under <c>Nullable</c>,
+    /// <c>LowCardinality</c> and <c>SimpleAggregateFunction</c>) is written, because its text is the label.
+    /// </summary>
+    /// <param name="source">The source type of the part.</param>
+    /// <param name="target">The target type of the part.</param>
+    /// <returns>The reason, or null when the tree can write the part.</returns>
+    internal string RefusalOfStringText(string source, string target)
+    {
+        TypeNode sourceNode = TypeParser.Parse(source);
+        if (!HoldsString(sourceNode))
+        {
+            return null;
+        }
+
+        TypeNode targetNode = TypeParser.Parse(target);
+        if (CanonicalName(Unwrapped(sourceNode)) == "String" && MeaningFamily(CanonicalName(Unwrapped(targetNode))) == "Enum")
+        {
+            return null;
+        }
+
+        return $"A part read as {source} is written into {target} only through the text of its String values, but the insert writes a String that a query read only with its bytes. Convert the values with a CAST to {target} in the query, or insert a column of string values that you build from them with ClickHouseTcpColumn.Create.";
+    }
+
+    // Whether a String is at a place of the type: the type itself, under Nullable, LowCardinality or
+    // SimpleAggregateFunction, an element of an Array or a Tuple, a key or a value of a Map, an alternative of a Variant,
+    // or a field of a Nested. A Dynamic can hold a String that its type does not name, and a JSON column holds the bytes
+    // of its documents as a String column, so both count as a String.
+    private bool HoldsString(TypeNode node)
+    {
+        switch (CanonicalName(node))
+        {
+            case "String" or "Dynamic" or "JSON":
+                return true;
+
+            case "SimpleAggregateFunction" when node.Arguments.Count == 2:
+                return HoldsString(node.Arguments[1]);
+
+            case "Nullable" or "LowCardinality" or "Array" or "Map" or "Variant":
+                foreach (TypeNode argument in node.Arguments)
+                {
+                    if (HoldsString(argument))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+
+            case "Tuple" or "Nested":
+                foreach ((string _, TypeNode element) in NamedElementParser.Split(node))
+                {
+                    if (HoldsString(element))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+
+            default:
+                return false;
+        }
+    }
+
     // A Variant into a Variant of other alternatives: each alternative of the source goes to the alternative of the target of
     // the same type, from its storage. The decision uses the two types only, so a column with no row of an alternative
     // that the target does not have is refused too.

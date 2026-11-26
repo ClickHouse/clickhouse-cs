@@ -188,4 +188,29 @@ public class RefusalMessageTests
                 "and Variant(Int64, String) has no alternative Int32. A CAST of the column to Variant(Int64, String) in the query converts those values."));
         });
     }
+
+    /// <summary>
+    /// A <c>String</c> that a query read, into a <c>Dynamic</c>: the message names the part, says why its text is not
+    /// written, and names the two ways out.
+    /// </summary>
+    [Test]
+    public void InsertAsync_ReadStringIntoADynamic_NamesThePartAndTheWaysOut()
+    {
+        const string target = "Dynamic";
+        using Block block = ReadRulesTests.DecodeSample("String");
+        IColumn values = block[0];
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(target, Context);
+        InsertColumnWrite write = InsertColumnWrite.For(codec, values, target, Context, ConverterDerivation.Default, out string refusal);
+
+        string message = ClickHouseTcpConnection.DescribeUnconvertedColumn(new InsertColumn("value", target, codec, values, write: null), refusal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write, Is.Null, "the insert plan refuses the column");
+            Assert.That(message, Is.EqualTo(
+                "Column 'value' (Dynamic) was given a column that a query read as String, and the insert writes such a column part by part. " +
+                "A part read as String is written into Dynamic only through the text of its String values, but the insert writes a String that a query read only with its bytes. " +
+                "Convert the values with a CAST to Dynamic in the query, or insert a column of string values that you build from them with ClickHouseTcpColumn.Create."));
+        });
+    }
 }
