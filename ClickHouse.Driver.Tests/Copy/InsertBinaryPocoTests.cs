@@ -721,12 +721,15 @@ public class InsertBinaryPocoTests : AbstractConnectionTestFixture
         Assert.That(reader.GetValue(0), Is.EqualTo(42UL));
         Assert.That(reader.GetValue(1), Is.EqualTo("explicit"));
 
-        // Verify no schema probe query was sent
+        // Verify no schema probe query was sent. The probe is matched on the table it reads, not on
+        // the insert's query id: the probe is the driver's own query and carries an id of its own.
+        // This lookup's own text also mentions the table, so exclude it from the match.
         var probeCount = await QueryLog.CountAsync(
             client,
             $"SELECT count() FROM system.query_log " +
-            $"WHERE query_id LIKE '{queryId}%' " +
+            $"WHERE query LIKE '%{tableName}%' " +
             $"AND query LIKE '%WHERE 1=0%' " +
+            $"AND query NOT LIKE '%system.query_log%' " +
             $"AND type = 'QueryFinish'");
         Assert.That(probeCount, Is.EqualTo(0UL),
             "No schema probe query should be sent when all properties have explicit types");
