@@ -1471,11 +1471,9 @@ if (reader.TryGetEnumOrdinal(ordinal, out int value))
     Console.WriteLine(value);   // e.g. 1 for 'Active' in Enum8('Active' = 1)
 ```
 
-It returns `true` and sets `value` for an `Enum8`/`Enum16` column, and for a `Nullable(Enum...)`
-column whose cell is not NULL. It returns `false`, with `value` set to `0`, for a NULL cell or for
-any column that is not an enum. The ordinal is the
-signed value from the wire, so it can be negative, and an `Enum16` ordinal can be larger than a
-byte.
+It returns `true` for an `Enum8` or `Enum16` value, including `Nullable` and `SimpleAggregateFunction`
+columns. The signed wire ordinal can be negative or larger than a byte. For a NULL or non-enum
+value, it returns `false` and sets `value` to zero.
 
 ## Best practices {#best-practices}
 
@@ -1659,8 +1657,14 @@ await using var reader = await cmd3.ExecuteReaderAsync();
 | Decimal128(S) | `decimal` / `ClickHouseDecimal` |
 | Decimal256(S) | `decimal` / `ClickHouseDecimal` |
 
+`GetSchemaTable()` reports precision, scale, and size for decimals, including
+`SimpleAggregateFunction(any, Decimal(18, 4))`.
+
 <Note>
-Decimal type conversion is controlled via the UseCustomDecimals setting. When a value is read as `decimal` (with `UseCustomDecimals=false`, or through `GetDecimal`), it keeps the scale of the column, so `7` in a `Decimal(18, 4)` column is returned as `7.0000m`. `decimal` holds at most 28 fractional digits and a 96-bit mantissa, so when a value does not fit at the column's scale, trailing zeros are dropped where necessary, and a value that still does not fit throws an `OverflowException`.
+With `UseCustomDecimals=false` or `GetDecimal`, values read as `decimal` keep the column scale when
+possible. For example, `7` in a `Decimal(18, 4)` column becomes `7.0000m`. The driver drops trailing
+zeros if needed to fit `decimal`'s 28 fractional digits and 96-bit mantissa. A value that still
+does not fit throws `OverflowException`.
 </Note>
 
 ##### ClickHouseDecimal operations {#type-map-reading-clickhousedecimal}
@@ -1722,7 +1726,9 @@ When reading `DateTime` values, the `DateTime.Kind` property is set based on the
 | `DateTime('Europe/Amsterdam')` | `Unspecified` | Offset applied |
 | `DateTime` | `Unspecified` | Wall-clock time preserved as-is |
 
-For non-UTC columns, the returned `DateTime` represents the wall-clock time in that timezone. Use `ClickHouseDataReader.GetDateTimeOffset()` to get a `DateTimeOffset` with the correct offset for that timezone:
+For non-UTC columns, `GetDateTime` returns the wall-clock time in the column timezone.
+`GetDateTimeOffset` includes that timezone's offset, including for `LowCardinality` and
+`SimpleAggregateFunction` columns.
 
 ```csharp
 var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
@@ -1732,6 +1738,8 @@ reader.Read();
 var dt = reader.GetDateTime(0);    // 2024-06-15 14:30:00, Kind=Unspecified
 var dto = reader.GetDateTimeOffset(0); // 2024-06-15 14:30:00 +02:00 (CEST)
 ```
+
+`GetSchemaTable()` reports the scale of `DateTime64` columns through the same wrappers.
 
 For columns **without** an explicit timezone (i.e., `DateTime` instead of `DateTime('Europe/Amsterdam')`), the driver returns a `DateTime` with `Kind=Unspecified`. This preserves the wall-clock time exactly as stored without making assumptions about timezone.
 
