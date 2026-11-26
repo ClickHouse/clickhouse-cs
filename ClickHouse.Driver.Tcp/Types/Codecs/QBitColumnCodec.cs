@@ -107,6 +107,10 @@ internal abstract class QBitColumnCodec : IColumnCodec
 
     public abstract bool CanWrite(IColumn column);
 
+    /// <inheritdoc/>
+    public bool WritesFromStorage(IColumn column)
+        => column is QBitColumn dense && dense.Dimension == Dimension && dense.BitWidth == BitWidth && dense.Stride == Stride && CanWrite(column);
+
     public void WriteColumn(ClickHouseBinaryWriter writer, IColumn column, int start, int length)
     {
         // A row range is contiguous within each plane, but planes are spaced by the source column's full row
