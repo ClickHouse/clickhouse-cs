@@ -24,7 +24,8 @@ public static class ClickHouseTcpTypes
     /// written as its integer ordinal; a value is written as a type that it casts to with no conversion (for example a
     /// <see cref="string"/> as the <see cref="object"/> of a <c>Variant</c>); a value type is written into a column of its
     /// nullable type; and a nullable value type is written into a column that cannot hold NULL, where the insert throws
-    /// at the first NULL.
+    /// at the first NULL. An array cast that gives the elements another meaning, such as a <see cref="T:uint[]"/> as an
+    /// <see cref="T:int[]"/>, does not apply; an enum array casts to an array of its underlying type.
     /// </para>
     /// <para>
     /// <c>Variant</c> is written from <see cref="object"/>. A value goes to the alternative whose canonical CLR type is the
@@ -56,7 +57,9 @@ public static class ClickHouseTcpTypes
     /// Besides the readings that the type offers, three rules apply to the whole column type: a CLR enum reads from
     /// its integer ordinal, a column reads as a type that its values cast to (for example <see cref="object"/>), and
     /// a column of a nullable type reads as a value type that cannot hold null. Such a read throws when it reaches a
-    /// NULL value.
+    /// NULL value. An array cast that gives the elements another meaning, such as a <see cref="T:uint[]"/> as an
+    /// <see cref="T:int[]"/>, does not apply; an array casts to an array of an enum whose underlying type is its element
+    /// type.
     /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="clickHouseType"/> or <paramref name="elementType"/> is null.</exception>
     /// <exception cref="FormatException"><paramref name="clickHouseType"/> is not a well-formed ClickHouse type.</exception>

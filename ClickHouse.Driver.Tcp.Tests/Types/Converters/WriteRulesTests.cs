@@ -73,8 +73,8 @@ public class WriteRulesTests
         ["Float64"] = "double",
         ["Enum8('a' = 1, 'b' = 2, 'c' = 3)"] = "string, sbyte, sbyte?, SByteEnum, SByteEnum?",
         ["Enum16('a' = 1, 'b' = 2, 'c' = 3)"] = "string, short",
-        ["String"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
-        ["FixedString(2)"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["String"] = "string, byte[], ByteEnum[]",
+        ["FixedString(2)"] = "string, byte[], ByteEnum[]",
         ["Date"] = "DateOnly?",
         ["DateTime('UTC')"] = "uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
         ["DateTime64(3, 'UTC')"] = "long, long?, LongEnum, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
@@ -84,26 +84,26 @@ public class WriteRulesTests
         ["Nullable(Int8)"] = "sbyte, sbyte?, SByteEnum, SByteEnum?",
         ["Nullable(Int32)"] = "int, int?, IntEnum, IntEnum?",
         ["Nullable(UInt32)"] = "uint, uint?, UIntEnum, UIntEnum?",
-        ["Nullable(String)"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["Nullable(String)"] = "string, byte[], ByteEnum[]",
         ["Nullable(Enum8('a' = 1, 'b' = 2, 'c' = 3))"] = "string, sbyte, sbyte?, SByteEnum, SByteEnum?",
         ["Nullable(DateTime('UTC'))"] = "uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
         ["Nullable(Tuple(Int32, String))"] = "(int, string), (int, string)?",
         ["Nullable(Tuple(DateTime('UTC'), String))"] = "(DateTime, string), (DateTime, string)?",
-        ["LowCardinality(String)"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["LowCardinality(String)"] = "string, byte[], ByteEnum[]",
         ["LowCardinality(Int32)"] = "int, int?, IntEnum, IntEnum?",
-        ["LowCardinality(Nullable(String))"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
+        ["LowCardinality(Nullable(String))"] = "string, byte[], ByteEnum[]",
         ["LowCardinality(Nullable(Int32))"] = "int, int?, IntEnum, IntEnum?",
         ["LowCardinality(DateTime('UTC'))"] = "uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
         ["LowCardinality(Nullable(DateTime('UTC')))"] = "uint, uint?, UIntEnum, UIntEnum?, DateTime, DateTime?, DateTimeOffset, DateTimeOffset?",
-        ["LowCardinality(FixedString(2))"] = "string, byte[], sbyte[], SByteEnum[], ByteEnum[]",
-        ["Array(Int8)"] = "byte[], sbyte[], SByteEnum[], ByteEnum[]",
-        ["Array(UInt8)"] = "byte[], sbyte[], SByteEnum[], ByteEnum[]",
-        ["Array(Int32)"] = "int[], uint[], IntEnum[], UIntEnum[]",
-        ["Array(UInt32)"] = "int[], uint[], IntEnum[], UIntEnum[]",
+        ["LowCardinality(FixedString(2))"] = "string, byte[], ByteEnum[]",
+        ["Array(Int8)"] = "sbyte[], SByteEnum[]",
+        ["Array(UInt8)"] = "byte[], ByteEnum[]",
+        ["Array(Int32)"] = "int[], IntEnum[]",
+        ["Array(UInt32)"] = "uint[], UIntEnum[]",
         ["Array(String)"] = "string[]",
-        ["Array(Array(Int32))"] = "int[][], uint[][]",
+        ["Array(Array(Int32))"] = "int[][]",
         ["Array(Nullable(Int32))"] = "int?[]",
-        ["Array(DateTime('UTC'))"] = "int[], uint[], IntEnum[], UIntEnum[]",
+        ["Array(DateTime('UTC'))"] = "uint[], UIntEnum[]",
         ["Array(IPv4)"] = "Address[]",
         ["Map(String, Int32)"] = "KeyValuePair<string, int>[]",
         ["Tuple(Int32, String)"] = "(int, string), (int, string)?",
@@ -294,29 +294,31 @@ public class WriteRulesTests
     }
 
     /// <summary>
-    /// The cast rule of the writes takes its types from the cast rule of the reads (<see cref="ReadRules.IsAssignable"/>).
-    /// This lists the array casts among them that read elements as another type (<see cref="ReadRules.ReinterpretsElements"/>),
-    /// for the array sources of the matrix: they are the write side of the open question on those casts.
+    /// The cast rule of the writes takes its types from the cast rule of the reads (<see cref="ReadRules.IsAssignable"/>),
+    /// so it gives no array cast that gives the elements another meaning (<see cref="ReadRules.ReinterpretsElements"/>).
+    /// For the array sources of the matrix, the array casts that read value-type elements as another type are an enum
+    /// array written as an array of its underlying type.
     /// </summary>
     [Test]
-    public void CastTargets_ArraySources_AreReadRuleCastsAndTheElementReinterpretationsAreListed()
+    public void CastTargets_ArraySources_KeepOnlyAnEnumArrayAsAnArrayOfItsUnderlyingType()
     {
         Type[] arrays = Sources.Where(source => source.IsArray).ToArray();
-        Assert.That(arrays.SelectMany(source => WriteRules.CastTargets(source).Select(target => (source, target))).Where(pair => !ReadRules.IsAssignable(pair.source, pair.target)), Is.Empty);
+        (Type Source, Type Target)[] casts = arrays.SelectMany(source => WriteRules.CastTargets(source).Select(target => (source, target))).ToArray();
 
-        string[] reinterpreted = arrays
-            .SelectMany(source => WriteRules.CastTargets(source).Where(target => ReadRules.ReinterpretsElements(source, target)).Select(target => $"{TypeNames.Of(source)} as {TypeNames.Of(target)}"))
+        string[] elementCasts = casts
+            .Where(cast => cast.Target.IsArray && cast.Source.GetElementType().IsValueType && cast.Target.GetElementType() != cast.Source.GetElementType())
+            .Select(cast => $"{TypeNames.Of(cast.Source)} as {TypeNames.Of(cast.Target)}")
             .OrderBy(text => text, StringComparer.Ordinal)
             .ToArray();
 
-        string[] expected =
-        {
-            "ByteEnum[] as byte[]", "ByteEnum[] as sbyte[]", "IntEnum[] as int[]", "IntEnum[] as uint[]", "SByteEnum[] as byte[]",
-            "SByteEnum[] as sbyte[]", "UIntEnum[] as int[]", "UIntEnum[] as uint[]", "byte[] as sbyte[]", "int[] as uint[]",
-            "int[][] as uint[][]", "sbyte[] as byte[]", "uint[] as int[]", "uint[][] as int[][]",
-        };
+        string[] expected = { "ByteEnum[] as byte[]", "IntEnum[] as int[]", "SByteEnum[] as sbyte[]", "UIntEnum[] as uint[]" };
 
-        Assert.That(reinterpreted, Is.EqualTo(expected), "Listed:" + Environment.NewLine + string.Join(Environment.NewLine, reinterpreted.Select(r => $"\"{r}\",")));
+        Assert.Multiple(() =>
+        {
+            Assert.That(casts.Where(cast => !ReadRules.IsAssignable(cast.Source, cast.Target)), Is.Empty);
+            Assert.That(casts.Where(cast => ReadRules.ReinterpretsElements(cast.Source, cast.Target)), Is.Empty);
+            Assert.That(elementCasts, Is.EqualTo(expected), "Listed:" + Environment.NewLine + string.Join(Environment.NewLine, elementCasts.Select(r => $"\"{r}\",")));
+        });
     }
 
     /// <summary>
@@ -331,8 +333,8 @@ public class WriteRulesTests
         object[] values = columnType switch
         {
             "IPv4" => new object[] { new Address(1), IPAddress.Parse("1.2.3.4"), new Address(3) },
-            "Array(Int32)" => new object[] { new[] { 3_000_000_000u }, new[] { -1, 2 }, new[] { 7u } },
-            _ => new object[] { new sbyte[] { -1 }, new byte[] { 0x41, 0x42 }, new sbyte[] { 1 } },
+            "Array(Int32)" => new object[] { new[] { (IntEnum)(-1) }, new[] { -1, 2 }, new[] { IntEnum.A } },
+            _ => new object[] { new[] { (ByteEnum)0xFF }, new byte[] { 0x41, 0x42 }, new[] { ByteEnum.A } },
         };
 
         // The CLR cast puts each value into an array of the type that the column is written as.
@@ -348,18 +350,24 @@ public class WriteRulesTests
         });
     }
 
-    /// <summary>The reinterpretation keeps the bits of each element.</summary>
+    /// <summary>
+    /// A <c>uint[]</c> is not written into <c>Array(Int32)</c>: the cast would store 3000000000 as -1294967296. Each write
+    /// tier refuses it before it writes a value.
+    /// </summary>
     [Test]
-    public void PocoWrite_UInt32ArrayIntoAnInt32Array_WritesTheBitsOfEachElement()
+    public void Write_UInt32ArrayIntoAnInt32Array_IsRefusedInEveryTier()
     {
         Array values = new[] { new[] { 3_000_000_000u }, Array.Empty<uint>(), new[] { 7u } };
 
-        Outcome now = WriteOutcome(ClientArms.PocoWrite, typeof(uint[]), values, "Array(Int32)", start: 0);
-
         Assert.Multiple(() =>
         {
-            Assert.That(now.Kind, Is.EqualTo(OutcomeKind.Bytes), now.ToString());
-            Assert.That(now.Bytes[^8..], Is.EqualTo(new byte[] { 0x00, 0x5E, 0xD0, 0xB2, 7, 0, 0, 0 }), "3000000000 is the Int32 -1294967296");
+            foreach (WriteArm arm in new[] { ClientArms.Write, ClientArms.PocoWrite, ClientArms.UntypedWrite })
+            {
+                Outcome outcome = WriteOutcome(arm, typeof(uint[]), values, "Array(Int32)", start: 0);
+                Assert.That(outcome.Kind, Is.EqualTo(OutcomeKind.Refused), $"{arm.Name}: {outcome}");
+            }
+
+            Assert.That(ClickHouseTcpTypes.CanWrite("Array(Int32)", typeof(uint[])), Is.False);
         });
     }
 

@@ -563,6 +563,42 @@ public class DecodedColumnConversionTests
         });
     }
 
+    public static IEnumerable<TestCaseData> OtherSignCases()
+    {
+        uint[][] arrays = { new[] { 3_000_000_000u, 7u }, Array.Empty<uint>(), new[] { 1u } };
+        yield return new TestCaseData("Array(UInt32)", "Array(Int32)", arrays).SetArgDisplayNames("Array(UInt32)", "Array(Int32)");
+        yield return new TestCaseData(
+            "Tuple(DateTime64(3, 'UTC'), Array(UInt32))",
+            "Tuple(DateTime64(6, 'UTC'), Array(Int32))",
+            Instants.Zip(arrays).ToArray())
+            .SetArgDisplayNames("Tuple(DateTime64(3), Array(UInt32))", "Tuple(DateTime64(6), Array(Int32))");
+        yield return new TestCaseData(
+            "Tuple(Nullable(Int8), Array(UInt32))",
+            "Tuple(Nullable(Int8), Array(Int32))",
+            new sbyte?[] { 1, null, -1 }.Zip(arrays).ToArray())
+            .SetArgDisplayNames("Tuple(Nullable(Int8), Array(UInt32))", "Tuple(Nullable(Int8), Array(Int32))");
+    }
+
+    /// <summary>
+    /// A column that a query read, with an <c>Array(UInt32)</c> where the target has an <c>Array(Int32)</c>, is refused:
+    /// alone, next to a part of another scale, and next to a <c>Nullable</c>. The insert takes the array apart, and no
+    /// write of <c>Int32</c> takes a <see cref="uint"/>, which would store 3000000000 as -1294967296. The refusal gives the
+    /// reason of the part.
+    /// </summary>
+    [TestCaseSource(nameof(OtherSignCases))]
+    public void For_DecodedArrayOfUInt32IntoAnArrayOfInt32_IsRefusedWithTheReasonOfThePart(string source, string target, Array values)
+    {
+        using IColumn decoded = Decode(source, values);
+
+        InsertColumnWrite write = InsertColumnWrite.For(Codec(target), decoded, target, Utc, ConverterDerivation.Default, out string refusal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write, Is.Null);
+            Assert.That(refusal, Is.EqualTo("'Int32' cannot be written from System.UInt32. It is written from: System.Int32."));
+        });
+    }
+
     public static IEnumerable<TestCaseData> HiddenValueCases()
     {
         yield return Bytes(
