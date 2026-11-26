@@ -153,6 +153,19 @@ internal sealed class VariantWriter : ColumnWriter<object>
         }
     }
 
+    /// <summary>
+    /// The alternative that takes every value of <paramref name="clrType"/> with no tie, as a write places it.
+    /// </summary>
+    /// <param name="clrType">The CLR type of the values.</param>
+    /// <returns>The discriminator of the alternative, or -1 when no alternative or more than one takes the values.</returns>
+    internal int AlternativeOf(Type clrType)
+        => (placements.TryGetValue(clrType, out Placement cached) ? cached : PlacementOf(clrType)).Discriminator;
+
+    /// <summary>The type of an alternative.</summary>
+    /// <param name="discriminator">The discriminator of the alternative.</param>
+    /// <returns>The type name of the alternative, as its codec gives it.</returns>
+    internal string AlternativeType(int discriminator) => alternatives[discriminator].TypeName;
+
     // The alternative of one value, and the writer of that alternative for the value's CLR type.
     private int Place(object value, out VariantChild child)
     {

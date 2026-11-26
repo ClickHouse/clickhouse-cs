@@ -530,6 +530,11 @@ read those values. The block keeps one view for each column and type, so a secon
 view. The view is valid only while the block is: the block releases the converted values when the
 enumeration advances. Reading one row of a view converts all of its rows, so read `Values` once into a local.
 
+A value that has no reading as `T` makes the first access throw. When several values of a column
+have no reading, the exception is the failure of one of them, which can differ between `ReadAs<T>`
+and `QueryAsync<T>`; a message that names a row names the row of that value. A `LowCardinality`
+dictionary entry that has no reading fails a read only when a row of the read uses it.
+
 A column reads as the types in the [reading tables](#type-map-reading). In addition, these rules apply to
 the whole column type, the same as in `QueryAsync<T>` POCO mapping:
 
@@ -580,16 +585,65 @@ insert completes before that block is released.
 
 `InsertAsync` writes each column in one of two ways:
 
-- A column that a query read is written from the data it holds, with no conversion. So a `String`
-  value that is not valid UTF-8 goes back to the server with the bytes that the server sent. An
-  array column that `ClickHouseTcpColumn.CreateArray` builds is written in the same way, from its
-  offsets and its inner column.
+- A column that a query of the same type read is written from the data it holds, with no
+  conversion. So a `String` value that is not valid UTF-8 goes back to the server with the bytes
+  that the server sent. An array column that `ClickHouseTcpColumn.CreateArray` builds over such a
+  column is written in the same way. A column that a query read as another type is written part by
+  part: the insert takes the column apart where the two types have the same `Tuple`, `Map` or
+  `Array`, and where one of them has a `Nullable`, and writes each part as follows. A `Nullable`
+  part written into a `Variant`, a `Dynamic` or a `Geometry`, which hold NULL themselves, is not
+  taken apart: it is converted as the last of these items says, and a NULL row becomes the NULL of
+  the target.
+  - A part of the same type keeps the bytes that the server sent. For example, a `String` next to an
+    `Enum8` that the target has as an `Int8` keeps its bytes.
+  - A part read as a `DateTime64` or `Time64` of another scale, or as an `Enum8` or `Enum16` with
+    other members, is converted through its values (the instants, the durations and the labels).
+    The insert refuses such a part of a scale above 7 unless the target has the same scale.
+    The insert also refuses a `DateTime64` part (an instant) written into a `Time64` (a duration),
+    and the reverse: convert the values in the query, or insert the counts as a column of `long`
+    values.
+  - A `String` or `FixedString` part written into a `LowCardinality`, `Nullable` or `FixedString`
+    type is written from its bytes, so a value that is not valid UTF-8 keeps them. A
+    `FixedString(N)` takes only values of exactly N bytes.
+  - A `String` part (also in `Nullable` or `LowCardinality`) written into a `Variant` whose `String`
+    or `LowCardinality(String)` alternative takes both a text and a `byte[]` value, such as
+    `Variant(String, Int64)`, is written from its bytes into that alternative, so a value that is
+    not valid UTF-8 keeps them. A NULL row becomes the NULL of the `Variant`.
+  - A `Variant` part written into a `Variant` that has each of its alternatives, and others, is
+    written from the data it holds: each value stays in the alternative of the same type and keeps
+    its bytes, and a NULL row stays NULL. When the target does not have an alternative of the
+    source, the insert refuses the column, also when no row holds a value of that alternative.
+    Convert the values with a `CAST` in the query.
+  - Any other part is converted as the next item says, with one limit. When the type of such a part
+    holds a `String` (at any place, also in an `Array`, `Map`, `Tuple` or `Variant`), or is a
+    `Dynamic` or a `JSON`, the conversion would write its strings as text and change bytes that are
+    not valid UTF-8. So the insert refuses the column before it sends a row, by the two types only.
+    This applies, for example, to a `String` into a `Dynamic`, into a `Variant` that would put it
+    in a `FixedString(N)` alternative, or into a `Variant` that puts a `byte[]` in an `Array(UInt8)`
+    alternative, to a `Variant` with a `String` alternative into a `Dynamic`, to a `Dynamic` into
+    a `Variant`, and to a `LowCardinality(String)` into a `JSON`. A `String` into an `Enum8` or
+    `Enum16` is written, because its text is the label; a value that is not a label is refused.
+    To insert such values, convert them with a `CAST` in the query, or insert a column of `string`
+    values that you build from them with `ClickHouseTcpColumn.Create`.
+
+  A value that a NULL hides in such a column (for example after `nullIf`) is not converted into
+  another target type: the row gets the placeholder of the target. When the insert cannot write a
+  part, it refuses the column before it sends a row, and the message gives the reason.
 - Any other column is converted from the CLR type of its values to the target type, with the
   mappings of [Type mapping: writing to ClickHouse](#type-map-writing) and the
   [write rules](#write-rules). `ClickHouseTcpTypes.CanWrite` gives the answer of this conversion. A
   value that the target type cannot hold (a text that is too long for a `FixedString(N)`, a decimal
   past its precision, a `NULL` in a column that cannot hold it) is refused, and the insert stops.
-  The insert then closes its connection; the next operation uses another one.
+  When several values are refused, the message names one of them, which can differ between
+  `InsertAsync` and the row inserts. The insert then closes its connection; the next operation
+  uses another one.
+  An array column that `ClickHouseTcpColumn.CreateArray` builds over a column of your own is written
+  as its offsets and its inner column, which is converted in the same way, with no copy of the
+  rows into arrays.
+
+A column that implements `IColumn<T>` for more than one `T` has no single CLR type. It is written
+as the first of those types in the list of CLR types that an insert message names for the target
+type.
 
 #### Row inserts {#row-inserts}
 

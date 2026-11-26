@@ -485,15 +485,17 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         {
             await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Variant(String, UInt64)) ENGINE = Memory", settings);
 
-            // Interleave alternatives so later blocks start at non-zero offsets in both child columns.
+            // Interleave alternatives so later blocks start at non-zero offsets in both child columns. The child columns
+            // are decoded columns, so the codec writes the dense column from its storage.
             object[] expected = { 100UL, "a", null, 200UL, "b", 300UL, "c" };
             var discriminators = new byte[] { 1, 0, 255, 1, 0, 1, 0 };
             IColumn[] typeColumns =
             {
-                new ArrayColumn<string>("value", "String", new[] { "a", "b", "c" }),
+                DecodedColumns.Of("value", "String", "a", "b", "c"),
                 PrimitiveColumn<ulong>.FromValues("value", "UInt64", new ulong[] { 100, 200, 300 }),
             };
             var dense = new VariantColumn("value", "Variant(String, UInt64)", discriminators, typeColumns, expected.Length, pooledDiscriminators: false, ownsColumns: false);
+            Assert.That(ColumnCodecRegistry.Default.Resolve("Variant(String, UInt64)", default).WritesFromStorage(dense), Is.True, "the codec writes the column from its storage");
 
             IColumn[] columns = { PrimitiveColumn<uint>.FromValues("id", "UInt32", RowIds(expected.Length)), dense };
             await connection.InsertAsync($"INSERT INTO {table} (id, value) VALUES", columns, maxRowsPerBlock: 2, settings: settings, cancellationToken: None);
@@ -517,7 +519,8 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     }
 
     /// <summary>
-    /// Verifies that dense <c>Variant</c> values are remapped when equal-length alternative lists differ.
+    /// Verifies that dense <c>Variant</c> values are remapped when the target has each alternative of the source at
+    /// another discriminator, and an alternative that the source does not have.
     /// </summary>
     [Test]
     public async Task InsertAsync_DenseVariantOfAnotherVariantsAlternatives_LandsInTheAlternativeTheValueNames()
@@ -529,7 +532,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         {
             // The reader uses another connection, so use replicated storage for multi-replica Cloud services.
             await ExecuteAsync(connection, $"CREATE TABLE {source} (value Variant(Int64, String)) ENGINE = MergeTree ORDER BY tuple()");
-            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64)) ENGINE = MergeTree ORDER BY tuple()");
+            await ExecuteAsync(connection, $"CREATE TABLE {target} (value Variant(Bool, Int64, String)) ENGINE = MergeTree ORDER BY tuple()");
             // Force both values into the source Int64 alternative.
             await ExecuteAsync(
                 connection,
@@ -571,7 +574,8 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
     }
 
     /// <summary>
-    /// Verifies that an incompatible dense <c>Variant</c> is rejected before writing its discriminators.
+    /// Verifies that a dense <c>Variant</c> with an alternative that the target does not have is rejected before writing
+    /// its discriminators.
     /// </summary>
     [Test]
     public async Task InsertAsync_DenseVariantWhoseValueNoTargetAlternativeAccepts_RefusesBeforeWritingAnything()
@@ -606,7 +610,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
             Assert.Multiple(() =>
             {
                 Assert.That(refusal, Is.Not.Null);
-                Assert.That(refusal.Message, Does.Contain("System.String"), "names the CLR type no alternative accepts");
+                Assert.That(refusal.Message, Does.Contain("has no alternative String"), "names the alternative that the target does not have");
                 Assert.That(refusal.Message, Does.Contain("Variant(Bool, Int64)"), "names the target type");
                 Assert.That(rows, Is.Zero, "nothing may land from a column that could not be written");
             });
@@ -629,12 +633,13 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
         {
             await ExecuteAsync(connection, $"CREATE TABLE {table} (id UInt32, value Dynamic) ENGINE = Memory", DynamicSplitSettings);
 
-            // Interleave Dynamic types so later blocks start at non-zero offsets in both child columns.
+            // Interleave Dynamic types so later blocks start at non-zero offsets in both child columns. The child columns
+            // are decoded columns, so the codec writes the dense column from its storage.
             object[] expected = { 100UL, "a", null, 200UL, "b", 300UL, "c" };
             var discriminators = new[] { 1, 0, 2, 1, 0, 1, 0 };
             IColumn[] typeColumns =
             {
-                new ArrayColumn<string>("value", "String", new[] { "a", "b", "c" }),
+                DecodedColumns.Of("value", "String", "a", "b", "c"),
                 PrimitiveColumn<ulong>.FromValues("value", "UInt64", new ulong[] { 100, 200, 300 }),
             };
             var dense = new DynamicColumn(
@@ -646,6 +651,7 @@ public class ClickHouseTcpConnectionInsertIntegrationTests
                 expected.Length,
                 pooledDiscriminators: false,
                 ownsColumns: false);
+            Assert.That(ColumnCodecRegistry.Default.Resolve("Dynamic", default).WritesFromStorage(dense), Is.True, "the codec writes the column from its storage");
 
             IColumn[] columns = { PrimitiveColumn<uint>.FromValues("id", "UInt32", RowIds(expected.Length)), dense };
             await connection.InsertAsync(

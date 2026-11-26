@@ -106,9 +106,111 @@ public class RefusalMessageTests
         Assert.That(InsertColumnWrite.For(codec, values, type, Context, ConverterDerivation.Default), Is.Null, "the insert plan refuses the column");
 
         string message = ClickHouseTcpConnection.DescribeUnwritableColumn(
-            new InsertColumn("value", type, codec, values),
+            new InsertColumn("value", type, codec, values, write: null),
             ConverterDerivation.Default.SuggestedTypes(type, Context, ConversionDirection.Write));
 
         Assert.That(message, Is.EqualTo(expected));
+    }
+
+    /// <summary>
+    /// A column that a query read as another type, whose part the insert cannot write: the message names the type that the
+    /// column was read as, then the reason of the part.
+    /// </summary>
+    [Test]
+    public void InsertAsync_ReadColumnWithAPartThatCannotBeWritten_NamesTheReadTypeAndTheReasonOfThePart()
+    {
+        const string source = "Tuple(String, Int32)";
+        const string target = "Tuple(String, Int64)";
+        using Block block = ReadRulesTests.DecodeSample(source);
+        IColumn values = block[0];
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(target, Context);
+        InsertColumnWrite write = InsertColumnWrite.For(codec, values, target, Context, ConverterDerivation.Default, out string refusal);
+
+        string message = ClickHouseTcpConnection.DescribeUnconvertedColumn(new InsertColumn("value", target, codec, values, write: null), refusal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write, Is.Null, "the insert plan refuses the column");
+            Assert.That(message, Is.EqualTo(
+                "Column 'value' (Tuple(String, Int64)) was given a column that a query read as Tuple(String, Int32), and the insert writes such a column part by part. " +
+                "'Int64' cannot be written from System.Int32. It is written from: System.Int64."));
+        });
+    }
+
+    /// <summary>
+    /// A column that a query read as a <c>DateTime64</c>, into a <c>Time64</c>: the message names the read type, says that
+    /// the values are instants and the target holds durations, and names the two ways to insert the values.
+    /// </summary>
+    [Test]
+    public void InsertAsync_ReadInstantIntoADuration_NamesTheTwoKindsOfCountAndWhatToDo()
+    {
+        const string source = "Array(DateTime64(3))";
+        const string target = "Array(Time64(6))";
+        using Block block = ReadRulesTests.DecodeSample(source);
+        IColumn values = block[0];
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(target, Context);
+        InsertColumnWrite write = InsertColumnWrite.For(codec, values, target, Context, ConverterDerivation.Default, out string refusal);
+
+        string message = ClickHouseTcpConnection.DescribeUnconvertedColumn(new InsertColumn("value", target, codec, values, write: null), refusal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write, Is.Null, "the insert plan refuses the column");
+            Assert.That(message, Is.EqualTo(
+                "Column 'value' (Array(Time64(6))) was given a column that a query read as Array(DateTime64(3)), and the insert writes such a column part by part. " +
+                "A value of DateTime64(3) is an instant and a value of Time64(6) is a duration, so a column read as DateTime64(3) is not written into Time64(6). " +
+                "Convert the values in the query, or insert the counts as a column of System.Int64 values."));
+        });
+    }
+
+    /// <summary>
+    /// A <c>Variant</c> that a query read, into a <c>Variant</c> that does not have one of its alternatives: the message
+    /// names the alternative and the cast that converts its values.
+    /// </summary>
+    [Test]
+    public void InsertAsync_ReadVariantIntoAVariantWithoutOneOfItsAlternatives_NamesTheAlternativeAndTheCast()
+    {
+        const string source = "Variant(Int32, String)";
+        const string target = "Variant(Int64, String)";
+        using Block block = ReadRulesTests.DecodeSample(source);
+        IColumn values = block[0];
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(target, Context);
+        InsertColumnWrite write = InsertColumnWrite.For(codec, values, target, Context, ConverterDerivation.Default, out string refusal);
+
+        string message = ClickHouseTcpConnection.DescribeUnconvertedColumn(new InsertColumn("value", target, codec, values, write: null), refusal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write, Is.Null, "the insert plan refuses the column");
+            Assert.That(message, Is.EqualTo(
+                "Column 'value' (Variant(Int64, String)) was given a column that a query read as Variant(Int32, String), and the insert writes such a column part by part. " +
+                "A column read as Variant(Int32, String) is written into Variant(Int64, String) only when each of its alternatives is an alternative of Variant(Int64, String), " +
+                "and Variant(Int64, String) has no alternative Int32. A CAST of the column to Variant(Int64, String) in the query converts those values."));
+        });
+    }
+
+    /// <summary>
+    /// A <c>String</c> that a query read, into a <c>Dynamic</c>: the message names the part, says why its text is not
+    /// written, and names the two ways out.
+    /// </summary>
+    [Test]
+    public void InsertAsync_ReadStringIntoADynamic_NamesThePartAndTheWaysOut()
+    {
+        const string target = "Dynamic";
+        using Block block = ReadRulesTests.DecodeSample("String");
+        IColumn values = block[0];
+        IColumnCodec codec = ColumnCodecRegistry.Default.Resolve(target, Context);
+        InsertColumnWrite write = InsertColumnWrite.For(codec, values, target, Context, ConverterDerivation.Default, out string refusal);
+
+        string message = ClickHouseTcpConnection.DescribeUnconvertedColumn(new InsertColumn("value", target, codec, values, write: null), refusal);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(write, Is.Null, "the insert plan refuses the column");
+            Assert.That(message, Is.EqualTo(
+                "Column 'value' (Dynamic) was given a column that a query read as String, and the insert writes such a column part by part. " +
+                "A part read as String is written into Dynamic only through the text of its String values, but the insert writes a String that a query read only with its bytes. " +
+                "Convert the values with a CAST to Dynamic in the query, or insert a column of string values that you build from them with ClickHouseTcpColumn.Create."));
+        });
     }
 }

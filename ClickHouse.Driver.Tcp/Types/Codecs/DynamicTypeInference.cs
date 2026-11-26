@@ -10,13 +10,13 @@ namespace ClickHouse.Driver.Tcp.Types.Codecs;
 
 /// <summary>
 /// Infers the ClickHouse type a CLR value should be written as inside a <c>Dynamic</c> column. The set of types a
-/// <c>Dynamic</c> holds is not declared, so the ergonomic write path derives each value's type from its runtime
+/// <c>Dynamic</c> holds is not declared, so the converter layer derives each value's type from its runtime
 /// shape. This is self-contained (the TCP client cannot reference the main driver's type system), covering the
 /// scalar types the codecs support plus recursion into <c>Array</c>/<c>Map</c>/<c>Tuple</c> of them.
 ///
 /// <para>
 /// The result is a canonical ClickHouse type string, resolved to a codec through the registry, whose element type
-/// matches the CLR value — so an inferred type both round-trips the value and buckets values of the same type
+/// matches the CLR value, so an inferred type both round-trips the value and buckets values of the same type
 /// together. Where a CLR type maps to more than one ClickHouse type, a documented default is chosen: an
 /// <see cref="IPAddress"/> is disambiguated by its address family, and a bare <see cref="DateOnly"/> maps to the
 /// wider <c>Date32</c>.

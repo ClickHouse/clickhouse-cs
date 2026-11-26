@@ -29,21 +29,6 @@ internal static class WriteBuffers
         }
     }
 
-    /// <summary>Copies the values of all runs of <paramref name="values"/> into <paramref name="destination"/>.</summary>
-    /// <typeparam name="T">The value type.</typeparam>
-    /// <param name="values">The source.</param>
-    /// <param name="destination">Receives <see cref="ValueSource{T}.Count"/> values.</param>
-    public static void CopyTo<T>(ValueSource<T> values, Span<T> destination)
-    {
-        int position = 0;
-        for (int r = 0; r < values.RunCount; r++)
-        {
-            ReadOnlySpan<T> run = values.Run(r);
-            run.CopyTo(destination.Slice(position));
-            position += run.Length;
-        }
-    }
-
     /// <summary>
     /// Writes the dictionary keys of a LowCardinality body at the width that <paramref name="code"/> selects, in
     /// chunks, each in one copy.

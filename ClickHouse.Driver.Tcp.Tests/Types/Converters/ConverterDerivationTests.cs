@@ -308,6 +308,43 @@ public class ConverterDerivationTests
         });
     }
 
+    /// <summary>
+    /// A type holds NULL when a NULL row of it needs no value of the type: <c>Nullable</c>, a nullable dictionary, the
+    /// NULL discriminator of <c>Variant</c>, <c>Dynamic</c> and <c>Geometry</c>, and those types under
+    /// <c>SimpleAggregateFunction</c>. A composite of nullable elements does not hold NULL itself.
+    /// </summary>
+    [TestCase("Nullable(String)", true)]
+    [TestCase("nullable(Int32)", true)]
+    [TestCase("LowCardinality(Nullable(String))", true)]
+    [TestCase("Variant(String, UInt64)", true)]
+    [TestCase("Dynamic", true)]
+    [TestCase("Dynamic(max_types=3)", true)]
+    [TestCase("Geometry", true)]
+    [TestCase("SimpleAggregateFunction(anyLast, Nullable(String))", true)]
+    [TestCase("String", false)]
+    [TestCase("LowCardinality(String)", false)]
+    [TestCase("Array(Nullable(String))", false)]
+    [TestCase("Tuple(Nullable(String), Int32)", false)]
+    [TestCase("Map(String, Nullable(String))", false)]
+    [TestCase("JSON", false)]
+    [TestCase("Point", false)]
+    [TestCase("Ring", false)]
+    [TestCase("SimpleAggregateFunction(anyLast, String)", false)]
+    public void HoldsNull_Type_IsWhetherANullRowNeedsNoValue(string type, bool holdsNull)
+    {
+        // A new derivation, so that the first answer is computed and the second answer comes from the cache.
+        var derivation = new ConverterDerivation(ColumnCodecRegistry.Default);
+        Assert.Multiple(() =>
+        {
+            Assert.That(derivation.HoldsNull(type), Is.EqualTo(holdsNull), "computed");
+            Assert.That(derivation.HoldsNull(type), Is.EqualTo(holdsNull), "cached");
+        });
+    }
+
+    [Test]
+    public void HoldsNull_Null_Throws()
+        => Assert.Throws<ArgumentNullException>(() => ConverterDerivation.Default.HoldsNull(null));
+
     [Test]
     public void OfAndRefused_Null_Throw()
     {
