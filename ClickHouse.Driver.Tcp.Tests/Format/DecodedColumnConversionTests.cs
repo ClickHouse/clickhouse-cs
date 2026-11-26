@@ -429,6 +429,20 @@ public class DecodedColumnConversionTests
     }
 
     /// <summary>
+    /// A <c>Nullable</c> part that a query read, into a <c>Variant</c> or a <c>Dynamic</c>, which holds NULL itself: a NULL
+    /// row is the NULL of the target, and the value under it is not written. All rows, and the rows from row 1.
+    /// </summary>
+    [TestCaseSource(nameof(NullOfTargetCases))]
+    public Task Write_DecodedNullableIntoATargetThatHoldsNull_WritesTheNullOfTheTarget(
+        string source,
+        string target,
+        int rows,
+        string sourceBytes,
+        string expected,
+        string expectedFromRow1)
+        => AssertWritesAsync(source, target, rows, sourceBytes, expected, expectedFromRow1);
+
+    /// <summary>
     /// A <c>Variant</c> that a query read, into a <c>Variant</c> that has each of its alternatives and others: the
     /// discriminators go through the map of the alternatives, the NULL marker stays, each alternative is written from its
     /// storage, and an alternative that only the target has writes its prefix and no row. All rows, and the rows from row 1.
@@ -745,6 +759,16 @@ public class DecodedColumnConversionTests
             "0000000000000000" + "020000000000000002000000000000000300000000000000" + "010001" + "07000000" + "0341FF42" + "02C328",
             "0000000000000000" + "020000000000000002000000000000000300000000000000" + "020102" + "07000000" + "0341FF42" + "02C328",
             "0000000000000000" + "00000000000000000100000000000000" + "02" + "02C328");
+    }
+
+    public static IEnumerable<TestCaseData> NullOfTargetCases()
+    {
+        // Rows 7, NULL (over the stored value 42) and -1.
+        const string Ints = "000100" + "070000002A000000FFFFFFFF";
+        yield return Bytes("Nullable(Int32)", "Variant(Int32, String)", 3, Ints, "0000000000000000" + "00FF00" + "07000000FFFFFFFF", "0000000000000000" + "FF00" + "FFFFFFFF");
+        // A flattened Dynamic: the version, the one type Int32, then an index for each row (1, the number of types, for NULL).
+        yield return Bytes("Nullable(Int32)", "Dynamic", 3, Ints, "0300000000000000" + "0105496E743332" + "000100" + "07000000FFFFFFFF", "0300000000000000" + "0105496E743332" + "0100" + "FFFFFFFF");
+        yield return Bytes("Tuple(Nullable(Int32), Int8)", "Tuple(Variant(Int32, String), Int8)", 3, Ints + "010203", "0000000000000000" + "00FF00" + "07000000FFFFFFFF" + "010203", "0000000000000000" + "FF00" + "FFFFFFFF" + "0203");
     }
 
     public static IEnumerable<TestCaseData> StringShapeCases()

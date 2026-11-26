@@ -219,11 +219,14 @@ internal sealed partial class ConverterDerivation
         }
 
         // A Nullable on either side, when neither side is a LowCardinality: the NULL of a LowCardinality is a key of its
-        // dictionary, so it hides no value, and its converter tree writes its NULL.
+        // dictionary, so it hides no value, and its converter tree writes its NULL. A Nullable source into a target that
+        // holds NULL with no Nullable (a Variant, a Dynamic, a Geometry) is not taken apart: the converter tree of its
+        // nullable CLR type writes a NULL as the NULL of the target.
         bool sourceNullable = CanonicalName(sourceNode) == "Nullable" && sourceNode.Arguments.Count == 1;
         bool targetNullable = CanonicalName(targetNode) == "Nullable" && targetNode.Arguments.Count == 1;
         bool dictionary = CanonicalName(sourceNode) == "LowCardinality" || CanonicalName(targetNode) == "LowCardinality";
-        if ((sourceNullable || targetNullable) && !dictionary)
+        bool nullOfTarget = sourceNullable && !targetNullable && HoldsNull(targetNode);
+        if ((sourceNullable || targetNullable) && !dictionary && !nullOfTarget)
         {
             return new DecodedPartPlan(
                 DecodedPart.Nullable,

@@ -351,6 +351,70 @@ public class DecodedColumnInsertIntegrationTests
         yield return TextCase("Tuple(String, Int32)", "Variant(Tuple(String, Int32), UInt64)", "('abc', 1)");
     }
 
+    // A Nullable part that a query read, with a NULL row in the second block, into a Variant or a Dynamic part, which holds
+    // NULL with no wrapper: the alternative or the type of each row, and its value.
+    public static IEnumerable<TestCaseData> NullIntoNullHoldingCases()
+    {
+        const string VariantRow = "concat(variantType({0}), ' ', ifNull(toString(variantElement({0}, 'Int32')), ''))";
+        const string DynamicRow = "concat(dynamicType({0}), ' ', ifNull(toString({0}), ''))";
+        string[] ints = { "1", "2", "NULL", "4" };
+        yield return SiblingCase("Nullable(Int32)", "Variant(Int32, String)", ints, Row(VariantRow, "value"), new[] { "Int32 1", "Int32 2", "None ", "Int32 4" }, DynamicVariantSettings);
+        yield return SiblingCase("Nullable(Int32)", "Dynamic", ints, Row(DynamicRow, "value"), new[] { "Int32 1", "Int32 2", "None ", "Int32 4" }, DynamicVariantSettings);
+        yield return SiblingCase(
+            "Nullable(Float64)",
+            "Dynamic",
+            new[] { "1.5", "-2", "NULL", "0.25" },
+            Row(DynamicRow, "value"),
+            new[] { "Float64 1.5", "Float64 -2", "None ", "Float64 0.25" },
+            DynamicVariantSettings);
+        yield return SiblingCase(
+            "Array(Nullable(Int32))",
+            "Array(Variant(Int32, String))",
+            new[] { "[1, NULL]", "[]", "[NULL]", "[4]" },
+            $"toString(arrayMap(x -> {Row(VariantRow, "x")}, value))",
+            new[] { "['Int32 1','None ']", "[]", "['None ']", "['Int32 4']" },
+            DynamicVariantSettings);
+        yield return SiblingCase(
+            "Tuple(Nullable(Int32), Int8)",
+            "Tuple(Variant(Int32, String), Int8)",
+            new[] { "(1, 1)", "(2, 2)", "(NULL, 3)", "(4, 4)" },
+            $"concat({Row(VariantRow, "value.1")}, ' ', toString(value.2))",
+            new[] { "Int32 1 1", "Int32 2 2", "None  3", "Int32 4 4" },
+            DynamicVariantSettings);
+        yield return SiblingCase(
+            "Map(Int32, Nullable(Int32))",
+            "Map(Int32, Dynamic)",
+            new[] { "map(1, 10)", "map()", "map(3, NULL)", "map(4, 40)" },
+            $"toString(arrayMap(x -> {Row(DynamicRow, "x")}, mapValues(value)))",
+            new[] { "['Int32 10']", "[]", "['None ']", "['Int32 40']" },
+            DynamicVariantSettings);
+        yield return SiblingCase("Nullable(Int32)", "Dynamic", new[] { "1", "2", "3" }, Row(DynamicRow, "value"), new[] { "Int32 1", "Int32 2", "Int32 3" }, DynamicVariantSettings);
+    }
+
+    // As NullIntoNullHoldingCases, for a Nullable(Tuple) source or target.
+    public static IEnumerable<TestCaseData> NullTupleIntoNullHoldingCases()
+    {
+        var settings = new Dictionary<string, string>(DynamicVariantSettings, StringComparer.Ordinal) { ["enable_nullable_tuple_type"] = "1" };
+        yield return SiblingCase(
+            "Nullable(Tuple(Int32, Int8))",
+            "Dynamic",
+            new[] { "(1, 1)", "(2, 2)", "NULL", "(4, 4)" },
+            "concat(dynamicType(value), ' ', ifNull(toString(value), ''))",
+            new[] { "Tuple(Int32, Int8) (1,1)", "Tuple(Int32, Int8) (2,2)", "None ", "Tuple(Int32, Int8) (4,4)" },
+            settings);
+
+        // Row 1 is hidden by the NULL of the enclosing Nullable(Tuple); row 2 holds a NULL in the Nullable(Int32) element.
+        yield return SiblingCase(
+            "Nullable(Tuple(Nullable(Int32), Int8))",
+            "Nullable(Tuple(Variant(Int32, String), Int8))",
+            new[] { "(1, 1)", "NULL", "(NULL, 3)", "(4, 4)" },
+            "if(isNull(value), 'NULL', concat(variantType(tupleElement(assumeNotNull(value), 1)), ' ', toString(tupleElement(assumeNotNull(value), 2))))",
+            new[] { "Int32 1", "NULL", "None 3", "Int32 4" },
+            settings);
+    }
+
+    private static string Row(string format, string value) => string.Format(System.Globalization.CultureInfo.InvariantCulture, format, value);
+
     public static IEnumerable<TestCaseData> TimeCases()
     {
         yield return Case("Time64(3)", "Time64(6)", ("'01:02:03.456'", "01:02:03.456000"), ("'-00:00:00.001'", "-00:00:00.001000"));
@@ -491,6 +555,76 @@ public class DecodedColumnInsertIntegrationTests
     [RequiresServerFeature(TcpFeature.Json | TcpFeature.Dynamic)]
     public Task InsertAsync_StringJsonOrDynamicReadIntoAColumnThatItsCodecWrites_StoresTheValues(string source, string target, string literal, string readBack, string expected)
         => AssertStoresInBlocksAsync(source, target, new[] { literal, literal, literal }, readBack, new[] { expected, expected, expected }, JsonSettings);
+
+    /// <summary>
+    /// A <c>Nullable</c> column or part that a query read, into a <c>Variant</c> or a <c>Dynamic</c>, which holds NULL
+    /// itself, also as an element of an <c>Array</c> or a <c>Tuple</c> and a value of a <c>Map</c>: each value keeps its
+    /// value and a NULL row is the NULL of the target. The insert sends two rows in each block, so the NULL row is in a
+    /// later block.
+    /// </summary>
+    [TestCaseSource(nameof(NullIntoNullHoldingCases))]
+    [RequiresServerFeature(TcpFeature.Dynamic)]
+    public Task InsertAsync_NullableReadIntoAVariantOrADynamic_StoresTheNullOfTheTarget(
+        string source,
+        string target,
+        string[] literals,
+        string readBack,
+        string[] expected,
+        IReadOnlyDictionary<string, string> settings)
+        => AssertStoresInBlocksAsync(source, target, literals, readBack, expected, settings);
+
+    /// <summary>As the test above, for a <c>Nullable(Tuple)</c>, also with a row that an enclosing NULL hides.</summary>
+    [TestCaseSource(nameof(NullTupleIntoNullHoldingCases))]
+    [RequiresServerFeature(TcpFeature.Dynamic | TcpFeature.NullableTuple)]
+    public Task InsertAsync_NullableTupleReadIntoAVariantOrADynamic_StoresTheNullOfTheTarget(
+        string source,
+        string target,
+        string[] literals,
+        string readBack,
+        string[] expected,
+        IReadOnlyDictionary<string, string> settings)
+        => AssertStoresInBlocksAsync(source, target, literals, readBack, expected, settings);
+
+    /// <summary>
+    /// A <c>Nullable(Int32)</c> column that a query read, with a NULL row, into an <c>Int32</c>, which holds no NULL: the
+    /// insert refuses the NULL row, and nothing is stored.
+    /// </summary>
+    [Test]
+    public async Task InsertAsync_NullableReadWithANullRowIntoATypeWithNoNull_IsRefusedWithItsRow()
+    {
+        string sourceTable = UniqueTableName();
+        string targetTable = UniqueTableName();
+        await using ClickHouseTcpConnection connection = await TcpServerFixture.ConnectAsync(None);
+        try
+        {
+            await CreateAsync(connection, sourceTable, targetTable, "Nullable(Int32)", "Int32", new[] { "1", "NULL" }, settings: null);
+            Exception refusal = null;
+            await using (ClickHouseTcpConnection reader = await TcpServerFixture.ConnectAsync(None))
+            {
+                await foreach (Block block in reader.QueryAsync($"SELECT id, value FROM {sourceTable} ORDER BY id", cancellationToken: None))
+                {
+                    refusal = Assert.CatchAsync(
+                        async () => await connection.InsertAsync($"INSERT INTO {targetTable} (id, value) VALUES", new[] { block[0], block[1] }, cancellationToken: None));
+                }
+            }
+
+            // A write that fails inside the block ends its connection, so count on another one.
+            await using ClickHouseTcpConnection counter = await TcpServerFixture.ConnectAsync(None);
+            List<string> stored = await ReadStringsAsync(counter, targetTable, settings: null);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(refusal?.Message, Does.Contain("is null at row 1 of the insert, but it cannot hold null"));
+                Assert.That(stored, Is.Empty);
+            });
+        }
+        finally
+        {
+            await using ClickHouseTcpConnection cleanup = await TcpServerFixture.ConnectAsync(None);
+            await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {sourceTable}");
+            await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {targetTable}");
+        }
+    }
 
     /// <summary>
     /// A column of string values that the caller builds from a <c>String</c> column that a query read goes into a
@@ -757,8 +891,10 @@ public class DecodedColumnInsertIntegrationTests
         }
         finally
         {
-            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {sourceTable}");
-            await ExecuteAsync(connection, $"DROP TABLE IF EXISTS {targetTable}");
+            // A failed insert inside the read loop ends the reading connection, so drop the tables on another one.
+            await using ClickHouseTcpConnection cleanup = await TcpServerFixture.ConnectAsync(None);
+            await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {sourceTable}");
+            await ExecuteAsync(cleanup, $"DROP TABLE IF EXISTS {targetTable}");
         }
     }
 
@@ -1010,7 +1146,7 @@ public class DecodedColumnInsertIntegrationTests
 
     private static TestCaseData SiblingCase(string source, string target, string[] literals, string readBack, string[] expected, IReadOnlyDictionary<string, string> settings = null)
         => new TestCaseData(source, target, literals, readBack, expected, settings)
-            .SetArgDisplayNames(source, target, Array.IndexOf(literals, "NULL") < 0 ? "no NULL row" : "a NULL row");
+            .SetArgDisplayNames(source, target, Array.Exists(literals, literal => literal.Contains("NULL", StringComparison.Ordinal)) ? "a NULL" : "no NULL");
 
     private static TestCaseData TextCase(string source, string target, string literal)
         => new TestCaseData(source, target, literal).SetArgDisplayNames(source, target);
