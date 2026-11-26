@@ -144,7 +144,7 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
 
     IClickHouseConnection IClickHouseDataSource.OpenConnection() => OpenConnection();
 
-    public new async Task<ClickHouseConnection> OpenConnectionAsync(CancellationToken cancellationToken)
+    public new async Task<ClickHouseConnection> OpenConnectionAsync(CancellationToken cancellationToken = default)
     {
         var cn = await OpenDbConnectionAsync(cancellationToken).ConfigureAwait(false);
         return (ClickHouseConnection)cn;
