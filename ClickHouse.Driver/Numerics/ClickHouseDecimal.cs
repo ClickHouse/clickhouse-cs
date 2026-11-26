@@ -118,7 +118,11 @@ public readonly struct ClickHouseDecimal
 
     public ClickHouseDecimal Floor()
     {
-        return Truncate(NumberOfDigits(Mantissa) - Scale);
+        // BigInteger division rounds toward zero, so a negative value with a fractional part needs one more step down
+        var integer = BigInteger.DivRem(Mantissa, BigInteger.Pow(10, Scale), out var remainder);
+        if (remainder.Sign < 0)
+            integer -= BigInteger.One;
+        return new ClickHouseDecimal(integer, 0);
     }
 
     public static int NumberOfDigits(BigInteger value)
