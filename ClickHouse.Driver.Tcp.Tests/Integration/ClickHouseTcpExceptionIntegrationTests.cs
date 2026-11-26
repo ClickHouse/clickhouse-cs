@@ -93,7 +93,7 @@ public class ClickHouseTcpExceptionIntegrationTests
         await using var client = new ClickHouseTcpClient(TcpServerFixture.Options() with { MaxPoolSize = 1 });
 
         var thrown = Assert.ThrowsAsync<ClickHouseTcpProtocolException>(
-            async () => await client.QueryAsync("SELECT tuple(1, 2, 3, 4, 5, 6, 7, 8) AS t").ToListAsync());
+            async () => await client.QueryAsync("SELECT tuple(" + string.Join(", ", Enumerable.Range(1, 257)) + ") AS t").ToListAsync());
 
         object next = await client.ExecuteScalarAsync("SELECT toUInt64(7)", cancellationToken: None);
 
@@ -101,7 +101,7 @@ public class ClickHouseTcpExceptionIntegrationTests
         {
             Assert.That(thrown, Is.InstanceOf<ClickHouseTcpException>());
             Assert.That(thrown.Message, Does.Contain("'t'"), "the failing column is named.");
-            Assert.That(thrown.Message, Does.Contain("at most 7"), "and the limit, so a caller knows what it has to change.");
+            Assert.That(thrown.Message, Does.Contain("at most 256"), "and the limit, so a caller knows what it has to change.");
             Assert.That(thrown.InnerException, Is.InstanceOf<NotSupportedException>());
             Assert.That(next, Is.EqualTo(7UL), "the only pool slot came back.");
         });

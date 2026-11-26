@@ -21,7 +21,7 @@ namespace ClickHouse.Driver.Tcp.Tests.Differential;
 public class DifferentialTests
 {
     /// <summary>The answers of <c>CanRead</c> for the read targets and of <c>CanWrite</c> for the write inputs that are not decoded, over the case list.</summary>
-    private static readonly (int CanReadTrue, int CanReadFalse, int CanWriteTrue, int CanWriteFalse) ExpectedAnswers = (574, 19, 537, 31);
+    private static readonly (int CanReadTrue, int CanReadFalse, int CanWriteTrue, int CanWriteFalse) ExpectedAnswers = (585, 21, 548, 33);
 
     /// <summary>
     /// The row inserts that the tests do not compare with the insert, with the kind of their outcome for all rows, for every
