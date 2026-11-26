@@ -8,8 +8,8 @@ namespace ClickHouse.Driver.Tcp.Tests.Types.Converters;
 
 /// <summary>
 /// The read tests of the leaves that the differential tests (<see cref="LeafConverterRegistration"/>) do not run: the
-/// pairs that no differential case reaches, compared here with the current read
-/// (<see cref="ColumnReadProjections.ReadAs{T}"/>) through <see cref="BoundReader{T}.Fill"/> and a compiled
+/// pairs that no differential case reaches, compared here with the old read
+/// (<see cref="Differential.LegacyColumnarRead"/>) through <see cref="BoundReader{T}.Fill"/> and a compiled
 /// <see cref="ColumnReader.Emit"/>; zero rows; columns that a caller built; the surface messages.
 /// </summary>
 [TestFixture]
