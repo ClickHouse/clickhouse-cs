@@ -68,7 +68,8 @@ Two layers handle a column type:
   `InsertRowsAsync` with `object[]` rows, and `ClickHouseTcpTypes.CanRead`/`CanWrite`. A column that a query read as
   another type is written part by part (`ConverterDerivation.PlanDecodedPart`, `InsertColumnWrite.For`), decided at each
   part from the types of the part and the column at that place: a `Tuple`, `Map` or `Array` on both sides and a
-  `Nullable` on either side are taken apart; a part of the same type is written from its storage; a part whose values
+  `Nullable` on either side are taken apart (not a `Nullable` source into a `Variant`, `Dynamic` or `Geometry`, which
+  hold NULL themselves: the converter tree of the nullable CLR type writes a NULL as their NULL); a part of the same type is written from its storage; a part whose values
   mean other values in the target (another scale, other enum members) is converted through the meaning of its values
   (read as `DateTimeOffset`, `TimeSpan` or the label, then written); a `DateTime64` part into a `Time64`, or the reverse,
   is refused; a `String` or `FixedString` part into another type

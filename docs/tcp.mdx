@@ -590,7 +590,10 @@ insert completes before that block is released.
   that the server sent. An array column that `ClickHouseTcpColumn.CreateArray` builds over such a
   column is written in the same way. A column that a query read as another type is written part by
   part: the insert takes the column apart where the two types have the same `Tuple`, `Map` or
-  `Array`, and where one of them has a `Nullable`, and writes each part as follows.
+  `Array`, and where one of them has a `Nullable`, and writes each part as follows. A `Nullable`
+  part written into a `Variant`, a `Dynamic` or a `Geometry`, which hold NULL themselves, is not
+  taken apart: it is converted as the last of these items says, and a NULL row becomes the NULL of
+  the target.
   - A part of the same type keeps the bytes that the server sent. For example, a `String` next to an
     `Enum8` that the target has as an `Int8` keeps its bytes.
   - A part read as a `DateTime64` or `Time64` of another scale, or as an `Enum8` or `Enum16` with
