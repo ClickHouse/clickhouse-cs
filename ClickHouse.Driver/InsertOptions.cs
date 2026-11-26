@@ -51,8 +51,11 @@ public sealed class InsertOptions : QueryOptions
     /// length, whose effective limit is the lowest imposed by the .NET runtime, an intermediary, and the server.
     /// On .NET 6 through .NET 9, the complete encoded URI cannot exceed 65,519 characters; the driver
     /// reports an <see cref="System.InvalidOperationException"/> suggesting <see cref="InsertQueryPlacement.Body"/>
-    /// if that limit is exceeded. The server's <c>http_max_uri_size</c> is 1 MiB by default. This setting is
-    /// independent of <see cref="Compressor"/>, which governs the body encoding only.
+    /// if that limit is exceeded. The server limits each URL parameter value, including the encoded
+    /// <c>query</c> statement, to <c>http_max_field_value_size</c> (128 KiB by default); a query-level
+    /// setting cannot raise this parsing limit. <c>http_max_uri_size</c> separately limits the whole
+    /// URI to 1 MiB by default. This setting is independent of <see cref="Compressor"/>, which governs
+    /// the body encoding only.
     /// </summary>
     public InsertQueryPlacement QueryPlacement { get; init; } = InsertQueryPlacement.Body;
 
