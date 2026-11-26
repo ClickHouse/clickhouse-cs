@@ -1,4 +1,5 @@
 #if NET8_0_OR_GREATER
+using System;
 using System.Buffers.Binary;
 using ClickHouse.Driver.Formats;
 #endif
@@ -20,7 +21,13 @@ internal class UInt128Type : AbstractBigIntegerType
     // The wire form is 16-byte little-endian unsigned, so this gives the same value as the BigInteger path
     // (which pads with a trailing 0 to stay positive) without its internal heap array. Explicit impl so it
     // does not hide the base ITypedReader<BigInteger>.ReadValue.
+    // Reads into a stack buffer: the ReadBytes(int) overload returns a fresh byte[Size] per value, which
+    // would put a heap allocation back on the path this typed reader exists to keep allocation-free.
     System.UInt128 ITypedReader<System.UInt128>.ReadValue(ExtendedBinaryReader reader)
-        => BinaryPrimitives.ReadUInt128LittleEndian(reader.ReadBytes(Size));
+    {
+        Span<byte> buffer = stackalloc byte[Size];
+        reader.ReadBytes(buffer);
+        return BinaryPrimitives.ReadUInt128LittleEndian(buffer);
+    }
 #endif
 }

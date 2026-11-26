@@ -1,0 +1,21 @@
+schemaVersion: 1
+id: csharp
+name: "C# / .NET"
+pkg: ClickHouse.Driver
+category: language_client
+supportLevel: core
+license: MIT
+repository: https://github.com/ClickHouse/clickhouse-cs
+packageRegistry: nuget
+slug: /integrations/csharp
+transports: [HTTP, Native]
+formats: [RowBinary, Native]
+rawFormats: true
+ecosystem: [ADO.NET, Dapper, EF Core, linq2db, Serilog, Aspire, Semantic Kernel]
+install:
+  dotnet: dotnet add package ClickHouse.Driver
+quickStartCode: /examples/Http/Core/Core_001_BasicUsage.cs
+desc: >-
+  Official C#/.NET client for ClickHouse. One NuGet package (ClickHouse.Driver):
+  a stable HTTP client (ClickHouseClient + ADO.NET for Dapper, EF Core, linq2db)
+  and an experimental native-protocol client, with raw access to any server format.

@@ -4,7 +4,7 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class Float32Type : FloatType, ITypedReader<float>
+internal class Float32Type : FloatType, ITypedReader<float>, ITypedWriter<float>
 {
     public override Type FrameworkType => typeof(float);
 
@@ -14,5 +14,7 @@ internal class Float32Type : FloatType, ITypedReader<float>
 
     public override string ToString() => "Float32";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToSingle(value, CultureInfo.InvariantCulture));
+    public override void Write(ExtendedBinaryWriter writer, object value) => WriteValue(writer, Convert.ToSingle(value, CultureInfo.InvariantCulture));
+
+    public void WriteValue(ExtendedBinaryWriter writer, float value) => writer.Write(value);
 }

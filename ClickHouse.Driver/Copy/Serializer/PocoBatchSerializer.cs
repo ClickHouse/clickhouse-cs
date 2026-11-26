@@ -47,7 +47,10 @@ internal class PocoBatchSerializer
     /// the boxed path.</param>
     /// <param name="stream">The output stream (typically a recyclable memory stream).</param>
     /// <param name="compressor">Compressor for the payload, or <c>null</c> to write uncompressed.</param>
-    public void Serialize<T>(PocoBatch<T> batch, Func<T, object>[] getters, Action<T, ExtendedBinaryWriter>[] writers, Stream stream, IClickHouseCompressor compressor)
+    /// <param name="queryPlacement">Whether the <c>INSERT</c> statement precedes the rows in the body
+    /// (<see cref="InsertQueryPlacement.Body"/>) or is sent by the caller in the URL
+    /// (<see cref="InsertQueryPlacement.Url"/>), leaving the body to the rows alone.</param>
+    public void Serialize<T>(PocoBatch<T> batch, Func<T, object>[] getters, Action<T, ExtendedBinaryWriter>[] writers, Stream stream, IClickHouseCompressor compressor, InsertQueryPlacement queryPlacement)
     {
         // See BatchSerializer.Serialize for the leaveOpen/flush rationale.
         var target = BatchWriteTarget.Create(stream, compressor);
@@ -56,18 +59,26 @@ internal class PocoBatchSerializer
         var types = batch.Types;
 
         T current = default;
-        var serializingRows = false;
+        int currentRowIndex = 0;
+
+        // See BatchSerializer.Serialize: in URL mode the body must start at the first row, so no
+        // prologue is written and the row/prologue discriminator starts out set.
+        var writeQueryLine = queryPlacement == InsertQueryPlacement.Body;
+        var serializingRows = !writeQueryLine;
         try
         {
-            PooledStreamWriter.WriteLine(target, batch.Query);
-            serializingRows = true;
+            if (writeQueryLine)
+            {
+                PooledStreamWriter.WriteLine(target, batch.Query);
+                serializingRows = true;
+            }
 
             if (writers != null)
             {
                 // RowBinary path
-                for (int i = 0; i < batch.Size; i++)
+                for (; currentRowIndex < batch.Size; currentRowIndex++)
                 {
-                    current = batch.Rows[i];
+                    current = batch.Rows[currentRowIndex];
                     for (int col = 0; col < writers.Length; col++)
                         writers[col](current, writer);
                 }
@@ -75,9 +86,9 @@ internal class PocoBatchSerializer
             else
             {
                 // RowBinaryWithDefaults path
-                for (int i = 0; i < batch.Size; i++)
+                for (; currentRowIndex < batch.Size; currentRowIndex++)
                 {
-                    current = batch.Rows[i];
+                    current = batch.Rows[currentRowIndex];
                     rowSerializer.Serialize(current, getters, types, writer);
                 }
             }
@@ -109,7 +120,7 @@ internal class PocoBatchSerializer
                 }
             }
 
-            throw new ClickHouseBulkCopySerializationException(failedRow, e);
+            throw new ClickHouseBulkCopySerializationException(currentRowIndex, failedRow, e);
         }
 
         writer.Dispose();

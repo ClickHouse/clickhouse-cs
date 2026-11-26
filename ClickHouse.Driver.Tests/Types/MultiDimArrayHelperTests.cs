@@ -104,6 +104,16 @@ public class MultiDimArrayHelperTests
         // Non-blittable leaves must still route through the slow path and match.
         yield return Rank2Case<string>("Array(Array(String))", i => i.ToString());
         yield return Rank2Case<int?>("Array(Array(Nullable(Int32)))", i => i % 2 == 0 ? null : i);
+
+        // Wire-transparent wrappers around a blittable leaf now take the blit path; their bytes must
+        // still equal the boxing path's.
+        yield return Rank2Case<int>("Array(Array(LowCardinality(Int32)))", i => i, "LowCardinalityInt32");
+        yield return Rank2Case<int>("Array(Array(SimpleAggregateFunction(any, Int32)))", i => i, "SimpleAggregateFunctionInt32");
+
+        // Unwrapping stops at Nullable, which is not wire-transparent (it prefixes a per-element marker
+        // byte): a double?[,] matches this leaf's framework type, so only the Nullable check keeps it on
+        // the boxing path. Blitting it would drop the markers.
+        yield return Rank2Case<double?>("Array(Array(LowCardinality(Nullable(Float64))))", i => i + 0.5d, "LowCardinalityNullableFloat64");
     }
 
     [Test]
@@ -140,7 +150,33 @@ public class MultiDimArrayHelperTests
             $"Blit path should box nothing; allocated {allocated} bytes");
     }
 
-    private static TestCaseData Rank2Case<T>(string clickHouseType, Func<int, T> gen)
+    [Test]
+    [TestCase("Array(Array(LowCardinality(Int32)))")]
+    [TestCase("Array(Array(SimpleAggregateFunction(any, Int32)))")]
+    public void BinaryWrite_BlittableLeafBehindTransparentWrapper_AllocatesFarLessThanBoxingPath(string clickHouseType)
+    {
+        // These leaves write the same bytes as a bare Int32 one, so they belong on the blit path; before
+        // the gate looked through the wrapper they boxed every element (~24 bytes, ~6 MB for 250k ints).
+        var type = TypeConverter.ParseClickHouseType(clickHouseType, TypeSettings.Default);
+        var matrix = new int[500, 500];
+
+        using var stream = new MemoryStream((500 * 500 * sizeof(int)) + (16 * 1024));
+        using var writer = new ExtendedBinaryWriter(stream);
+
+        type.Write(writer, new int[2, 2]);
+        writer.Flush();
+        stream.Position = 0;
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        type.Write(writer, matrix);
+        writer.Flush();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.That(allocated, Is.LessThan(1_000_000),
+            $"Blit path should box nothing; allocated {allocated} bytes");
+    }
+
+    private static TestCaseData Rank2Case<T>(string clickHouseType, Func<int, T> gen, string caseName = null)
     {
         var multidim = new T[2, 3];
         var jagged = new T[2][];
@@ -156,7 +192,7 @@ public class MultiDimArrayHelperTests
         }
 
         return new TestCaseData(clickHouseType, (object)multidim, (object)jagged)
-            .SetName($"BlittableLeaf_Rank2_{typeof(T).Name}_FastMatchesJagged");
+            .SetName($"BlittableLeaf_Rank2_{caseName ?? typeof(T).Name}_FastMatchesJagged");
     }
 
     private static TestCaseData Rank3Case<T>(string clickHouseType, Func<int, T> gen)

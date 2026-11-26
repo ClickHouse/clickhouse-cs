@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Numerics;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Numerics;
@@ -195,6 +196,22 @@ public class TypeMappingTests
 
     [TestCaseSource(nameof(ValueToClickHouseTypeCases))]
     public string ShouldConvertValueToClickHouseType(object value) => TypeConverter.ToClickHouseType(value).ToString();
+
+    private static IEnumerable<TestCaseData> InferDecimalTypeOverflowCases()
+    {
+        // A non-zero value needing more than 76 digits does not fit Decimal256, whether the excess
+        // comes from the scale or from the integer digits.
+        yield return new TestCaseData(BigInteger.One, 77).SetName("InferDecimalType_ScaleAbove76_Throws");
+        yield return new TestCaseData(BigInteger.Parse(new string('9', 77)), 0).SetName("InferDecimalType_IntegerDigitsAbove76_Throws");
+    }
+
+    [Test]
+    [TestCaseSource(nameof(InferDecimalTypeOverflowCases))]
+    public void InferDecimalType_ForPrecisionAbove76_ThrowsArgumentOutOfRangeException(BigInteger mantissa, int scale)
+    {
+        var value = new ClickHouseDecimal(mantissa, scale);
+        Assert.Throws<ArgumentOutOfRangeException>(() => TypeConverter.InferDecimalType(value));
+    }
 
     private static IEnumerable<TestCaseData> NonZeroBoundMultidimCases()
     {

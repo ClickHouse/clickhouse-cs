@@ -334,6 +334,32 @@ public class ConnectionTests : AbstractConnectionTestFixture
     }
 
     [Test]
+    public async Task ConnectionString_WithBearerTokenFromSettings_ShouldKeepTokenWhenReapplied()
+    {
+        var settings = new ClickHouseClientSettings
+        {
+            Host = "localhost",
+            Username = "testuser",
+            Password = "testpass",
+            BearerToken = "settings-level-token",
+        };
+        string connectionString;
+        using (var original = new ClickHouseConnection(settings))
+        {
+            connectionString = original.ConnectionString;
+        }
+
+        var trackingHandler = new TrackingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("1") });
+        using var httpClient = new HttpClient(trackingHandler);
+        using var reapplied = new ClickHouseConnection(connectionString, httpClient);
+        await reapplied.ExecuteStatementAsync("SELECT 1");
+
+        var authorization = trackingHandler.Requests.Single().Headers.Authorization;
+        Assert.That(authorization?.Scheme, Is.EqualTo("Bearer"));
+        Assert.That(authorization?.Parameter, Is.EqualTo("settings-level-token"));
+    }
+
+    [Test]
     [Explicit("This test takes 3s, and can be flaky on loaded server")]
     public async Task ReplaceRunningQuerySettingShouldReplace()
     {
@@ -457,6 +483,21 @@ public class ConnectionTests : AbstractConnectionTestFixture
         var rows = schema.Rows.Cast<DataRow>().ToList();
         Assert.That(rows, Is.Not.Empty);
         Assert.That(rows.Select(r => (string)r["Table"]).Distinct().Count(), Is.GreaterThan(1));
+    }
+
+    [Test]
+    public async Task GetSchema_ColumnsOfTableWithEmptyTupleColumn_DescribesThatColumn()
+    {
+        // Describing columns parses every type reported by system.columns, so a single Tuple()
+        // column anywhere in the described scope has to be parseable.
+        var targetTable = CreateTableName();
+        await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (t Tuple(), value Int32) ENGINE Memory");
+
+        var schema = connection.GetSchema("Columns", [TestUtilities.TestDatabase, TestUtilities.BareTableName(targetTable)]);
+
+        var rows = schema.Rows.Cast<DataRow>().ToList();
+        Assert.That(rows.Select(r => (string)r["Name"]), Is.EquivalentTo(new[] { "t", "value" }));
+        Assert.That(rows.Single(r => (string)r["Name"] == "t")["ProviderType"], Is.EqualTo("Tuple()"));
     }
 
     [Test]

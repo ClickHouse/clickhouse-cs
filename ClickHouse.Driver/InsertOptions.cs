@@ -43,6 +43,20 @@ public sealed class InsertOptions : QueryOptions
     public IClickHouseCompressor? Compressor { get; init; } = ZstdCompressor.Default;
 
     /// <summary>
+    /// Gets or sets where the <c>INSERT INTO ... FORMAT ...</c> statement is sent. Defaults to
+    /// <see cref="InsertQueryPlacement.Body"/>, which writes it ahead of the rows in the request body.
+    /// Set <see cref="InsertQueryPlacement.Url"/> to send it as the <c>query</c> URL parameter instead,
+    /// so URL-only routing and logging can read it without decoding and inspecting the request body,
+    /// which <see cref="Compressor"/> compresses by default. The statement then counts towards the URL
+    /// length, whose effective limit is the lowest imposed by the .NET runtime, an intermediary, and the server.
+    /// On .NET 6 through .NET 9, the complete encoded URI cannot exceed 65,519 characters; the driver
+    /// reports an <see cref="System.InvalidOperationException"/> suggesting <see cref="InsertQueryPlacement.Body"/>
+    /// if that limit is exceeded. The server's <c>http_max_uri_size</c> is 1 MiB by default. This setting is
+    /// independent of <see cref="Compressor"/>, which governs the body encoding only.
+    /// </summary>
+    public InsertQueryPlacement QueryPlacement { get; init; } = InsertQueryPlacement.Body;
+
+    /// <summary>
     /// Gets or sets explicit column type mappings (key: column name; value: ClickHouse type string).
     /// When set, the schema probe query (<c>SELECT ... WHERE 1=0</c>) is skipped entirely.
     /// Takes priority over <see cref="UseSchemaCache"/>.
@@ -80,6 +94,7 @@ public sealed class InsertOptions : QueryOptions
             MaxDegreeOfParallelism = MaxDegreeOfParallelism,
             Format = Format,
             Compressor = Compressor,
+            QueryPlacement = QueryPlacement,
             ColumnTypes = ColumnTypes,
             UseSchemaCache = UseSchemaCache,
         };
@@ -106,6 +121,7 @@ public sealed class InsertOptions : QueryOptions
             MaxDegreeOfParallelism = MaxDegreeOfParallelism,
             Format = Format,
             Compressor = Compressor,
+            QueryPlacement = QueryPlacement,
             ColumnTypes = columnTypes,
             UseSchemaCache = UseSchemaCache,
         };

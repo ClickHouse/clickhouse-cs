@@ -1,0 +1,1 @@
+* Native TCP client: fixed distributed queries (`clusterAllReplicas`, `remote`, a `Distributed` table) failing on ClickHouse 26.8 and later with "Sending a distributed query with unknown (zero) client version". The client reported version 0.0.0; it now reports the driver version, which `system.query_log` and `system.processes` also show.

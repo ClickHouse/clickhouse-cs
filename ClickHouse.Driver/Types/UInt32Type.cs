@@ -4,7 +4,7 @@ using ClickHouse.Driver.Formats;
 
 namespace ClickHouse.Driver.Types;
 
-internal class UInt32Type : IntegerType, ITypedReader<uint>
+internal class UInt32Type : IntegerType, ITypedReader<uint>, ITypedWriter<uint>
 {
     public override Type FrameworkType => typeof(uint);
 
@@ -14,5 +14,7 @@ internal class UInt32Type : IntegerType, ITypedReader<uint>
 
     public override string ToString() => "UInt32";
 
-    public override void Write(ExtendedBinaryWriter writer, object value) => writer.Write(Convert.ToUInt32(value, CultureInfo.InvariantCulture));
+    public override void Write(ExtendedBinaryWriter writer, object value) => WriteValue(writer, Convert.ToUInt32(value, CultureInfo.InvariantCulture));
+
+    public void WriteValue(ExtendedBinaryWriter writer, uint value) => writer.Write(value);
 }

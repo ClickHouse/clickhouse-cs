@@ -24,7 +24,7 @@ internal class BatchSerializer : IBatchSerializer
         this.rowSerializer = rowSerializer;
     }
 
-    public void Serialize(Batch batch, Stream stream, IClickHouseCompressor compressor)
+    public void Serialize(Batch batch, Stream stream, IClickHouseCompressor compressor, InsertQueryPlacement queryPlacement)
     {
         // The batch is written through a buffering (and optionally compressing) stream that leaves the
         // base stream open, so disposing the writer flushes the pending bytes into it while the caller
@@ -33,17 +33,26 @@ internal class BatchSerializer : IBatchSerializer
         var writer = new ExtendedBinaryWriter(target, leaveOpen: false);
 
         object[] row = null;
-        var serializingRows = false;
+        int currentRowIndex = 0;
+
+        // With the statement in the URL the body is rows alone: not even a newline may precede them,
+        // as the server would read it as row data. Nothing can fail before the rows then, so the flag
+        // that distinguishes a prologue failure from a row failure starts out set.
+        var writeQueryLine = queryPlacement == InsertQueryPlacement.Body;
+        var serializingRows = !writeQueryLine;
         try
         {
-            PooledStreamWriter.WriteLine(target, batch.Query);
-            serializingRows = true;
+            if (writeQueryLine)
+            {
+                PooledStreamWriter.WriteLine(target, batch.Query);
+                serializingRows = true;
+            }
 
             var rows = batch.Rows.AsSpan()[..batch.Size];
             var types = batch.Types;
-            for (int i = 0; i < rows.Length; i++)
+            for (; currentRowIndex < rows.Length; currentRowIndex++)
             {
-                row = rows[i];
+                row = rows[currentRowIndex];
                 rowSerializer.Serialize(row, types, writer);
             }
         }
@@ -55,7 +64,7 @@ internal class BatchSerializer : IBatchSerializer
             if (!serializingRows)
                 throw;
 
-            throw new ClickHouseBulkCopySerializationException(row, e);
+            throw new ClickHouseBulkCopySerializationException(currentRowIndex, row, e);
         }
 
         writer.Dispose();

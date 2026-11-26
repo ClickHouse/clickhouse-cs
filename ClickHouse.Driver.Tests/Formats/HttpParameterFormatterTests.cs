@@ -1,9 +1,10 @@
-using System;
-using System.Collections.Generic;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Types;
 using NUnit.Framework;
+using System;
+using System.Collections.Generic;
+using System.Globalization;
 
 namespace ClickHouse.Driver.Tests.Formats;
 
@@ -77,4 +78,147 @@ public class HttpParameterFormatterTests
             new ClickHouseDbParameter { ParameterName = "t", Value = new TimeOnly(hour, minute, second, millisecond) },
             clickHouseType,
             TypeSettings.Default);
+
+    [TestCase("en-US")]
+    [TestCase("th-TH")]
+    [TestCase("ar-SA")]
+    [TestCase("fa-IR")]
+    [TestCase("fi-FI")]
+    [TestCase("da-DK")]
+    public void DateTime64_UsesInvariantCulture(string cultureName)
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        var originalUICulture = CultureInfo.CurrentUICulture;
+
+        try
+        {
+            var culture = CultureInfo.GetCultureInfo(cultureName);
+
+            CultureInfo.CurrentCulture = culture;
+            CultureInfo.CurrentUICulture = culture;
+
+            var parameter = new ClickHouseDbParameter
+            {
+                ParameterName = "date",
+                Value = new DateTime(
+                    2024, 1, 15, 12, 30, 45, 123,
+                    DateTimeKind.Unspecified)
+            };
+
+            var result = HttpParameterFormatter.Format(
+                parameter,
+                "DateTime64(3)",
+                TypeSettings.Default);
+
+            Assert.That(
+                result,
+                Is.EqualTo("2024-01-15 12:30:45.1230000"));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+            CultureInfo.CurrentUICulture = originalUICulture;
+        }
+    }
+
+    [TestCase(1230000, "2024-01-15 12:30:45.1230000")]
+    [TestCase(1234560, "2024-01-15 12:30:45.1234560")]
+    [TestCase(1234567, "2024-01-15 12:30:45.1234567")]
+    [TestCase(1, "2024-01-15 12:30:45.0000001")]
+    [TestCase(0, "2024-01-15 12:30:45.0000000")]
+    public void DateTime64_Unspecified_PreservesFractionalPrecision(
+        int fractionalTicks,
+        string expected)
+    {
+        var value = new DateTime(
+            2024, 1, 15, 12, 30, 45,
+            DateTimeKind.Unspecified).AddTicks(fractionalTicks);
+
+        var parameter = new ClickHouseDbParameter
+        {
+            ParameterName = "date",
+            Value = value
+        };
+
+        var result = HttpParameterFormatter.Format(
+            parameter,
+            "DateTime64(7)",
+            TypeSettings.Default);
+
+        Assert.That(result, Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void DateTime64_DateTimeOffset_UsesInvariantCulture()
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        var originalUICulture = CultureInfo.CurrentUICulture;
+
+        try
+        {
+            var culture = CultureInfo.GetCultureInfo("th-TH");
+
+            CultureInfo.CurrentCulture = culture;
+            CultureInfo.CurrentUICulture = culture;
+
+            var parameter = new ClickHouseDbParameter
+            {
+                ParameterName = "date",
+                Value = new DateTimeOffset(
+                    2024, 1, 15, 12, 30, 45, 123,
+                    TimeSpan.FromHours(2))
+            };
+
+            var result = HttpParameterFormatter.Format(
+                parameter,
+                "DateTime64(3, 'UTC')",
+                TypeSettings.Default);
+
+            Assert.That(
+                result,
+                Is.EqualTo("2024-01-15 10:30:45.1230000"));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+            CultureInfo.CurrentUICulture = originalUICulture;
+        }
+    }
+
+    [Test]
+    public void DateTime64_Utc_UsesInvariantCulture()
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        var originalUICulture = CultureInfo.CurrentUICulture;
+
+        try
+        {
+            var culture = CultureInfo.GetCultureInfo("ar-SA");
+
+            CultureInfo.CurrentCulture = culture;
+            CultureInfo.CurrentUICulture = culture;
+
+            var parameter = new ClickHouseDbParameter
+            {
+                ParameterName = "date",
+                Value = new DateTime(
+                    2024, 1, 15, 12, 30, 45, 123,
+                    DateTimeKind.Utc)
+            };
+
+            var result = HttpParameterFormatter.Format(
+                parameter,
+                "DateTime64(3, 'UTC')",
+                TypeSettings.Default);
+
+            Assert.That(
+                result,
+                Is.EqualTo("2024-01-15 12:30:45.1230000"));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+            CultureInfo.CurrentUICulture = originalUICulture;
+        }
+    }
 }

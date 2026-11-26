@@ -413,6 +413,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         await connection.ExecuteStatementAsync($"CREATE TABLE {targetTable} (value UInt8) ENGINE Memory");
 
         var rows = Enumerable.Range(250, 10).Select(n => new object[] { n }).ToArray();
+        var firstInvalidRowIndex = Array.FindIndex(rows, x=> (int)x[0] > 255);
 
         var bulkCopy = new ClickHouseBulkCopy(connection) { DestinationTableName = targetTable };
         try
@@ -423,6 +424,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         catch (ClickHouseBulkCopySerializationException ex)
         {
             Assert.That(ex.Row, Is.EqualTo(new object[] { 256 }).AsCollection);
+            Assert.That(ex.RowIndex, Is.EqualTo(firstInvalidRowIndex));
             ClassicAssert.IsInstanceOf<OverflowException>(ex.InnerException);
         }
     }
@@ -713,7 +715,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
         while(reader.Read())
         {
-            Assert.That(reader.GetValue(0), Is.EqualTo(jsonObject).UsingPropertiesComparer());
+            Assert.That(reader.GetValue(0), Is.EqualTo(jsonObject).Using<JsonNode>(JsonNode.DeepEquals));
         }
     }
 

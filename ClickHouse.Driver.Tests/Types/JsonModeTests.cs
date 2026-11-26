@@ -63,7 +63,10 @@ public class JsonModeTests
         builder.JsonReadMode = readMode;
         builder.JsonWriteMode = writeMode;
 
-        var settings = new ClickHouseClientSettings(builder);
+        var settings = new ClickHouseClientSettings(builder)
+        {
+            CustomHeaders = TestUtilities.GetTestCustomHeaders(),
+        };
 
         // Add experimental JSON type support
         settings.CustomSettings["allow_experimental_json_type"] = 1;

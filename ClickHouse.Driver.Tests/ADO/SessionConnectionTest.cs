@@ -21,7 +21,10 @@ public class SessionConnectionTest
         builder.Compression = true;
         if (sessionId != null)
             builder.SessionId = sessionId;
-        return new ClickHouseConnection(builder.ToString());
+        return new ClickHouseConnection(new ClickHouseClientSettings(builder)
+        {
+            CustomHeaders = TestUtilities.GetTestCustomHeaders(),
+        });
     }
 
     private static ClickHouseConnection CreateConnectionWithHttpClient(HttpClient httpClient, bool useSession, string sessionId = null)
@@ -32,6 +35,7 @@ public class SessionConnectionTest
             UseSession = useSession,
             SessionId = sessionId,
             HttpClient = httpClient,
+            CustomHeaders = TestUtilities.GetTestCustomHeaders(),
         };
         return new ClickHouseConnection(settings);
     }
@@ -72,6 +76,7 @@ public class SessionConnectionTest
         {
             SessionId = sessionId,
             UseSession = true,
+            CustomHeaders = TestUtilities.GetTestCustomHeaders(),
         };
 
         var connection = new ClickHouseConnection(settings);

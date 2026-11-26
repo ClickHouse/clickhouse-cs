@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -7,7 +8,8 @@ namespace ClickHouse.Driver.Numerics;
 
 /// <summary>
 /// Arbitrary precision decimal.
-/// All operations are exact, except for division. Division never determines more digits than the given precision.
+/// All operations are exact, except for division. Division truncates the quotient toward zero after at least
+/// <see cref="MaxDivisionPrecision"/> significant digits, and always keeps all digits of its integer part.
 /// Based on: https://gist.github.com/JcBernack/0b4eef59ca97ee931a2f45542b9ff06d
 /// Based on https://stackoverflow.com/a/4524254
 /// Original Author: Jan Christoph Bernack (contact: jc.bernack at gmail.com)
@@ -20,20 +22,28 @@ public readonly struct ClickHouseDecimal
     /// </summary>
     public static int MaxDivisionPrecision { get; set; } = 50;
 
+    private const int MaxDecimalScale = 28;
+
+    private static readonly BigInteger MaxDecimalMantissa = new(decimal.MaxValue);
+
     public ClickHouseDecimal(decimal value)
         : this()
     {
-        // Slightly wasteful, but seems to be the cheapest way to get scale
-        var parts = decimal.GetBits(value);
+        // Seems to be the cheapest way to get scale. The Span overload fills a stack buffer instead of
+        // returning a fresh int[4].
+        Span<int> parts = stackalloc int[4];
+        decimal.GetBits(value, parts);
         int scale = (parts[3] >> 16) & 0x7F;
         bool negative = (parts[3] & 0x80000000) != 0;
 
-        var data = new byte[(3 * sizeof(int)) + 1];
-        WriteIntToArray(parts[0], data, 0);
-        WriteIntToArray(parts[1], data, sizeof(int));
-        WriteIntToArray(parts[2], data, 2 * sizeof(int));
+        // The 96-bit mantissa is little-endian and always non-negative (the sign lives in parts[3]), so it
+        // is read back unsigned rather than with the extra zero byte a signed read would need.
+        Span<byte> data = stackalloc byte[3 * sizeof(int)];
+        BinaryPrimitives.WriteInt32LittleEndian(data, parts[0]);
+        BinaryPrimitives.WriteInt32LittleEndian(data.Slice(sizeof(int)), parts[1]);
+        BinaryPrimitives.WriteInt32LittleEndian(data.Slice(2 * sizeof(int)), parts[2]);
 
-        var mantissa = new BigInteger(data);
+        var mantissa = new BigInteger(data, isUnsigned: true, isBigEndian: false);
         if (negative)
             mantissa = BigInteger.Negate(mantissa);
 
@@ -111,7 +121,21 @@ public readonly struct ClickHouseDecimal
         return Truncate(NumberOfDigits(Mantissa) - Scale);
     }
 
-    public static int NumberOfDigits(BigInteger value) => value == 0 ? 0 : (int)Math.Ceiling(BigInteger.Log10(value * value.Sign));
+    public static int NumberOfDigits(BigInteger value)
+    {
+        if (value.IsZero)
+            return 0;
+
+        var abs = BigInteger.Abs(value);
+        // Log10 is a double: near a power of ten, floor(Log10) + 1 can be one too high or too low
+        var digits = (int)Math.Floor(BigInteger.Log10(abs)) + 1;
+        var lowerBound = BigInteger.Pow(10, digits - 1);
+        if (abs < lowerBound)
+            return digits - 1;
+        if (abs >= lowerBound * 10)
+            return digits + 1;
+        return digits;
+    }
 
     public static implicit operator ClickHouseDecimal(int value) => new ClickHouseDecimal(value, 0);
 
@@ -153,6 +177,12 @@ public readonly struct ClickHouseDecimal
         if (negative)
         {
             mantissa = BigInteger.Negate(mantissa);
+        }
+
+        TrimToDecimalRange(ref mantissa, ref scale);
+        if (scale > MaxDecimalScale)
+        {
+            ThrowDecimalOverflowException();
         }
 
         var numberBytes = mantissa.ToByteArray();
@@ -222,12 +252,17 @@ public readonly struct ClickHouseDecimal
     }
 
     public static ClickHouseDecimal operator /(ClickHouseDecimal dividend, ClickHouseDecimal divisor)
+        => Divide(dividend, divisor, MaxDivisionPrecision);
+
+    internal static ClickHouseDecimal Divide(ClickHouseDecimal dividend, ClickHouseDecimal divisor, int maxDivisionPrecision)
     {
         var dividend_mantissa = dividend.Mantissa;
         var divisor_mantissa = divisor.Mantissa;
 
-        var bias = MaxDivisionPrecision - (NumberOfDigits(dividend_mantissa) - NumberOfDigits(divisor_mantissa));
+        var bias = maxDivisionPrecision - (NumberOfDigits(dividend_mantissa) - NumberOfDigits(divisor_mantissa));
         bias = Math.Max(0, bias);
+        // keep the result scale at 0 or above, so that a quotient wider than MaxDivisionPrecision keeps its integer part
+        bias = Math.Max(bias, divisor.Scale - dividend.Scale);
 
         dividend_mantissa *= BigInteger.Pow(10, bias);
 
@@ -371,17 +406,17 @@ public readonly struct ClickHouseDecimal
 
     public bool ToBoolean(IFormatProvider provider) => !Mantissa.IsZero;
 
-    public char ToChar(IFormatProvider provider) => (char)(int)this;
+    public char ToChar(IFormatProvider provider) => checked((char)(int)this);
 
-    public sbyte ToSByte(IFormatProvider provider) => (sbyte)(int)this;
+    public sbyte ToSByte(IFormatProvider provider) => checked((sbyte)(int)this);
 
-    public byte ToByte(IFormatProvider provider) => (byte)(int)this;
+    public byte ToByte(IFormatProvider provider) => checked((byte)(int)this);
 
-    public short ToInt16(IFormatProvider provider) => (short)(int)this;
+    public short ToInt16(IFormatProvider provider) => checked((short)(int)this);
 
-    public ushort ToUInt16(IFormatProvider provider) => (ushort)(uint)this;
+    public ushort ToUInt16(IFormatProvider provider) => checked((ushort)(uint)this);
 
-    public int ToInt32(IFormatProvider provider) => (short)(int)this;
+    public int ToInt32(IFormatProvider provider) => (int)this;
 
     public uint ToUInt32(IFormatProvider provider) => (uint)this;
 
@@ -399,6 +434,8 @@ public readonly struct ClickHouseDecimal
 
     public object ToType(Type conversionType, IFormatProvider provider)
     {
+        ArgumentNullException.ThrowIfNull(conversionType);
+
         if (conversionType == typeof(BigInteger))
         {
             var mantissa = this.Mantissa;
@@ -406,10 +443,63 @@ public readonly struct ClickHouseDecimal
             Truncate(ref mantissa, ref scale, 0);
             return mantissa;
         }
-        return Convert.ChangeType(this, conversionType, provider);
+
+        if (conversionType == typeof(ClickHouseDecimal) || conversionType == typeof(object))
+            return this;
+
+        // Convert.ChangeType calls ToType for every type it does not convert itself, so calling back
+        // into it from here recurses without end. An enum reports the TypeCode of its underlying type,
+        // but Convert has no conversion to it (the same as for decimal).
+        var typeCode = conversionType.IsEnum ? TypeCode.Object : Type.GetTypeCode(conversionType);
+        return typeCode switch
+        {
+            TypeCode.Boolean => ToBoolean(provider),
+            TypeCode.Char => ToChar(provider),
+            TypeCode.SByte => ToSByte(provider),
+            TypeCode.Byte => ToByte(provider),
+            TypeCode.Int16 => ToInt16(provider),
+            TypeCode.UInt16 => ToUInt16(provider),
+            TypeCode.Int32 => ToInt32(provider),
+            TypeCode.UInt32 => ToUInt32(provider),
+            TypeCode.Int64 => ToInt64(provider),
+            TypeCode.UInt64 => ToUInt64(provider),
+            TypeCode.Single => ToSingle(provider),
+            TypeCode.Double => ToDouble(provider),
+            TypeCode.Decimal => ToDecimal(provider),
+            TypeCode.DateTime => ToDateTime(provider),
+            TypeCode.String => ToString(provider),
+            _ => throw new InvalidCastException($"Invalid cast from '{typeof(ClickHouseDecimal).FullName}' to '{conversionType.FullName}'."),
+        };
     }
 
     public int CompareTo(decimal other) => CompareTo((ClickHouseDecimal)other);
+
+    /// <summary>
+    /// Drops trailing zeros while the value does not fit <see cref="decimal"/> (a scale above 28 or a
+    /// mantissa wider than 96 bits), so a value stored with a wider representation than it needs
+    /// converts exactly. The value itself never changes; if it needs more than 28 fractional digits,
+    /// nothing is dropped and the caller's range check rejects it.
+    /// </summary>
+    internal static void TrimToDecimalRange(ref BigInteger mantissa, ref int scale)
+    {
+        if (scale > MaxDecimalScale)
+        {
+            var quotient = BigInteger.DivRem(mantissa, BigInteger.Pow(10, scale - MaxDecimalScale), out var remainder);
+            if (!remainder.IsZero)
+                return;
+            mantissa = quotient;
+            scale = MaxDecimalScale;
+        }
+
+        while (scale > 0 && BigInteger.Abs(mantissa) > MaxDecimalMantissa)
+        {
+            var quotient = BigInteger.DivRem(mantissa, 10, out var remainder);
+            if (!remainder.IsZero)
+                return;
+            mantissa = quotient;
+            scale--;
+        }
+    }
 
     internal static BigInteger ScaleMantissa(ClickHouseDecimal value, int scale)
     {
@@ -418,14 +508,6 @@ public readonly struct ClickHouseDecimal
         if (scale < value.Scale)
             return value.Mantissa / BigInteger.Pow(10, value.Scale - scale);
         return value.Mantissa * BigInteger.Pow(10, scale - value.Scale);
-    }
-
-    private static void WriteIntToArray(int value, byte[] array, int index)
-    {
-        array[index + 0] = (byte)value;
-        array[index + 1] = (byte)(value >> 8);
-        array[index + 2] = (byte)(value >> 0x10);
-        array[index + 3] = (byte)(value >> 0x18);
     }
 
     // [DoesNotReturn]

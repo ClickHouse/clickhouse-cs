@@ -91,6 +91,31 @@ public static class TestUtilities
     public const string TestDatabase = "test";
 
     /// <summary>
+    /// The <c>X-ClickHouse-Replica-Tag</c> value that every test client sends to a Cloud service.
+    /// </summary>
+    /// <remarks>
+    /// The Cloud proxy can send each HTTP request to a different replica, also on one keep-alive
+    /// connection. A temporary table exists only in its session on one replica, a <c>Memory</c> table
+    /// keeps its rows on one replica, and a replica can read a <c>MergeTree</c> table before it has the
+    /// parts that another replica inserted. With replica-aware routing, the proxy sends all requests
+    /// with the same tag to the same replica while the number of replicas stays the same, so one tag
+    /// for the whole run keeps these tests on one replica. See
+    /// https://clickhouse.com/docs/products/cloud/features/infrastructure/replica-aware-routing.
+    /// </remarks>
+    private static readonly string CloudReplicaTag = $"clickhouse-cs-tests-{Guid.NewGuid():N}";
+
+    /// <summary>
+    /// The HTTP headers that every test client sends: on Cloud the replica tag (see
+    /// <see cref="CloudReplicaTag"/>), else none. A test that makes its own
+    /// <see cref="ClickHouseClientSettings"/> for a real server must set them as its
+    /// <see cref="ClickHouseClientSettings.CustomHeaders"/>.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> GetTestCustomHeaders() =>
+        TestEnvironment == TestEnv.Cloud
+            ? new Dictionary<string, string> { ["X-ClickHouse-Replica-Tag"] = CloudReplicaTag }
+            : new Dictionary<string, string>();
+
+    /// <summary>
     /// Identifies which of the concurrently running net6.0/net8.0/net9.0/net10.0 suites produced a
     /// name. Uniqueness itself comes from the random token in <see cref="CreateTableName"/>, not from
     /// this; the moniker is here so a table observed on the shared server can be attributed to a suite.
@@ -224,7 +249,7 @@ public static class TestUtilities
         }
         builder["set_session_timeout"] = 1; // Expire sessions quickly after test
         builder["set_allow_experimental_geo_types"] = 1; // Allow support for geo types
-        builder["set_flatten_nested"] = 0; // Nested should be a single column, see https://clickhouse.com/docs/en/operations/settings/settings#flatten-nested
+        builder["set_flatten_nested"] = 0; // Nested should be a single column, see https://clickhouse.com/docs/reference/settings/session-settings/other#flatten_nested
 
         if (SupportedFeatures.HasFlag(Feature.Map))
         {
@@ -260,7 +285,8 @@ public static class TestUtilities
 
         return new ClickHouseClientSettings(builder)
         {
-            UseFormDataParameters = useFormDataParameters
+            UseFormDataParameters = useFormDataParameters,
+            CustomHeaders = GetTestCustomHeaders(),
         };
     }
 
@@ -375,7 +401,12 @@ public static class TestUtilities
 
         var data = reader.GetFieldValues();
 
-        ClassicAssert.IsFalse(reader.Read(), "Unexpected extra row: " + string.Join(",", reader.GetFieldValues()));
+        // Read the extra row's values only once there is one. The argument to IsFalse is evaluated eagerly,
+        // so inlining GetFieldValues() there read the row *after* Read() had returned false — which the
+        // reader now rejects — and allocated a joined string of every column on every successful call just
+        // to discard it.
+        if (reader.Read())
+            Assert.Fail("Unexpected extra row: " + string.Join(",", reader.GetFieldValues()));
 
         return data;
     }

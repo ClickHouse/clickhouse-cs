@@ -72,6 +72,30 @@ public class ClickHouseClientTests : AbstractConnectionTestFixture
         Assert.That(trackingHandler.Requests.Last().RequestUri.PathAndQuery, Is.EqualTo("/ping"));
     }
 
+    [TestCase("/ch", ExpectedResult = "http://localhost:8123/ch/ping")]
+    [TestCase("ch", ExpectedResult = "http://localhost:8123/ch/ping")]
+    [TestCase("/ch/", ExpectedResult = "http://localhost:8123/ch/ping")]
+    [TestCase("/proxy/ch", ExpectedResult = "http://localhost:8123/proxy/ch/ping")]
+    [TestCase("//ch", ExpectedResult = "http://localhost:8123//ch/ping")]
+    public async Task<string> PingAsync_WithConfiguredPath_PreservesPathPrefix(string path)
+    {
+        var trackingHandler = new TrackingHandler(request =>
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("Ok.\n") };
+        });
+        using var httpClient = new HttpClient(trackingHandler);
+        // Protocol and Port are set explicitly so the expected absolute URI does not
+        // depend on the client defaults. The assertion covers the whole absolute URI
+        // (not only the path) to pin that a path such as "//ch" never becomes an authority.
+        var settings = new ClickHouseClientSettings { Protocol = "http", Host = "localhost", Port = 8123, Path = path, HttpClient = httpClient };
+        using var client = new ClickHouseClient(settings);
+
+        var result = await client.PingAsync();
+
+        Assert.That(result, Is.True);
+        return trackingHandler.Requests.Last().RequestUri.AbsoluteUri;
+    }
+
     [Test]
     public async Task PingAsync_ReturnsFalse_WhenServerReturnsError()
     {
@@ -108,6 +132,21 @@ public class ClickHouseClientTests : AbstractConnectionTestFixture
         Assert.Multiple(() =>
         {
             Assert.That(client.RedactedConnectionString, Is.Not.Contains($"Password={MOCK}"));
+        });
+    }
+
+    [Test]
+    public void RedactedConnectionString_WithBearerToken_ShouldMaskToken()
+    {
+        const string token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJjaS10ZXN0In0.c2lnbmF0dXJl";
+        using var client = new ClickHouseClient(new ClickHouseClientSettings { BearerToken = token });
+
+        var redacted = new ClickHouseConnectionStringBuilder(client.RedactedConnectionString);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.RedactedConnectionString, Does.Not.Contain(token));
+            Assert.That(redacted.BearerToken, Is.EqualTo("****"));
         });
     }
 

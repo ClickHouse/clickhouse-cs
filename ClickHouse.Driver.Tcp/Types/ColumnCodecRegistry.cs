@@ -1,0 +1,257 @@
+using System;
+using System.Collections.Generic;
+using ClickHouse.Driver.Tcp.Types.Codecs;
+
+namespace ClickHouse.Driver.Tcp.Types;
+
+/// <summary>
+/// Builds the codec for a ClickHouse type string, given the resolution context. A factory consumes the parsed
+/// <see cref="TypeNode"/> arguments (for parameterized types such as <c>Decimal(P,S)</c> or <c>Enum8(...)</c>)
+/// and the <see cref="ResolveContext"/> (for timezone-bearing types that fall back to the server timezone).
+/// </summary>
+/// <param name="node">The parsed type, whose <see cref="TypeNode.Arguments"/> carry any type parameters.</param>
+/// <param name="context">The resolution context (e.g. the server timezone).</param>
+/// <param name="registry">The registry itself, so a composite type can resolve its child type arguments.</param>
+/// <returns>The codec for the type.</returns>
+internal delegate IColumnCodec CodecFactory(TypeNode node, in ResolveContext context, ColumnCodecRegistry registry);
+
+/// <summary>
+/// Resolves a ClickHouse type string to the codec that reads/writes it. The type string is parsed into a
+/// <see cref="TypeNode"/> and dispatched on its base name to a <see cref="CodecFactory"/>; simple types register
+/// a factory that returns a shared singleton, while parameterized and timezone-bearing types build a codec
+/// instance from the parsed arguments and the resolution context.
+/// </summary>
+internal sealed class ColumnCodecRegistry
+{
+    /// <summary>The default registry with the built-in codecs.</summary>
+    public static readonly ColumnCodecRegistry Default = CreateDefault();
+
+    private readonly Dictionary<string, CodecFactory> byName;
+
+    /// <summary>Maps case-insensitive names to their registered spelling.</summary>
+    private readonly Dictionary<string, string> canonicalByAnyCase;
+
+    private ColumnCodecRegistry(Dictionary<string, CodecFactory> byName)
+    {
+        this.byName = byName;
+        canonicalByAnyCase = new Dictionary<string, string>(byName.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (string name in byName.Keys)
+        {
+            canonicalByAnyCase[name] = name;
+        }
+
+        Projections = new ColumnReadProjections(this);
+    }
+
+    /// <summary>
+    /// Cached projections used by <see cref="Block.ReadAs{T}(string)"/>.
+    /// </summary>
+    public ColumnReadProjections Projections { get; }
+
+    /// <summary>Whether a codec is registered for a base type name, i.e. whether this client knows the type.</summary>
+    /// <param name="name">The base type name, in any case and under any of its aliases.</param>
+    /// <returns>True when the name is one this client resolves.</returns>
+    public bool KnowsTypeName(string name) => TryCanonicalName(name, out _);
+
+    /// <summary>
+    /// Resolves an alias or case variant to its registered spelling.
+    /// </summary>
+    /// <param name="name">The base type name as the caller wrote it.</param>
+    /// <param name="canonical">The registered spelling, or null when no codec matches the name.</param>
+    /// <returns>True when a codec is registered under some spelling of the name.</returns>
+    public bool TryCanonicalName(string name, out string canonical)
+    {
+        if (name is not null && byName.ContainsKey(name))
+        {
+            canonical = name;
+            return true;
+        }
+
+        if (TypeAliases.TryCanonical(name, out canonical) && byName.ContainsKey(canonical))
+        {
+            return true;
+        }
+
+        return canonicalByAnyCase.TryGetValue(name ?? string.Empty, out canonical);
+    }
+
+    /// <summary>Resolves the codec for a ClickHouse type string.</summary>
+    /// <param name="typeString">The type string from a column header (e.g. <c>UInt64</c>, <c>DateTime('UTC')</c>).</param>
+    /// <param name="context">The resolution context (server timezone, etc.); use the sample block's context when
+    /// resolving an INSERT target, or <see cref="ResolveContext.ForWrite"/> when no server context exists.</param>
+    /// <returns>The codec for that type.</returns>
+    /// <exception cref="FormatException"><paramref name="typeString"/> is malformed.</exception>
+    /// <exception cref="NotSupportedException">The type is well-formed but this client has no codec for it.</exception>
+    public IColumnCodec Resolve(string typeString, in ResolveContext context)
+    {
+        TypeNode node = TypeParser.Parse(typeString);
+        try
+        {
+            return ResolveNode(node, in context);
+        }
+        catch (NotSupportedException refusal) when (!refusal.Message.Contains($"'{node}'", StringComparison.Ordinal))
+        {
+            // Add the caller's outer type when a nested codec reports only its unsupported child.
+            throw new NotSupportedException($"{refusal.Message} It is inside the column type '{node}'.", refusal);
+        }
+    }
+
+    /// <summary>
+    /// Resolves the codec for an already-parsed type node. Composite codecs (e.g. <c>Nullable(T)</c>) call this
+    /// to build the codecs for their child type arguments without re-serializing and re-parsing a type string.
+    /// </summary>
+    /// <param name="node">The parsed type node.</param>
+    /// <param name="context">The resolution context (server timezone, etc.).</param>
+    /// <returns>The codec for that type.</returns>
+    /// <exception cref="NotSupportedException">The type is well-formed but this client has no codec for it.</exception>
+    public IColumnCodec ResolveNode(TypeNode node, in ResolveContext context)
+    {
+        if (byName.TryGetValue(node.Name, out CodecFactory factory))
+        {
+            return factory(node, in context, this);
+        }
+
+        // Headers are canonical; this path handles aliases and casing supplied by callers, including child types.
+        if (TryCanonicalName(node.Name, out string canonical))
+        {
+            return byName[canonical](new TypeNode(canonical, node.Arguments, node.HasArgumentList), in context, this);
+        }
+
+        // Do not imply that every unknown type will become supported.
+        throw new NotSupportedException($"ClickHouse type '{node}' is not supported by this client.");
+    }
+
+    private static ColumnCodecRegistry CreateDefault()
+    {
+        var byName = new Dictionary<string, CodecFactory>(StringComparer.Ordinal);
+
+        // A type whose codec ignores both the parsed arguments and the resolution context registers a single
+        // shared instance, wrapped in a factory that returns it unconditionally.
+        void AddConstant(IColumnCodec codec) => byName[codec.TypeName] = (TypeNode _, in ResolveContext _, ColumnCodecRegistry _) => codec;
+
+        void AddFactory(string name, CodecFactory factory) => byName[name] = factory;
+
+        AddConstant(new FixedWidthColumnCodec<byte>("UInt8"));
+        AddConstant(new FixedWidthColumnCodec<sbyte>("Int8"));
+        AddConstant(new FixedWidthColumnCodec<ushort>("UInt16"));
+        AddConstant(new FixedWidthColumnCodec<short>("Int16"));
+        AddConstant(new FixedWidthColumnCodec<uint>("UInt32"));
+        AddConstant(new FixedWidthColumnCodec<int>("Int32"));
+        AddConstant(new FixedWidthColumnCodec<ulong>("UInt64"));
+        AddConstant(new FixedWidthColumnCodec<long>("Int64"));
+        AddConstant(new FixedWidthColumnCodec<UInt128>("UInt128"));
+        AddConstant(new FixedWidthColumnCodec<Int128>("Int128"));
+        AddConstant(new FixedWidthColumnCodec<UInt256>("UInt256"));
+        AddConstant(new FixedWidthColumnCodec<Int256>("Int256"));
+
+        // IEEE-754 floats and the widened brain-float.
+        AddConstant(new FixedWidthColumnCodec<float>("Float32"));
+        AddConstant(new FixedWidthColumnCodec<double>("Float64"));
+        AddConstant(BFloat16ColumnCodec.Instance);
+
+        AddConstant(new FixedWidthColumnCodec<bool>("Bool"));
+        AddConstant(StringColumnCodec.Instance);
+
+        // FixedString(N): N contiguous bytes per row, the length parsed from the type argument.
+        AddFactory("FixedString", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => FixedStringColumnCodec.Create(node));
+
+        // QBit(T, N): no state prefix; most-significant-first planes containing one big-endian bitmap per row.
+        AddFactory("QBit", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => QBitColumnCodec.Create(node));
+
+        // Dates and times.
+        AddConstant(DateColumnCodec.Instance);
+        AddConstant(Date32ColumnCodec.Instance);
+        AddConstant(TimeColumnCodec.Instance);
+        AddConstant(UuidColumnCodec.Instance);
+        AddConstant(IPv4ColumnCodec.Instance);
+        AddConstant(IPv6ColumnCodec.Instance);
+        AddConstant(NothingColumnCodec.Instance);
+
+        // Interval<Unit>: the underlying Int64 count, one registration per unit; the unit is kept in the name.
+        foreach (string unit in new[] { "Nanosecond", "Microsecond", "Millisecond", "Second", "Minute", "Hour", "Day", "Week", "Month", "Quarter", "Year" })
+        {
+            AddConstant(new FixedWidthColumnCodec<long>("Interval" + unit));
+        }
+
+        // Timezone-bearing types resolve their offset from the type string or, failing that, the session timezone.
+        AddFactory("DateTime", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry _) => DateTimeColumnCodec.Create(node, context.ServerTimezone));
+        AddFactory("DateTime64", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry _) => DateTime64ColumnCodec.Create(node, context.ServerTimezone));
+        AddFactory("Time64", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => Time64ColumnCodec.Create(node));
+
+        // Enum aliases: raw underlying Int8/Int16 ordinal; the label map is parsed and retained by the codec.
+        AddFactory("Enum8", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => Enum8ColumnCodec.Create(node));
+        AddFactory("Enum16", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => Enum16ColumnCodec.Create(node));
+
+        // Bare Enum is accepted only from caller-supplied type declarations; headers include the width.
+        AddFactory("Enum", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => EnumColumnCodec.Create(node));
+
+        // Decimal(P, S) and the fixed-width aliases share the width-by-precision codec factory.
+        foreach (string name in new[] { "Decimal", "Decimal32", "Decimal64", "Decimal128", "Decimal256" })
+        {
+            AddFactory(name, static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => DecimalColumnCodec.Create(node));
+        }
+
+        // Nullable(T) wraps a child codec, resolved recursively through the registry.
+        AddFactory("Nullable", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => NullableColumnCodec.Create(node, context, registry));
+
+        // Array(T) wraps a child codec (offsets + flattened element values), resolved recursively.
+        AddFactory("Array", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => ArrayColumnCodec.Create(node, context, registry));
+
+        // Tuple(T1, ..., Tn) serializes its elements as N independent child columns (all prefixes then all
+        // bodies, in order); each element codec is resolved recursively and element names, if any, are kept.
+        AddFactory("Tuple", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => TupleColumnCodec.Create(node, context, registry));
+
+        // Map(K, V) is byte-identical to Array(Tuple(K, V)): offsets + a keys stream + a values stream. The key
+        // and value codecs are resolved recursively; each row surfaces as a KeyValuePair<K, V>[].
+        AddFactory("Map", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => MapColumnCodec.Create(node, context, registry));
+
+        // LowCardinality(T) replaces the inner values with a block-local dictionary plus indices; the inner codec
+        // is resolved recursively. Its serialization-state prefix is a fixed version marker; the dictionary and
+        // keys live in the column body.
+        AddFactory("LowCardinality", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => LowCardinalityColumnCodec.Create(node, context, registry));
+
+        // Nested(...) as a single wire column (flatten_nested = 0) is byte-identical to Array(Tuple(...)): the same
+        // offsets stream plus each field's flattened stream, differing only in the type string, which keeps the
+        // field names. It has a dedicated arity-agnostic codec (not Array(Tuple) reuse) surfacing a columnar
+        // NestedColumn, so it is not bound by the tuple's element-count cap.
+        AddFactory("Nested", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => NestedColumnCodec.Create(node, context, registry));
+
+        // Variant(T1, ..., Tn) is a discriminated union: a per-row discriminator picks one alternative (or NULL),
+        // and the alternatives' values are stored one dense run per type. Each alternative codec is resolved
+        // recursively; the declared order is the discriminator order (the server sends it canonicalized).
+        AddFactory("Variant", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => VariantColumnCodec.Create(node, context, registry));
+
+        // Dynamic is a column whose per-row value type is discovered at runtime: the runtime type set is carried
+        // on the wire (in the state prefix), not in the type string. Only the flattened serialization is read or
+        // written; runtime child codecs are resolved lazily from the wire/inferred type names, so the codec keeps
+        // the registry and context. NULL rides a discriminator, so it is never wrapped in Nullable.
+        AddFactory("Dynamic", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => DynamicColumnCodec.Create(node, context, registry));
+
+        // JSON is read and written in its String serialization: a version marker, then the values as compact JSON
+        // text. The type string's arguments (typed paths, max_dynamic_paths, SKIP hints) do not change that layout,
+        // so every JSON spelling resolves to the same codec and the arguments ride along in the type name only.
+        AddFactory("JSON", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => JsonStringColumnCodec.Create(node));
+
+        // The geo aliases name structures the codecs above already encode — Point is a two-element Float64 tuple and
+        // the rest are arrays over it. The server puts the alias in the column header, so each resolves its structure
+        // and keeps its own name. Ring and LineString share a structure, as do Polygon and MultiLineString.
+        AddFactory("Point", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreatePoint(in context, registry));
+        AddFactory("Ring", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreateRing(in context, registry));
+        AddFactory("LineString", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreateLineString(in context, registry));
+        AddFactory("Polygon", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreatePolygon(in context, registry));
+        AddFactory("MultiLineString", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreateMultiLineString(in context, registry));
+        AddFactory("MultiPolygon", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreateMultiPolygon(in context, registry));
+
+        // Geometry is an alias too, but to a Variant over the six above rather than to a nested array. The header
+        // carries only "Geometry", so the client expands it itself, in the server's name-sorted discriminator order.
+        AddFactory("Geometry", static (TypeNode _, in ResolveContext context, ColumnCodecRegistry registry) => GeoColumnCodecs.CreateGeometry(in context, registry));
+
+        // SimpleAggregateFunction(func, T) encodes as a bare T, so it resolves to T's codec and the function name
+        // rides in the type string only. AggregateFunction is unrelated in every way but its name: its body is the
+        // function's own intermediate state, so it is refused with the query that reads it.
+        AddFactory("SimpleAggregateFunction", static (TypeNode node, in ResolveContext context, ColumnCodecRegistry registry) => AggregateFunctionColumnCodecs.CreateSimple(node, in context, registry));
+        AddFactory("AggregateFunction", static (TypeNode node, in ResolveContext _, ColumnCodecRegistry _) => AggregateFunctionColumnCodecs.RefuseAggregateFunction(node));
+
+        return new ColumnCodecRegistry(byName);
+    }
+}
