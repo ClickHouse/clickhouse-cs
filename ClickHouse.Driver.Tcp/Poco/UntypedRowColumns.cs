@@ -1,14 +1,27 @@
 using System;
-using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using ClickHouse.Driver.Tcp.Format;
 using ClickHouse.Driver.Tcp.Types;
+using ClickHouse.Driver.Tcp.Types.Converters;
 
 namespace ClickHouse.Driver.Tcp.Poco;
 
 /// <summary>
-/// Transposes positional <c>object[]</c> rows into typed columns. Values select the codec's CLR write type, allowing
-/// both convenience values such as <see cref="DateTime"/> and canonical values returned by an untyped read.
+/// Chooses the CLR write type of one target column of an untyped row insert.
+/// </summary>
+/// <param name="codec">The target column's codec.</param>
+/// <param name="target">The target column, for its name and type.</param>
+/// <param name="rows">The insert's rows.</param>
+/// <param name="index">The column's position in every row.</param>
+/// <returns>The write type.</returns>
+/// <exception cref="InvalidOperationException">The values' type is not one the target accepts.</exception>
+internal delegate Type UntypedWriteTypeChooser(IColumnCodec codec, IColumn target, PocoRowBuffer<object[]> rows, int index);
+
+/// <summary>
+/// Transposes positional <c>object[]</c> rows into typed columns. The CLR type of the values selects each column's
+/// write type, through the converter derivation, so convenience values such as <see cref="DateTime"/> and canonical
+/// values returned by an untyped read are both written.
 /// </summary>
 internal static class UntypedRowColumns
 {
@@ -29,7 +42,21 @@ internal static class UntypedRowColumns
     /// <returns>The source, owning its gather buffers until it is disposed.</returns>
     /// <exception cref="InvalidOperationException">A value's CLR type is not one the target column accepts, or the
     /// target cannot be built from rows at all.</exception>
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
     public static PocoInsertSource<object[]> CreateSource(Block schema, PocoRowBuffer<object[]> rows, int blockRows)
+    {
+        ConverterDerivation derivation = schema.Codecs.Converters;
+        ResolveContext context = schema.Context;
+        return CreateSource(schema, rows, blockRows, (codec, target, values, index) => ChooseWriteType(derivation, context, codec, target, values, index));
+    }
+
+    /// <summary>Opens one insert, with the write type of each column from <paramref name="choose"/>.</summary>
+    /// <param name="schema">The server's sample block, naming and typing the target columns.</param>
+    /// <param name="rows">The insert's rows; not owned by the source.</param>
+    /// <param name="blockRows">The most rows one wire block will hold.</param>
+    /// <param name="choose">Chooses the CLR write type of each target column.</param>
+    /// <returns>The source, owning its gather buffers until it is disposed.</returns>
+    internal static PocoInsertSource<object[]> CreateSource(Block schema, PocoRowBuffer<object[]> rows, int blockRows, UntypedWriteTypeChooser choose)
     {
         int columnCount = schema.ColumnCount;
         var builders = new PocoColumnBuilder<object[]>[columnCount];
@@ -38,7 +65,7 @@ internal static class UntypedRowColumns
         {
             IColumn target = schema[i];
             IColumnCodec codec = schema.Codecs.Resolve(target.TypeName, schema.Context);
-            Type writeType = ChooseWriteType(codec, target, rows, i);
+            Type writeType = choose(codec, target, rows, i);
 
             builders[i] = (PocoColumnBuilder<object[]>)CreateBuilderMethod
                 .MakeGenericMethod(writeType)
@@ -48,25 +75,12 @@ internal static class UntypedRowColumns
         return new UntypedInsertSource(builders, rows, blockRows, columnCount, rows.ParameterName);
     }
 
-    /// <summary>
-    /// Chooses the target's compatible CLR write type from the first non-null value. An all-null column uses the
-    /// target's preferred type.
-    /// </summary>
-    /// <param name="codec">The target column's codec.</param>
-    /// <param name="target">The target column, for diagnostics.</param>
+    /// <summary>The CLR type of the first value of a column that is not null, or null when every value is null.</summary>
     /// <param name="rows">The insert's rows.</param>
     /// <param name="index">The column's position in every row.</param>
-    /// <returns>The write type.</returns>
-    /// <exception cref="InvalidOperationException">The values' type is not one the target accepts.</exception>
-    private static Type ChooseWriteType(IColumnCodec codec, IColumn target, PocoRowBuffer<object[]> rows, int index)
+    /// <returns>The type, or null.</returns>
+    internal static Type FirstValueType(PocoRowBuffer<object[]> rows, int index)
     {
-        IReadOnlyList<Type> accepted = PocoWriteConversion.AcceptedWriteTypes(codec);
-        if (accepted.Count == 0)
-        {
-            throw new InvalidOperationException(
-                $"The target column '{target.Name}' has type '{target.TypeName}', which cannot be built from rows: insert it through the columnar API, which can build the column shape it needs.");
-        }
-
         Type present = null;
         for (int row = 0; row < rows.Count && present is null; row++)
         {
@@ -75,29 +89,61 @@ internal static class UntypedRowColumns
             present = values is not null && index < values.Length ? values[index]?.GetType() : null;
         }
 
+        return present;
+    }
+
+    // The write type of a column, from its first value that is not null. A target that no CLR type of values fills is
+    // reported before the values are read.
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private static Type ChooseWriteType(ConverterDerivation derivation, in ResolveContext context, IColumnCodec codec, IColumn target, PocoRowBuffer<object[]> rows, int index)
+    {
+        RequireBuildableFromRows(derivation, in context, codec, target);
+        return WriteTypeFor(derivation, in context, codec, target, index, FirstValueType(rows, index));
+    }
+
+    /// <summary>
+    /// Chooses the target's CLR write type for values of <paramref name="present"/>: the type that the converter
+    /// derivation writes the values as. A cast rule gives the type it writes them as (<see cref="object"/> for a
+    /// Variant), and a value type into a type that holds NULL is written as its nullable type, so a NULL row stays
+    /// NULL. An all-null column uses the target's canonical type.
+    /// </summary>
+    /// <param name="derivation">The converter derivation of the sample block.</param>
+    /// <param name="context">The resolution context of the sample block.</param>
+    /// <param name="codec">The target column's codec.</param>
+    /// <param name="target">The target column, for diagnostics.</param>
+    /// <param name="index">The column's position in every row, for diagnostics.</param>
+    /// <param name="present">The CLR type of the first value that is not null, or null when every value is null.</param>
+    /// <returns>The write type.</returns>
+    /// <exception cref="InvalidOperationException">The values' type is not one the target accepts, or no CLR type of
+    /// values fills the target.</exception>
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    internal static Type WriteTypeFor(ConverterDerivation derivation, in ResolveContext context, IColumnCodec codec, IColumn target, int index, Type present)
+    {
+        RequireBuildableFromRows(derivation, in context, codec, target);
         if (present is null)
         {
-            return accepted[0];
+            return codec.ElementType;
         }
 
-        for (int i = 0; i < accepted.Count; i++)
+        Derivation derived = derivation.Derive(target.TypeName, in context, present, ConversionDirection.Write);
+        if (!derived.Succeeded)
         {
-            // Nullable<T> boxes as T, so compare the underlying type.
-            if ((Nullable.GetUnderlyingType(accepted[i]) ?? accepted[i]).IsAssignableFrom(present))
-            {
-                return accepted[i];
-            }
+            throw PocoWriteErrors.ValuesNotWritable(index, target, codec, present);
         }
 
-        var offered = new string[accepted.Count];
-        for (int i = 0; i < accepted.Count; i++)
+        return derived.Converter is ICastWriter cast
+            ? cast.TargetType
+            : present.IsValueType && PocoWriteConversion.TakesNull(codec) ? typeof(Nullable<>).MakeGenericType(present) : present;
+    }
+
+    // A type that is not written from its canonical CLR type is written only from a column shape of its own.
+    [RequiresDynamicCode("A converter over a CLR type that is known only at run time closes generic types at run time.")]
+    private static void RequireBuildableFromRows(ConverterDerivation derivation, in ResolveContext context, IColumnCodec codec, IColumn target)
+    {
+        if (!derivation.Derive(target.TypeName, in context, codec.ElementType, ConversionDirection.Write).Succeeded)
         {
-            offered[i] = accepted[i].ToString();
+            throw PocoWriteErrors.NotBuildableFromRows(target);
         }
-
-        throw new InvalidOperationException(
-            $"Column {index} ('{target.Name}', {target.TypeName}) was given values of type {present}, which it cannot be written from. " +
-            $"It accepts {string.Join(" or ", offered)}.");
     }
 
     /// <summary>Builds the typed column gather for one position in each row.</summary>
