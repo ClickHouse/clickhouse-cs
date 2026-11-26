@@ -1711,6 +1711,9 @@ var settings = new ClickHouseClientSettings("Host=localhost")
 `None` is a third mode. It reads exactly as `Binary` does, but sends no server setting with the
 query — use it on a connection that is not allowed to set one.
 
+In `Binary` mode, a `Tuple` path renders as the server renders it: a named tuple as an object and an
+unnamed one as an array. A `Nested` path renders as an array of objects.
+
 ##### Typed paths and nulls {#type-map-reading-json-nulls}
 
 A path declared in the column type is a **typed path**; any other path in the document is a
@@ -1746,14 +1749,14 @@ typed path holding null was dropped from the `JsonObject`, which made `{"x":null
 String leaves inside a `JSON` column are always returned as text, whatever
 `ReadStringsAsByteArrays` is set to — `JsonValue` has no byte-array form, so a `byte[]` would
 render as base64. This holds for `String`, `FixedString`, and for those wrapped in
-`LowCardinality`, `Nullable` or `SimpleAggregateFunction`, and for strings inside `Array` and `Map`,
-map keys included.
+`LowCardinality`, `Nullable`, `SimpleAggregateFunction`, `Variant` or `Dynamic`, and for strings
+inside `Array`, `Map`, `Tuple` and `Nested`, map keys included.
+
+A `Variant` or `Dynamic` path is read by the type of the value that it holds in each row. Under
+`Variant(Array(UInt8), String)`, a string comes back as text and an array as `[1,2]`, in both
+settings.
 
 <Note>
-A byte array the JSON reader cannot see the type of does still render as base64: a
-`Variant` or `Dynamic` typed path holds a value whose type is known only for each row, so a string
-under `Variant(Array(UInt8), String)` comes back base64-encoded. That is the same in both settings.
-
 A JSON map key type other than exactly `String` — `Map(LowCardinality(String), String)`, for
 example — throws `NotSupportedException`.
 </Note>

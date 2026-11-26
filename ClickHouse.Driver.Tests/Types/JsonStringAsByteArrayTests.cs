@@ -203,10 +203,11 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
     /// <summary>
     /// Every shape that can carry a string, hinted and dynamic. An empty type definition means dynamic
     /// paths, whose types come from <c>BinaryTypeDecoder</c> rather than <c>TypeConverter</c> — two
-    /// construction sites, each honouring the setting independently. A <c>Dynamic</c> hint is a third:
-    /// the type is the one the value carries, read per value. <c>FixedString</c> (already correct),
-    /// <c>NullString</c> (null arm) and <c>EmptyString</c> (base64 of zero bytes is also empty) are
-    /// regression guards that cannot discriminate; the rest fail without the fix.
+    /// construction sites, each honouring the setting independently. A <c>Dynamic</c> or
+    /// <c>Variant</c> hint is a third: the type is the one the value carries, read per value.
+    /// <c>FixedString</c> (already correct), <c>NullString</c> (null arm) and <c>EmptyString</c>
+    /// (base64 of zero bytes is also empty) are regression guards that cannot discriminate; the rest
+    /// fail without the fix.
     /// </summary>
     public static IEnumerable<TestCaseData> StringBearingJsonShapes()
     {
@@ -215,12 +216,18 @@ public class JsonStringAsByteArrayTests : AbstractConnectionTestFixture
         yield return new TestCaseData("{\"s\":\"\"}", "s String").SetName("EmptyString");
         yield return new TestCaseData("{\"s\":null}", "s Nullable(String)").SetName("NullString");
         yield return new TestCaseData("{\"s\":\"low\"}", "s LowCardinality(String)").SetName("LowCardinalityString");
+        yield return new TestCaseData("{\"s\":\"agg\"}", "s SimpleAggregateFunction(anyLast, String)").SetName("SimpleAggregateFunctionString");
         yield return new TestCaseData("{\"s\":\"plain\"}", "s Dynamic").SetName("DynamicHintedString");
+        yield return new TestCaseData("{\"s\":\"plain\"}", "s Variant(Array(UInt8), String)").SetName("VariantHintedString");
         yield return new TestCaseData("{\"s\":\"exact\"}", "s FixedString(5)").SetName("FixedString");
         yield return new TestCaseData("{\"a\":[\"x\",\"y\"]}", "a Array(String)").SetName("ArrayOfString");
         yield return new TestCaseData("{\"a\":[[\"x\",\"y\"],[\"z\"]]}", "a Array(Array(String))").SetName("NestedArrayOfString");
         yield return new TestCaseData("{\"m\":{\"k1\":\"v1\",\"k2\":\"v2\"}}", "m Map(String, String)").SetName("MapOfString");
         yield return new TestCaseData("{\"m\":{\"k\":[\"v1\",\"v2\"]}}", "m Map(String, Array(String))").SetName("MapOfArrayOfString");
+        yield return new TestCaseData("{\"t\":{\"x\":\"a\",\"y\":\"b\"}}", "t Tuple(x String, y String)").SetName("NamedTupleOfString");
+        yield return new TestCaseData("{\"t\":[\"a\",\"b\"]}", "t Tuple(String, Nullable(String))").SetName("UnnamedTupleOfNullableString");
+        yield return new TestCaseData("{\"n\":[{\"x\":\"a\"},{\"x\":\"b\"}]}", "n Nested(x String)").SetName("NestedOfString");
+        yield return new TestCaseData("{\"a\":[\"x\",[\"y\",1]]}", "").SetName("DynamicPathHoldingTupleOfString");
     }
 
     /// <summary>
