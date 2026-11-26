@@ -1387,6 +1387,21 @@ await conn.OpenAsync();
 Instead, always use `ClickHouseDataSource` or share a single `ClickHouseClient` instance.
 </Warning>
 
+### Getting the client of a connection {#ado-net-get-client}
+
+`ClickHouseConnection.GetClient()` returns the `IClickHouseClient` that the connection uses. For a connection from a `ClickHouseDataSource`, this is the client of the data source. Use it when code gets a `ClickHouseConnection`, for example from an ORM, and needs a client API such as `InsertBinaryAsync` with the settings and the HTTP connection pool of that connection. Use it instead of the deprecated `ClickHouseBulkCopy`.
+
+```csharp
+await using var connection = await dataSource.OpenConnectionAsync();
+await connection.GetClient().InsertBinaryAsync("events", columns, rows);
+```
+
+- Do not dispose the client: the connection or the data source owns it.
+- A change to `Settings` or `ConnectionString` gives the connection a new client. Call `GetClient()` again after such a change.
+- The client uses the database of its settings, not a database selected with `ChangeDatabase`. To use that database, pass it in `InsertOptions.Database` or `QueryOptions.Database`.
+
+A connection that you create from a connection string or from `ClickHouseClientSettings` owns its client. It disposes the client when you dispose the connection, with `using`, `await using` or `DbConnection.Dispose()`.
+
 ---
 
 ### Using ClickHouseCommand {#ado-net-command}
