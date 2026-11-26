@@ -109,6 +109,10 @@ ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.MinPoolSize.get -> int
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.MinPoolSize.init -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Password.get -> string
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Password.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.BearerToken.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.BearerToken.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.CredentialsProvider.get -> ClickHouse.Driver.IClickHouseCredentialsProvider
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.CredentialsProvider.init -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.PoolReusePolicy.get -> ClickHouse.Driver.Tcp.ClickHouseTcpPoolReusePolicy
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.PoolReusePolicy.init -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.PoolTimeout.get -> System.TimeSpan
@@ -164,6 +168,8 @@ ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.MinPoolSize.get -> in
 ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.MinPoolSize.set -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Password.get -> string
 ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Password.set -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.BearerToken.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.BearerToken.set -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.PoolReusePolicy.get -> ClickHouse.Driver.Tcp.ClickHouseTcpPoolReusePolicy
 ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.PoolReusePolicy.set -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.PoolTimeout.get -> System.TimeSpan

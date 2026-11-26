@@ -14,10 +14,12 @@ namespace ClickHouse.Driver.Tcp;
 /// </summary>
 /// <remarks>
 /// Being a record, two instances compare equal when every property does. <see cref="CustomSettings"/>,
-/// <see cref="Compressor"/>, <see cref="LoggerFactory"/> and <see cref="ConfigureTls"/> are compared by
-/// reference, not by content: the first three are interfaces with no value-equality contract, the last a
-/// delegate. Two options that hold equal-but-distinct dictionaries, or equivalent-but-distinct lambdas, are
-/// <b>not</b> equal. Do not use these options as a cache or pool key; use a purpose-built key type.
+/// <see cref="Compressor"/>, <see cref="LoggerFactory"/>, <see cref="ConfigureTls"/> and
+/// <see cref="CredentialsProvider"/> are not compared by content: <see cref="ConfigureTls"/> is a delegate, compared
+/// by method and target, and the others are interfaces with no value-equality contract, compared with their own
+/// <see cref="object.Equals(object)"/> (by reference, unless the implementation overrides it). Two options that hold
+/// equal-but-distinct dictionaries, distinct provider instances, or equivalent-but-distinct lambdas are <b>not</b>
+/// equal. Do not use these options as a cache or pool key; use a purpose-built key type.
 /// </remarks>
 public sealed record ClickHouseTcpClientOptions
 {
@@ -74,6 +76,54 @@ public sealed record ClickHouseTcpClientOptions
     /// untrusted network, enable TLS. Defaults to empty.
     /// </summary>
     public string Password { get; init; } = string.Empty;
+
+    /// <summary>
+    /// A JWT to authenticate with instead of <see cref="Username"/> and <see cref="Password"/>. Null or empty, the
+    /// default, uses them. ClickHouse Cloud accepts JWT authentication; a self-managed server does not.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The handshake sends the token in plaintext, as it sends a password, so use <see cref="UseTls"/>. A
+    /// connection authenticates once, when it opens. To give new connections a new token, use
+    /// <see cref="CredentialsProvider"/>.
+    /// </para>
+    /// <para>
+    /// <see cref="ToString"/> never shows it.
+    /// </para>
+    /// </remarks>
+    public string BearerToken { get; init; }
+
+    /// <summary>
+    /// Gets the credentials for each new connection: a JWT, or a username and a password. Null, the default, uses
+    /// <see cref="BearerToken"/>, else <see cref="Username"/> and <see cref="Password"/>. Cannot be set from a
+    /// connection string.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The client gets credentials before it opens a connection. It keeps credentials with a known expiry (the
+    /// <see cref="ClickHouseCredentials.ExpiresAt"/> value, else the <c>exp</c> claim of a JWT) and calls the
+    /// provider again when they are about to expire. When the expiry is unknown, it calls the provider for each new
+    /// connection. A provider that returns null selects <see cref="BearerToken"/>, else <see cref="Username"/> and
+    /// <see cref="Password"/>.
+    /// </para>
+    /// <para>
+    /// Each connection keeps the credentials it opened with. The pool does not hand out a connection whose
+    /// credentials expire in 10 seconds or less. If the server rejects the credentials during the handshake (error
+    /// 516, <c>AUTHENTICATION_FAILED</c>, or 194, <c>REQUIRED_PASSWORD</c>), the client calls the provider once
+    /// more, with <see cref="ClickHouseCredentialsRefreshReason.Rejected"/>, and connects again. If an operation fails
+    /// with one of these errors, the next connection gets new credentials; the operation is not run again.
+    /// </para>
+    /// <para>
+    /// A session (<c>OpenSessionAsync</c>) keeps its connection, and so the credentials that it opened with: it is not
+    /// closed when they expire. ClickHouse Cloud can remove the user of a JWT after the token expires, so keep a
+    /// session shorter than the lifetime of its token.
+    /// </para>
+    /// <para>
+    /// The wait for the provider counts against <see cref="DialTimeout"/>. A provider that throws fails the
+    /// operation that needed the connection, with the provider's exception.
+    /// </para>
+    /// </remarks>
+    public IClickHouseCredentialsProvider CredentialsProvider { get; init; }
 
     /// <summary>
     /// Whether to encrypt the transport with TLS, negotiated before the handshake. Defaults to false. The
@@ -188,7 +238,9 @@ public sealed record ClickHouseTcpClientOptions
     public int MaxSendBufferBytes { get; init; } = DefaultMaxSendBufferBytes;
 
     /// <summary>
-    /// The timeout for establishing a connection (socket connect, TLS, and handshake). On expiry, the connect throws
+    /// The timeout for establishing a connection: the wait for <see cref="CredentialsProvider"/>, the socket connect,
+    /// TLS, and the handshake, including the second connect after the server rejects the provider's credentials. On
+    /// expiry, the connect throws
     /// <see cref="ClickHouseTcpConnectionException"/> with a <see cref="TimeoutException"/> as the inner exception.
     /// Defaults to 30s.
     /// </summary>
@@ -293,8 +345,9 @@ public sealed record ClickHouseTcpClientOptions
     /// </para>
     /// <para>
     /// Set this only for a workload the derivation does not suit. The value is used unclamped, so a very short period
-    /// costs a wake-up that often for as long as the client lives. It must be positive. When both limits are zero and
-    /// there is no floor to hold, the pool schedules no sweep at all, whatever this says.
+    /// costs a wake-up that often for as long as the client lives. It must be positive. When both limits are zero,
+    /// there is no floor to hold and no <see cref="CredentialsProvider"/>, the pool schedules no sweep at all, whatever
+    /// this says.
     /// </para>
     /// </remarks>
     public TimeSpan? SweepInterval { get; init; }
@@ -570,17 +623,37 @@ public sealed record ClickHouseTcpClientOptions
         }
     }
 
-    /// <summary>Builds the handshake input for a connection from these options. The password is copied, not retained.</summary>
-    internal ClientHandshakeParameters ToHandshakeParameters()
-        => new()
+    /// <summary>
+    /// Builds the handshake input for a connection from these options. The password or token is copied, not
+    /// retained.
+    /// </summary>
+    /// <param name="credentials">
+    /// The credentials from <see cref="CredentialsProvider"/>, or null for the static credentials:
+    /// <see cref="BearerToken"/>, else <see cref="Username"/> and <see cref="Password"/>.
+    /// </param>
+    internal ClientHandshakeParameters ToHandshakeParameters(ClickHouseCredentials credentials = null)
+    {
+        (string username, string password) = credentials switch
         {
-            Username = Username,
-            Password = Password ?? string.Empty,
+            { IsBearer: true } => (ClientHandshakeParameters.JwtAuthenticationMarker, credentials.BearerToken),
+            not null => (credentials.Username, credentials.Password),
+            null when !string.IsNullOrEmpty(BearerToken) => (ClientHandshakeParameters.JwtAuthenticationMarker, BearerToken),
+            null => (Username, Password),
+        };
+
+        return new()
+        {
+            Username = username,
+            Password = password ?? string.Empty,
             Database = string.IsNullOrEmpty(Database) ? DefaultDatabase : Database,
             QuotaKey = QuotaKey ?? string.Empty,
         };
+    }
 
-    /// <summary>The endpoint and user this client connects as. Never includes <see cref="Password"/>.</summary>
+    /// <summary>
+    /// The endpoint and user this client connects as. Never includes <see cref="Password"/> or
+    /// <see cref="BearerToken"/>.
+    /// </summary>
     /// <remarks>
     /// A record's generated <c>ToString</c> prints every property, which would put the plaintext password into any
     /// log line that formats these options. This override names the safe properties explicitly instead, so a secret

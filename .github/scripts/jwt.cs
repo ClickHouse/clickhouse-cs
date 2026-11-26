@@ -5,11 +5,13 @@
 //
 //   dotnet run .github/scripts/jwt.cs -- token                          # valid for 30 minutes
 //   dotnet run .github/scripts/jwt.cs -- token --ttl 2700
+//   dotnet run .github/scripts/jwt.cs -- token --expired                # expired 5 minutes ago
 //   dotnet run .github/scripts/jwt.cs -- jwks > .github/jwks.json
 //
 // Options: --issuer (default mydomain.com), --audience (default ci-test-service), --subject (default
-// ci-test), --ttl in seconds (default 1800, token only). The claims must match the JWT provider on
-// the Cloud service. The jwks output holds only the public key and a self-signed x5c certificate.
+// ci-test), --ttl in seconds (default 1800, token only), --expired (token only: iat = now - 600,
+// exp = now - 300, and --ttl is ignored). The claims must match the JWT provider on the Cloud
+// service. The jwks output holds only the public key and a self-signed x5c certificate.
 //
 // The script uses only the .NET base class library. PublishAot=false stops the restore of the native
 // AOT compiler packages that a file-based app gets by default, so the build restores no package.
@@ -38,16 +40,28 @@ var issuer = "mydomain.com";
 var audience = "ci-test-service";
 var subject = "ci-test";
 var ttl = 1800;
+var expired = false;
 
-for (var i = 1; i < args.Length; i += 2)
+for (var i = 1; i < args.Length; i++)
 {
     var option = args[i];
-    if (i + 1 >= args.Length)
+    if (option == "--expired")
+    {
+        expired = true;
+        continue;
+    }
+
+    if (option is not ("--issuer" or "--audience" or "--subject" or "--ttl"))
+    {
+        return Fail($"unknown option '{option}'");
+    }
+
+    if (++i >= args.Length)
     {
         return Fail($"'{option}' needs a value");
     }
 
-    var value = args[i + 1];
+    var value = args[i];
     switch (option)
     {
         case "--issuer":
@@ -62,10 +76,8 @@ for (var i = 1; i < args.Length; i += 2)
         case "--ttl" when int.TryParse(value, out var seconds) && seconds > 0:
             ttl = seconds;
             break;
-        case "--ttl":
-            return Fail($"--ttl must be a positive number of seconds, not '{value}'");
         default:
-            return Fail($"unknown option '{option}'");
+            return Fail($"--ttl must be a positive number of seconds, not '{value}'");
     }
 }
 
@@ -104,10 +116,12 @@ else
 
 return 0;
 
-// An RS256 JWT that is valid for ttl seconds. The kid in the header is the kid in jwks.json.
+// An RS256 JWT that is valid for ttl seconds, or that expired 5 minutes ago with --expired. The kid
+// in the header is the kid in jwks.json.
 string SignToken()
 {
     var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    var (issuedAt, expiresAt) = expired ? (now - 600, now - 300) : (now, now + ttl);
     var header = Json(w =>
     {
         w.WriteString("alg", "RS256");
@@ -119,8 +133,8 @@ string SignToken()
         w.WriteString("iss", issuer);
         w.WriteString("sub", subject);
         w.WriteString("aud", audience);
-        w.WriteNumber("iat", now);
-        w.WriteNumber("exp", now + ttl);
+        w.WriteNumber("iat", issuedAt);
+        w.WriteNumber("exp", expiresAt);
     });
 
     var signingInput = $"{Base64Url.EncodeToString(header)}.{Base64Url.EncodeToString(claims)}";
@@ -193,7 +207,7 @@ static byte[] Json(Action<Utf8JsonWriter> write, bool indented = false)
 static int Usage(int exitCode)
 {
     (exitCode == 0 ? Console.Out : Console.Error).WriteLine(
-        "usage: dotnet run .github/scripts/jwt.cs -- (token | jwks) [--issuer <iss>] [--audience <aud>] [--subject <sub>] [--ttl <seconds>]");
+        "usage: dotnet run .github/scripts/jwt.cs -- (token | jwks) [--issuer <iss>] [--audience <aud>] [--subject <sub>] [--ttl <seconds>] [--expired]");
     return exitCode;
 }
 

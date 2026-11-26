@@ -35,7 +35,7 @@ Use the HTTP client when you need:
 
 - ADO.NET or an ORM;
 - CSV, JSONEachRow, Parquet, or raw stream input and output;
-- bearer authentication or custom HTTP headers;
+- a per-query bearer token or custom HTTP headers;
 - custom parameter type resolution, parameter formatting, or read conversion;
 - a per-query database or role.
 

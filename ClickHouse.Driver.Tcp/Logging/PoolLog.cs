@@ -35,7 +35,7 @@ internal static partial class PoolLog
     [LoggerMessage(
         EventId = 3003,
         Level = LogLevel.Debug,
-        Message = "Retired {Count} idle connections past MaxConnectionLifetime or IdleTimeout")]
+        Message = "Retired {Count} idle connections past MaxConnectionLifetime, IdleTimeout, or the expiry of their credentials")]
     public static partial void Retired(ILogger logger, int count);
 
     [LoggerMessage(
@@ -61,4 +61,10 @@ internal static partial class PoolLog
         Level = LogLevel.Debug,
         Message = "Draining the pool: closing {IdleCount} idle connections and waiting for {LeasedCount} in flight")]
     public static partial void Draining(ILogger logger, int idleCount, int leasedCount);
+
+    [LoggerMessage(
+        EventId = 3008,
+        Level = LogLevel.Information,
+        Message = "Closing a returned connection rather than pooling it: the server rejected its credentials after {UsageCount} operations; the next connection gets new credentials")]
+    public static partial void CredentialsRejected(ILogger logger, int usageCount);
 }

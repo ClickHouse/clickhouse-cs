@@ -30,6 +30,8 @@ public static class ExampleRunner
         "DependencyInjection",
         "JwtAuthentication",
         "TcpTls",
+        "TcpTokenRefresh",
+        "TokenRefresh",
     };
 
     // Run infrastructure-dependent examples only when a filter selects them explicitly.
@@ -38,6 +40,8 @@ public static class ExampleRunner
         "CreateTableCluster",
         "CreateTableCloud",
         "JwtAuthentication",
+        "TokenRefresh",
+        "TcpTokenRefresh",
     };
 
     private static readonly List<ExampleInfo> _examples = DiscoverExamples();

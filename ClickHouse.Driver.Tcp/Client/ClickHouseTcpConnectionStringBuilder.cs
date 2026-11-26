@@ -101,6 +101,16 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         set => this["Password"] = value;
     }
 
+    /// <summary>
+    /// A JWT to authenticate with instead of <see cref="Username"/> and <see cref="Password"/>. Absent or empty, the
+    /// default, uses them. See <see cref="ClickHouseTcpClientOptions.BearerToken"/>.
+    /// </summary>
+    public string BearerToken
+    {
+        get => GetStringOrDefault("BearerToken", null);
+        set => this["BearerToken"] = value;
+    }
+
     /// <summary>The default database. Defaults to <c>default</c>.</summary>
     public string Database
     {
@@ -304,6 +314,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
             Port = Port,
             Username = Username,
             Password = Password,
+            BearerToken = BearerToken,
             Database = Database,
             QuotaKey = QuotaKey,
             SendJsonAndDynamicSerializationSettings = SendJsonAndDynamicSerializationSettings,

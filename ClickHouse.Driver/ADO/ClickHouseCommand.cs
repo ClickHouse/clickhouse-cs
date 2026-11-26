@@ -89,7 +89,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     /// <summary>
     /// Gets or sets a bearer token for this command, overriding the connection-level token.
     /// When set, this token is used for Bearer authentication instead of the connection's
-    /// BearerToken or Username/Password credentials.
+    /// CredentialsProvider, BearerToken, or Username/Password credentials. An empty string counts as not set.
     /// </summary>
     public string BearerToken { get; set; }
 

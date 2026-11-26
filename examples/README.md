@@ -26,6 +26,7 @@ Examples are grouped by transport. Everything under [Http/](Http) uses `ClickHou
 ### Authentication
 
 - [Auth_001_JwtAuthentication.cs](Http/Core/Auth_001_JwtAuthentication.cs) - Using JWT/Bearer token authentication with ClickHouse.
+- [Auth_002_TokenRefresh.cs](Http/Core/Auth_002_TokenRefresh.cs) - Refreshing a JWT with a credentials provider that does an OAuth 2.0 refresh-token grant
 
 ### Creating Tables
 
@@ -133,6 +134,7 @@ These use `ClickHouseTcpClient` and need port 9000. See [Tcp/README.md](Tcp/READ
 - [Tcp_002_PoolTuning.cs](Tcp/Connection/Tcp_002_PoolTuning.cs) - Configure pool size, reuse, and checkout timeouts
 - [Tcp_003_Tls.cs](Tcp/Connection/Tcp_003_Tls.cs) - Configure TLS and certificate validation
 - [Tcp_004_Timeouts.cs](Tcp/Connection/Tcp_004_Timeouts.cs) - Set connection and read timeouts, then cancel a query
+- [Tcp_005_TokenRefresh.cs](Tcp/Connection/Tcp_005_TokenRefresh.cs) - Authenticate with a JWT that a credentials provider refreshes with an OAuth 2.0 refresh-token grant
 
 ### Native Protocol: Advanced
 
@@ -193,7 +195,7 @@ The filter matches the example's class name, which `--list` prints. A class name
 
 ### Connection configuration
 
-Most examples take their live server endpoint from [ExampleConfig.cs](ExampleConfig.cs). The seven
+Most examples take their live server endpoint from [ExampleConfig.cs](ExampleConfig.cs). The nine
 exceptions are listed below. The defaults are what a stock server container exposes on localhost,
 and the examples run with nothing set.
 
@@ -213,13 +215,15 @@ For an endpoint those pieces cannot describe — TLS, a cloud host, an extra set
 CLICKHOUSE_HOST=my-server CLICKHOUSE_PASSWORD=secret dotnet run -- basicusage
 ```
 
-Seven examples do not rely on `ExampleConfig` for the endpoint they connect to. Two keep literal
+Nine examples do not rely on `ExampleConfig` for the endpoint they connect to. Two keep literal
 connection strings because configuration is what they teach:
 [Core_002_ConnectionStringConfiguration.cs](Http/Core/Core_002_ConnectionStringConfiguration.cs) and
-[Core_003_DependencyInjection.cs](Http/Core/Core_003_DependencyInjection.cs). Three use their own
-environment variables: [Auth_001_JwtAuthentication.cs](Http/Core/Auth_001_JwtAuthentication.cs) and
+[Core_003_DependencyInjection.cs](Http/Core/Core_003_DependencyInjection.cs). Five use their own
+environment variables: [Auth_001_JwtAuthentication.cs](Http/Core/Auth_001_JwtAuthentication.cs),
+[Auth_002_TokenRefresh.cs](Http/Core/Auth_002_TokenRefresh.cs) and
 [Tables_003_CreateTableCloud.cs](Http/Tables/Tables_003_CreateTableCloud.cs), plus
-[Tcp_003_Tls.cs](Tcp/Connection/Tcp_003_Tls.cs). Two start their own server:
+[Tcp_003_Tls.cs](Tcp/Connection/Tcp_003_Tls.cs) and
+[Tcp_005_TokenRefresh.cs](Tcp/Connection/Tcp_005_TokenRefresh.cs). Two start their own server:
 [Testing_001_Testcontainers.cs](Http/Testing/Testing_001_Testcontainers.cs) and
 [Tcp_005_Testcontainers.cs](Tcp/Observability/Tcp_005_Testcontainers.cs).
 

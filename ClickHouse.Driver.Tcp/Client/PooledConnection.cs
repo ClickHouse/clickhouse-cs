@@ -90,7 +90,16 @@ internal sealed class PooledConnection
     internal bool CanBeRented(ClickHouseTcpClientOptions options)
         => !IsExpired(options) && Connection.IsReusable;
 
-    /// <summary>Whether either time limit has retired this connection.</summary>
+    /// <summary>
+    /// Whether an operation on this connection failed with a server error that rejects the credentials
+    /// (<see cref="Authentication.CredentialsCache.IsRejection"/>), and the connection authenticated with credentials from the
+    /// <see cref="ClickHouseTcpClientOptions.CredentialsProvider"/>.
+    /// The pool then tells the provider's cache, so the next connection gets new credentials. A server exception
+    /// terminates the connection, so <see cref="CanBeRented"/> is already false.
+    /// </summary>
+    internal bool HasRejectedCredentials => Connection.CredentialsRejected && Connection.Credentials is not null;
+
+    /// <summary>Whether a time limit has retired this connection: its age, its idle time, or the expiry of its credentials.</summary>
     /// <param name="options">The client options holding the age and idle limits.</param>
     /// <returns>True when the connection must be closed rather than reused.</returns>
     /// <remarks>
@@ -99,7 +108,18 @@ internal sealed class PooledConnection
     /// connections to meet the count would hold sockets that serve nobody.
     /// </remarks>
     internal bool IsExpired(ClickHouseTcpClientOptions options)
-        => IsPastLifetime(options.MaxConnectionLifetime) || IsPastIdleTimeout(options.IdleTimeout);
+        => IsPastLifetime(options.MaxConnectionLifetime) || IsPastIdleTimeout(options.IdleTimeout) || IsPastCredentialsExpiry;
+
+    /// <summary>
+    /// Whether the credentials this connection authenticated with have expired: they came from the
+    /// <see cref="ClickHouseTcpClientOptions.CredentialsProvider"/> with a known expiry, and it is 10 seconds away or
+    /// less. Read from the wall clock of the pool's <see cref="TimeProvider"/>, because an expiry is a point in time.
+    /// </summary>
+    /// <remarks>
+    /// The server can remove the user of a JWT after the token expires, so a connection past this point can fail at
+    /// its next operation. Like the other limits, it is read between operations only.
+    /// </remarks>
+    internal bool IsPastCredentialsExpiry => Connection.Credentials?.IsExpired(time.GetUtcNow()) == true;
 
     /// <summary>Whether the connection is too old to hand out.</summary>
     /// <param name="maxLifetime">The configured age limit, or <see cref="TimeSpan.Zero"/> for none.</param>

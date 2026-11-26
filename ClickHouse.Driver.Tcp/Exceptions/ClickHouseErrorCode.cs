@@ -118,7 +118,10 @@ public enum ClickHouseErrorCode
     /// <summary>The password is wrong.</summary>
     WrongPassword = 193,
 
-    /// <summary>The user requires a password and none was given.</summary>
+    /// <summary>
+    /// The user requires a password and none was given. The server also returns it for wrong HTTP Basic credentials
+    /// of the user <c>default</c>.
+    /// </summary>
     RequiredPassword = 194,
 
     /// <summary>The user may not connect from this address.</summary>

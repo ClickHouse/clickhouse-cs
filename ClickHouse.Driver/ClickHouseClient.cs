@@ -16,6 +16,7 @@ using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
+using ClickHouse.Driver.Authentication;
 using ClickHouse.Driver.Compression;
 using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Copy.Serializer;
@@ -67,6 +68,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     private readonly Uri serverUri;
     private readonly ILoggerFactory loggerFactory;
     private readonly UserAgentProvider userAgentProvider;
+    private readonly CredentialsCache credentialsCache;
 
     private static readonly RecyclableMemoryStreamManager CommonMemoryStreamManager = new(new RecyclableMemoryStreamManager.Options
     {
@@ -152,6 +154,16 @@ public sealed class ClickHouseClient : IClickHouseClient
         httpClientFactory = CreateHttpClientFactory(settings);
         schemaResolver = new SchemaResolver(this);
         userAgentProvider = new UserAgentProvider(Settings.ApplicationInfo);
+
+        if (Settings.CredentialsProvider != null)
+        {
+            credentialsCache = new CredentialsCache(
+                Settings.CredentialsProvider,
+                ex => GetLogger(ClickHouseLogCategories.Connection)?.LogWarning(
+                    ex,
+                    "The credentials provider failed to refresh the credentials. The cached credentials stay in use until they expire."));
+            disposables.Add(credentialsCache);
+        }
     }
 
     /// <summary>
@@ -199,11 +211,19 @@ public sealed class ClickHouseClient : IClickHouseClient
             var pingUri = new UriBuilder(serverUri) { Path = serverUri.AbsolutePath.TrimEnd('/') + "/ping" }.Uri;
             using var request = new HttpRequestMessage(HttpMethod.Get, pingUri);
             AddDefaultHttpHeaders(request.Headers, queryOptions);
+            var credentials = await ApplyAuthorizationAsync(request.Headers, queryOptions, cancellationToken).ConfigureAwait(false);
 
             using var response = await SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
 
-            // No response-decompression seam here on purpose: /ping is judged purely by its status code
-            // and its body is never read, so a transport-compressed body would never be misinterpreted.
+            // /ping is judged by its status code. ClickHouse answers /ping without checking credentials, but a
+            // proxy in front of it can reject them: the error body is read only to see whether it rejected
+            // credentials from the provider. The error-body reader decodes a compressed body.
+            if (credentials != null && !response.IsSuccessStatusCode)
+            {
+                var error = await CreateServerExceptionAsync(response, query: null).ConfigureAwait(false);
+                InvalidateIfRejected(response, error, credentials);
+            }
+
             return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
@@ -335,10 +355,12 @@ public sealed class ClickHouseClient : IClickHouseClient
         HttpResponseMessage response = null;
         try
         {
+            var credentials = await ApplyAuthorizationAsync(postMessage.Headers, options, cancellationToken).ConfigureAwait(false);
+
             response = await SendAsync(postMessage, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
 
-            var handled = await HandleError(response, sql, activity).ConfigureAwait(false);
+            var handled = await HandleError(response, sql, activity, credentials).ConfigureAwait(false);
             var result = new QueryResult(handled);
 
             if (isDebugLoggingEnabled)
@@ -970,6 +992,8 @@ public sealed class ClickHouseClient : IClickHouseClient
         // so it advertises no codec rather than one the caller never asked for and nothing would decode.
         AddDefaultHttpHeaders(postMessage.Headers, queryOptions, rawBody: true);
 
+        // The message owns the content from here: disposing the message disposes the content (and the
+        // caller's stream) once, also when the credentials provider below throws.
         postMessage.Content = content;
         postMessage.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         if (!string.IsNullOrEmpty(contentEncoding))
@@ -982,10 +1006,12 @@ public sealed class ClickHouseClient : IClickHouseClient
         HttpResponseMessage response = null;
         try
         {
+            var credentials = await ApplyAuthorizationAsync(postMessage.Headers, queryOptions, token).ConfigureAwait(false);
+
             response = await SendAsync(postMessage, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
             GetLogger(ClickHouseLogCategories.Transport)?.LogDebug("Streamed request to {Endpoint} received response {StatusCode}.", serverUri, response.StatusCode);
 
-            return await HandleError(response, sql, activity).ConfigureAwait(false);
+            return await HandleError(response, sql, activity, credentials).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -1090,21 +1116,12 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// explicitly still applies, to either kind of request — asking for a codec on a verbatim body is how
     /// a caller exports compressed bytes on purpose.
     /// </summary>
+    /// <remarks>
+    /// The <c>Authorization</c> header is not set here: <see cref="ApplyAuthorizationAsync"/> sets it,
+    /// because a credentials provider is asynchronous.
+    /// </remarks>
     internal void AddDefaultHttpHeaders(HttpRequestHeaders headers, QueryOptions queryOverride = null, bool rawBody = false)
     {
-        // Priority: override > connection-level bearer token > basic auth
-        var bearerToken = queryOverride?.BearerToken ?? Settings.BearerToken;
-        if (!string.IsNullOrEmpty(bearerToken))
-        {
-            headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
-        }
-        else
-        {
-            headers.Authorization = new AuthenticationHeaderValue(
-                "Basic",
-                Convert.ToBase64String(Encoding.UTF8.GetBytes($"{Settings.Username}:{Settings.Password}")));
-        }
-
         headers.UserAgent.Add(userAgentProvider.DriverProductInfo);
         headers.UserAgent.Add(userAgentProvider.MetadataProductInfo);
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -1141,6 +1158,65 @@ public sealed class ClickHouseClient : IClickHouseClient
         // default codecs, and any value injected via CustomHeaders — and applies to the raw path too:
         // there the caller has asked for the encoding themselves, so honouring it is not a silent change.
         ApplyAcceptEncodingOverride(headers, queryOverride?.AcceptEncoding);
+    }
+
+    /// <summary>
+    /// Sets the <c>Authorization</c> header. Precedence: a non-empty per-query
+    /// <see cref="QueryOptions.BearerToken"/>, then the credentials provider, then
+    /// <see cref="ClickHouseClientSettings.BearerToken"/>, then <see cref="ClickHouseClientSettings.Username"/>
+    /// and <see cref="ClickHouseClientSettings.Password"/>. An empty per-query token counts as not set.
+    /// </summary>
+    /// <returns>
+    /// The credentials from the provider that the header carries, or <see langword="null"/> when the
+    /// header carries static credentials.
+    /// </returns>
+    internal async ValueTask<ClickHouseCredentials> ApplyAuthorizationAsync(HttpRequestHeaders headers, QueryOptions queryOverride, CancellationToken cancellationToken)
+    {
+        var perQueryToken = queryOverride?.BearerToken;
+        if (!string.IsNullOrEmpty(perQueryToken))
+        {
+            headers.Authorization = new AuthenticationHeaderValue("Bearer", perQueryToken);
+            return null;
+        }
+
+        if (credentialsCache != null)
+        {
+            var credentials = await credentialsCache.GetAsync(cancellationToken).ConfigureAwait(false);
+            if (credentials != null)
+            {
+                headers.Authorization = credentials.IsBearer
+                    ? new AuthenticationHeaderValue("Bearer", credentials.BearerToken)
+                    : CreateBasicAuthorization(credentials.Username, credentials.Password);
+                return credentials;
+            }
+        }
+
+        headers.Authorization = !string.IsNullOrEmpty(Settings.BearerToken)
+            ? new AuthenticationHeaderValue("Bearer", Settings.BearerToken)
+            : CreateBasicAuthorization(Settings.Username, Settings.Password);
+        return null;
+    }
+
+    private static AuthenticationHeaderValue CreateBasicAuthorization(string username, string password)
+        => new("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}")));
+
+    /// <summary>
+    /// Invalidates <paramref name="credentials"/> from the provider when the server rejected them
+    /// (<see cref="CredentialsCache.IsRejection"/>): the code in the <c>X-ClickHouse-Exception-Code</c> header
+    /// or, when there is no such header, in the error body. The next request gets new credentials.
+    /// </summary>
+    private void InvalidateIfRejected(HttpResponseMessage response, ClickHouseServerException error, ClickHouseCredentials credentials)
+    {
+        var code = TryGetExceptionCodeHeader(response) ?? error.ErrorCode;
+        if (!CredentialsCache.IsRejection(code))
+        {
+            return;
+        }
+
+        credentialsCache.Invalidate(credentials);
+        GetLogger(ClickHouseLogCategories.Connection)?.LogDebug(
+            "The server rejected the credentials from the credentials provider (error {ErrorCode}). The next request gets new credentials.",
+            code);
     }
 
     /// <summary>
@@ -1212,7 +1288,13 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// <summary>
     /// Handles HTTP response errors.
     /// </summary>
-    private static async Task<HttpResponseMessage> HandleError(HttpResponseMessage response, string query, Activity activity)
+    /// <param name="credentials">
+    /// The credentials from the provider that the request carried, or <see langword="null"/>. When the server
+    /// rejected them, they are invalidated before the server error is thrown. The request is not sent again:
+    /// the server can reject credentials after the query has written data (for example a materialized view
+    /// that reads from <c>remote()</c>), so a resend can write the data twice.
+    /// </param>
+    private async Task<HttpResponseMessage> HandleError(HttpResponseMessage response, string query, Activity activity, ClickHouseCredentials credentials = null)
     {
         if (response.IsSuccessStatusCode)
         {
@@ -1220,12 +1302,25 @@ public sealed class ClickHouseClient : IClickHouseClient
             return response;
         }
 
-        var error = await ReadErrorBodyAsync(response).ConfigureAwait(false);
-        var ex = string.IsNullOrWhiteSpace(error)
-            ? CreateEmptyBodyException(response, query)
-            : ClickHouseServerException.FromServerResponse(error, query);
+        var ex = await CreateServerExceptionAsync(response, query).ConfigureAwait(false);
+        if (credentials != null)
+        {
+            InvalidateIfRejected(response, ex, credentials);
+        }
+
         activity?.SetException(ex);
         throw ex;
+    }
+
+    /// <summary>
+    /// Reads the error body of a non-success response and builds its exception.
+    /// </summary>
+    private static async Task<ClickHouseServerException> CreateServerExceptionAsync(HttpResponseMessage response, string query)
+    {
+        var error = await ReadErrorBodyAsync(response).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(error)
+            ? CreateEmptyBodyException(response, query)
+            : ClickHouseServerException.FromServerResponse(error, query);
     }
 
     /// <summary>

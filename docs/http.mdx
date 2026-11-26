@@ -90,6 +90,7 @@ Below is a full list of all the settings, their default values, and their effect
 | Username | `string` | `"default"` | `Username` | Authentication username |
 | Password | `string` | `""` | `Password` | Authentication password |
 | BearerToken | `string` | `null` | `BearerToken` | Token (for example a JWT) sent as `Authorization: Bearer <token>` instead of `Username`/`Password`; see [JWT authentication](#jwt-authentication) |
+| CredentialsProvider | `IClickHouseCredentialsProvider` | `null` | — | Gives the credentials of each request, for tokens that expire and passwords that rotate; see [Token refresh](#jwt-token-refresh) |
 | Database | `string` | `""` | `Database` | Default database; empty uses server/user default |
 | Protocol | `string` | `"http"` | `Protocol` | Connection protocol: `"http"` or `"https"` |
 | Path | `string` | `null` | `Path` | URL path for reverse proxy scenarios (e.g., `/clickhouse`) |
@@ -162,15 +163,83 @@ using var command = connection.CreateCommand();
 command.BearerToken = jwt;
 ```
 
-A query or command token has priority over the client token. If no token is set, the client uses `Username` and `Password`.
+The client takes the credentials of a request from the first of these that is set:
+
+1. The token of the query or command. An empty string counts as not set.
+2. The credentials from `ClickHouseClientSettings.CredentialsProvider` (see [Token refresh](#jwt-token-refresh)).
+3. `ClickHouseClientSettings.BearerToken`.
+4. `Username` and `Password`.
 
 `ClickHouseConnection.ConnectionString` and `ClickHouseDataSource.ConnectionString` contain the token in clear text, as they contain `Password`.
 
 <Note>
-A JWT expires at the time in its `exp` claim. A client keeps the `ClickHouseClientSettings.BearerToken` that it was created with. To use a new token before the current one expires, pass it with each request (`QueryOptions.BearerToken` or `ClickHouseCommand.BearerToken`), or create a new client. If you create clients often, share one `HttpClient` or `IHttpClientFactory` between them (see [HTTP client configuration](#http-client-configuration)), so that the connection pool is kept.
+A JWT expires at the time in its `exp` claim. A client keeps the `ClickHouseClientSettings.BearerToken` that it was created with. To use new tokens before the current one expires, set a `CredentialsProvider` (see [Token refresh](#jwt-token-refresh)).
 
 JWT authentication is intended for user-to-service access. For service-to-service access, use credentials that do not expire.
 </Note>
+
+#### Token refresh {#jwt-token-refresh}
+
+Set `ClickHouseClientSettings.CredentialsProvider` to give the client new credentials when they expire or when the server rejects them. The provider is an object that implements the interface `IClickHouseCredentialsProvider`. Its method `GetCredentialsAsync(request, cancellationToken)` returns `ClickHouseCredentials.CreateBearer(token, expiresAt)` or `ClickHouseCredentials.CreateBasic(username, password)`. It can also return `null`: the client then uses `BearerToken` or `Username` and `Password` of the settings. The provider has no connection string key.
+
+```csharp
+var settings = new ClickHouseClientSettings("Host=your-service.clickhouse.cloud;Protocol=https")
+{
+    CredentialsProvider = new IdentityProviderCredentials(),
+};
+using var client = new ClickHouseClient(settings);
+
+sealed class IdentityProviderCredentials : IClickHouseCredentialsProvider
+{
+    public async ValueTask<ClickHouseCredentials> GetCredentialsAsync(
+        ClickHouseCredentialsRequest request, CancellationToken cancellationToken)
+    {
+        // GetTokenAsync is your code (a method of this class): it gets a JWT and its expiry from your identity provider.
+        // request.Reason is Initial, Expiring or Rejected.
+        (string accessToken, DateTimeOffset expiresAt) = await GetTokenAsync(request.Reason, cancellationToken);
+        return ClickHouseCredentials.CreateBearer(accessToken, expiresAt);
+    }
+}
+```
+
+With Azure.Identity, call `TokenCredential.GetTokenAsync` in `GetCredentialsAsync` and return `ClickHouseCredentials.CreateBearer(accessToken.Token, accessToken.ExpiresOn)`. The [token refresh example](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Http/Core/Auth_002_TokenRefresh.cs) does an OAuth 2.0 refresh-token grant with `HttpClient`.
+
+When the client calls the provider:
+
+- **Credentials with a known expiry are cached.** The expiry is `expiresAt`. If you do not give it, the client reads the `exp` claim of a JWT (it does not check the signature). From 60 seconds before the expiry (or half the lifetime, if that is shorter), the client uses the cached credentials and gets new ones in the background (`Reason` is `Expiring`). From 10 seconds before the expiry, requests wait for the new credentials.
+- **Credentials without a known expiry are not cached.** The client calls the provider for each request. This suits a password that rotates, and a provider that has its own cache.
+- **At most one call at a time.** Requests that need new credentials wait for the same call. The client gives the provider a token that it cancels when the client is disposed. A request that is cancelled stops waiting, but does not cancel the call.
+- **After a rejection.** When the server rejects credentials from the provider (error 516, `AUTHENTICATION_FAILED`, or error 194, `REQUIRED_PASSWORD`, which the server returns for a wrong password of the user `default` or of an empty user name), the request fails with that server error. The client does not send the request again (see [Retrying after an authentication error](#jwt-retry-after-rejection)). It drops the rejected credentials, unless newer credentials from the provider already replaced them, and the next provider call has `Reason` set to `Rejected`, also when the credentials have no known expiry. A provider that has its own cache must not return the cached value for this reason. A rejected per-query token, `BearerToken`, or `Username` and `Password` stays in use.
+
+When the provider fails:
+
+- An exception from the provider goes to the operation that waits for the credentials. `PingAsync` returns `false`.
+- When a background refresh fails, the client logs a warning (category `ClickHouse.Driver.Connection`) and uses the cached credentials until they expire.
+- The client does not limit how long a call takes. Give the provider its own timeout.
+
+The client logs no token, and the OpenTelemetry `db.user` tag shows `Username` of the settings.
+
+With ADO.NET, use `new ClickHouseDataSource(settings)` or `new ClickHouseConnection(client)`: their connections share one client, and so one cache of credentials. `new ClickHouseConnection(settings)` makes a client for each connection, so each connection calls the provider and caches the credentials on its own. A connection string has no provider, so a connection made from `ClickHouseConnection.ConnectionString` uses the static credentials.
+
+#### Retrying after an authentication error {#jwt-retry-after-rejection}
+
+The client never sends a request again after an authentication error. The server can return error 516 after a query has written data: for example, when a materialized view of the table reads from `remote()` with credentials that the other server rejects. A second send would write the data twice. Retry in your code, for the operations that are safe to repeat. The next call gets new credentials from the provider:
+
+```csharp
+try
+{
+    return await client.ExecuteScalarAsync("SELECT count() FROM events");
+}
+catch (ClickHouseServerException ex) when (ex.ErrorCode is 516 or 194)
+{
+    // The client dropped the rejected credentials: this call asks the provider for new ones.
+    return await client.ExecuteScalarAsync("SELECT count() FROM events");
+}
+```
+
+- **A read** (`SELECT`) is safe to repeat.
+- **An insert** is safe to repeat only when the server deduplicates it in every table that it writes to, including the target table of each materialized view. Each of these tables needs a deduplication window, for example the `non_replicated_deduplication_window` setting of a `MergeTree` table. On a table without a window, the `insert_deduplication_token` setting has no effect. An `INSERT ... SELECT` also needs the same `insert_deduplication_token` in both sends. A second send with the same token runs the materialized views again, also when the table of the insert skips the rows. A view target without a window can then store the rows twice.
+- **Other writes** (`ALTER`, `DELETE`, `CREATE`, `DROP`, ...): check that running the statement twice gives the same result before you retry it.
 
 ### HTTP client configuration {#http-client-configuration}
 
@@ -232,7 +301,7 @@ Host=localhost;set_max_threads=4;set_readonly=1;set_max_memory_usage=10000000000
 | CustomHeaders | `IDictionary<string, string>` | Additional HTTP headers for this query |
 | UseSession | `bool?` | Override session behavior for this query |
 | SessionId | `string` | Session ID for this query (requires `UseSession = true`) |
-| BearerToken | `string` | Override authentication token for this query |
+| BearerToken | `string` | Override authentication token for this query; has priority over the client credentials, and an empty string counts as not set |
 | ParameterTypeResolver | `IParameterTypeResolver` | Override client-level resolver for `@`-style parameter type mapping; see [Custom parameter type mapping](#parameter-type-mapping) |
 | ParameterFormatter | `IParameterFormatter` | Override client-level formatter for `@`-style parameter value serialization; see [Custom parameter value formatting](#parameter-value-formatting) |
 | ReadValueConverter | `IReadValueConverter` | Override client-level transform applied to values returned by the data reader; see [Custom read value conversion](#read-value-conversion) |

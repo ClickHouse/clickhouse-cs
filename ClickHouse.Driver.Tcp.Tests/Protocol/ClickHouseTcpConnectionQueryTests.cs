@@ -83,6 +83,19 @@ public class ClickHouseTcpConnectionQueryTests
         });
     }
 
+    [TestCase(516, true, TestName = "QueryAsync_ServerReportsAuthenticationFailed_RecordsRejectedCredentials")]
+    [TestCase(194, true, TestName = "QueryAsync_ServerReportsRequiredPassword_RecordsRejectedCredentials")]
+    [TestCase(60, false, TestName = "QueryAsync_ServerReportsAnotherError_DoesNotRecordRejectedCredentials")]
+    public async Task QueryAsync_ServerException_CredentialsRejected(int code, bool expected)
+    {
+        byte[] script = Concat(await ServerHelloBytesAsync(54476), await ExceptionPacketAsync(code, "failed"));
+        using var connection = await ConnectedAsync(script);
+
+        Assert.ThrowsAsync<ClickHouseTcpServerException>(async () => await DrainAsync(connection));
+
+        Assert.That(connection.CredentialsRejected, Is.EqualTo(expected));
+    }
+
     [Test]
     public async Task QueryAsync_ServerExceptionMidStream_ThrowsAndTerminatesConnection()
     {

@@ -330,8 +330,9 @@ internal sealed class ConnectionPool : IConnectionSource
             }
         }
 
-        // The factory owns what outlives a single connection — today the TLS certificate authorities. Established
-        // connections no longer read it, so a timed-out lease does not delay this release. A dial that ignored the
+        // The factory owns what outlives a single connection: the TLS certificate authorities and the credentials
+        // cache. Established connections do not need it (a returned one can still tell the disposed cache about
+        // rejected credentials, which is harmless), so a timed-out lease does not delay this release. A dial that ignored the
         // shutdown token does: it is counted separately and the last such dial performs the release as it leaves.
         RequestFactoryDisposal();
 
@@ -354,8 +355,9 @@ internal sealed class ConnectionPool : IConnectionSource
 
         // Nothing expires and no floor to hold, so there is no work for a sweep and no timer is created. That
         // matters beyond the wasted wake-ups: a live timer holds a reference to the pool, so a client that is
-        // never disposed cannot be collected while one is running.
-        if (shortestLimit == TimeSpan.Zero && options.MinPoolSize == 0)
+        // never disposed cannot be collected while one is running. Credentials from a provider can expire, so a
+        // client with one always sweeps.
+        if (shortestLimit == TimeSpan.Zero && options.MinPoolSize == 0 && options.CredentialsProvider is null)
         {
             return TimeSpan.Zero;
         }
@@ -367,7 +369,8 @@ internal sealed class ConnectionPool : IConnectionSource
             return configured;
         }
 
-        // Nothing expires, but a floor has to be held, so there is no limit to take a fraction of.
+        // No time limit, but a floor to hold or credentials that can expire, so there is no limit to take a
+        // fraction of.
         if (shortestLimit == TimeSpan.Zero)
         {
             return MaxSweepInterval;
@@ -434,7 +437,8 @@ internal sealed class ConnectionPool : IConnectionSource
     }
 
     /// <summary>
-    /// Closes every idle connection that has expired, by lifetime or by idle timeout, whatever the count, then tops
+    /// Closes every idle connection that has expired, by lifetime, idle timeout or the expiry of its credentials,
+    /// whatever the count, then tops
     /// the pool back up to <see cref="ClickHouseTcpClientOptions.MinPoolSize"/> in the background. Runs on the sweep
     /// timer, and is called directly by tests. Only one sweep runs at a time: a call made while another is in
     /// progress returns without doing anything.
@@ -831,6 +835,13 @@ internal sealed class ConnectionPool : IConnectionSource
             // here, the connection having just carried an operation, but it is part of the one shared predicate
             // rather than a case this path has to remember to leave out.
             bool reusable = connection.CanBeRented(options);
+            bool rejected = connection.HasRejectedCredentials;
+            if (rejected)
+            {
+                // Before the permit is released, so a waiter woken by the release dials with new credentials. The
+                // operation that failed is not run again.
+                connection.Connection.Credentials.Reject();
+            }
 
             bool pooled = false;
             lock (gate)
@@ -854,7 +865,14 @@ internal sealed class ConnectionPool : IConnectionSource
                 // Reusable but not pooled means disposal got there first, and the drain line already reports that.
                 if (!reusable && logger is not null)
                 {
-                    PoolLog.Discarded(logger, connection.UsageCount);
+                    if (rejected)
+                    {
+                        PoolLog.CredentialsRejected(logger, connection.UsageCount);
+                    }
+                    else
+                    {
+                        PoolLog.Discarded(logger, connection.UsageCount);
+                    }
                 }
 
                 connection.Close();

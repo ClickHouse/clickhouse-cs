@@ -4,6 +4,8 @@ ClickHouse.Driver.InsertOptions.Compressor.get -> ClickHouse.Driver.Compression.
 ClickHouse.Driver.InsertOptions.Compressor.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.BearerToken.get -> string
 ClickHouse.Driver.ADO.ClickHouseClientSettings.BearerToken.init -> void
+ClickHouse.Driver.ADO.ClickHouseClientSettings.CredentialsProvider.get -> ClickHouse.Driver.IClickHouseCredentialsProvider
+ClickHouse.Driver.ADO.ClickHouseClientSettings.CredentialsProvider.init -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings() -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings(ClickHouse.Driver.ADO.ClickHouseClientSettings other) -> void
 ClickHouse.Driver.ADO.ClickHouseClientSettings.ClickHouseClientSettings(ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder builder) -> void

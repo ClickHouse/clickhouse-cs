@@ -523,4 +523,17 @@ public class ClickHouseTcpConnectionStringBuilderTests
             Assert.That(builder.ToOptions().ResolvedPort, Is.EqualTo(9440));
         });
     }
+
+    [TestCase("Host=h;BearerToken=abc.def.ghi", "abc.def.ghi", TestName = "ToOptions_BearerTokenKey_SetsBearerToken")]
+    [TestCase("Host=h", null, TestName = "ToOptions_NoBearerTokenKey_LeavesBearerTokenNull")]
+    public void ToOptions_BearerToken(string connectionString, string expected)
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder(connectionString);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.BearerToken, Is.EqualTo(expected));
+            Assert.That(builder.ToOptions().BearerToken, Is.EqualTo(expected));
+        });
+    }
 }

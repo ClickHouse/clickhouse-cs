@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using ClickHouse.Driver.Compression;
+using ClickHouse.Driver.Tcp.Tests.Utilities;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClickHouse.Driver.Tcp.Tests.Client;
@@ -464,6 +465,8 @@ public class ClickHouseTcpClientOptionsTests
             Port = 1234,
             Username = "copy-user",
             Password = "copy-password",
+            BearerToken = "copy-token",
+            CredentialsProvider = new FuncCredentialsProvider((_, _) => default),
             Database = "copy-db",
             QuotaKey = "copy-quota",
             UseTls = true,
@@ -672,6 +675,50 @@ public class ClickHouseTcpClientOptionsTests
             Assert.That(handshake.Password, Is.EqualTo("secret"));
             Assert.That(handshake.Database, Is.EqualTo("analytics"));
             Assert.That(handshake.QuotaKey, Is.EqualTo("quota-1"));
+        });
+    }
+
+    // Precedence: credentials from the provider, then BearerToken (null or empty is not set), then Username and Password.
+    private static IEnumerable<TestCaseData> HandshakeCredentialCases()
+    {
+        const string jwt = " JWT AUTHENTICATION ";
+        yield return new TestCaseData(null, null, "alice", "secret").SetName("ToHandshakeParameters_NoBearerToken_SendsUsernameAndPassword");
+        yield return new TestCaseData(string.Empty, null, "alice", "secret").SetName("ToHandshakeParameters_EmptyBearerToken_SendsUsernameAndPassword");
+        yield return new TestCaseData("static-token", null, jwt, "static-token").SetName("ToHandshakeParameters_BearerToken_SendsTheJwtMarkerAndTheToken");
+        yield return new TestCaseData("static-token", ClickHouseCredentials.CreateBearer("provided-token"), jwt, "provided-token").SetName("ToHandshakeParameters_BearerFromTheProvider_SendsTheProvidersToken");
+        yield return new TestCaseData("static-token", ClickHouseCredentials.CreateBasic("bob", "pw"), "bob", "pw").SetName("ToHandshakeParameters_BasicFromTheProvider_SendsTheProvidersUserAndPassword");
+    }
+
+    [TestCaseSource(nameof(HandshakeCredentialCases))]
+    public void ToHandshakeParameters_Credentials(string bearerToken, ClickHouseCredentials provided, string expectedUsername, string expectedPassword)
+    {
+        var options = new ClickHouseTcpClientOptions
+        {
+            Username = "alice",
+            Password = "secret",
+            BearerToken = bearerToken,
+        };
+
+        var handshake = options.ToHandshakeParameters(provided);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(handshake.Username, Is.EqualTo(expectedUsername));
+            Assert.That(handshake.Password, Is.EqualTo(expectedPassword));
+        });
+    }
+
+    [Test]
+    public void ToString_WhenABearerTokenIsSet_DoesNotIncludeIt()
+    {
+        var options = new ClickHouseTcpClientOptions { Host = "example.invalid", BearerToken = "distinctive-token" };
+
+        var text = options.ToString();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Not.Contain("distinctive-token"));
+            Assert.That(text, Does.Not.Contain(nameof(ClickHouseTcpClientOptions.BearerToken)));
         });
     }
 }

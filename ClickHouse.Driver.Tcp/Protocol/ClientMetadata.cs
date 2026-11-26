@@ -21,7 +21,7 @@ internal sealed class ClientMetadata
     /// <summary>Client patch version.</summary>
     public int VersionPatch { get; init; }
 
-    /// <summary>Username, echoed as the initiating user in ClientInfo.</summary>
+    /// <summary>Username, echoed as the initiating user in ClientInfo. Empty for JWT authentication.</summary>
     required public string Username { get; init; }
 
     /// <summary>Keyed-quota resource key, sent with every query. Empty when the client uses no keyed quota.</summary>
@@ -35,7 +35,9 @@ internal sealed class ClientMetadata
         VersionMajor = parameters.VersionMajor,
         VersionMinor = parameters.VersionMinor,
         VersionPatch = parameters.VersionPatch,
-        Username = parameters.Username,
+        // For JWT authentication the Username field holds a marker, not a user name. clickhouse-go sends an
+        // empty initial user for every initial query.
+        Username = parameters.IsJwt ? string.Empty : parameters.Username,
         QuotaKey = parameters.QuotaKey,
     };
 }

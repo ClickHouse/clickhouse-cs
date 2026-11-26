@@ -55,7 +55,8 @@ We have a wide range of [examples](./examples), aiming to cover typical scenario
 | ADO.NET and ORMs (Dapper, EF Core, linq2db) | Yes | No |
 | CSV, JSONEachRow, Parquet, and raw streams | Yes | No |
 | `JSON` performance | Better: binary transfer | Text transfer only |
-| Bearer authentication and custom HTTP headers | Yes | No |
+| JWT authentication and token refresh | Yes | Yes (per connection) |
+| A per-query bearer token and custom HTTP headers | Yes | No |
 | Columnar block reads | No | Yes |
 | Progress, profile, and server log callbacks | No | Yes |
 | W3C trace context propagation to ClickHouse | No | Yes |
