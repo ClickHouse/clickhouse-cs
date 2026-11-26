@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -38,9 +37,6 @@ internal sealed class TimeColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(int), typeof(TimeSpan), typeof(TimeOnly) };
-
-    /// <inheritdoc/>
-    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(int), typeof(TimeSpan), typeof(TimeOnly) };
 
     /// <inheritdoc/>
     public object NullPlaceholder => 0;
@@ -86,33 +82,6 @@ internal sealed class TimeColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
         => TimeColumn.ReadAsync(reader, columnName, columnType, rowCount, cancellationToken);
-
-    /// <inheritdoc/>
-    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
-    {
-        ColumnValueProjections.RequireSourceType(value, typeof(int), TypeName);
-
-        if (targetType == typeof(int))
-        {
-            projected = value;
-            return true;
-        }
-
-        if (targetType == typeof(TimeSpan))
-        {
-            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.TimeToTimeSpan), value);
-            return true;
-        }
-
-        if (targetType == typeof(TimeOnly))
-        {
-            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.TimeToTimeOnly), value);
-            return true;
-        }
-
-        projected = null;
-        return false;
-    }
 
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => column is IColumn<int> or IColumn<TimeSpan> or IColumn<TimeOnly>;

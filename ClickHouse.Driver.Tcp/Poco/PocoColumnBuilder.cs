@@ -144,7 +144,7 @@ internal static class PocoColumnBuilderFactory
         Derivation derived = derivation.Derive(column.TypeName, in context, member.MemberType, ConversionDirection.Write);
         if (!derived.Succeeded)
         {
-            throw PocoWriteErrors.NotWritableAs(column, codec, member, typeof(T));
+            throw PocoWriteErrors.NotWritableAs(column, derivation.SuggestedTypes(column.TypeName, in context, ConversionDirection.Write), member, typeof(T));
         }
 
         PocoGatherTier tier = SelectTier(forcedTier);

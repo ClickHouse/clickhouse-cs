@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using ClickHouse.Driver.Tcp.Protocol;
@@ -33,9 +32,6 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
 
     /// <inheritdoc/>
     public IReadOnlyList<Type> WritableElementTypes { get; } = new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime) };
-
-    /// <inheritdoc/>
-    public IReadOnlyList<Type> ReadableElementTypes { get; } = new[] { typeof(uint), typeof(DateTimeOffset), typeof(DateTime) };
 
     /// <inheritdoc/>
     public object NullPlaceholder => 0u;
@@ -93,34 +89,6 @@ internal sealed class DateTimeColumnCodec : IColumnCodec
     /// <inheritdoc/>
     public ValueTask<IColumn> ReadColumnAsync(ClickHouseBinaryReader reader, string columnName, string columnType, int rowCount, CancellationToken cancellationToken)
         => DateTimeColumn.ReadAsync(reader, columnName, columnType, timeZone, rowCount, cancellationToken);
-
-    /// <inheritdoc/>
-    public bool TryProjectRead(Expression value, Type targetType, out Expression projected)
-    {
-        ColumnValueProjections.RequireSourceType(value, typeof(uint), TypeName);
-
-        if (targetType == typeof(uint))
-        {
-            projected = value;
-            return true;
-        }
-
-        // Defer timezone resolution until a calendar row is projected.
-        if (targetType == typeof(DateTimeOffset))
-        {
-            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTimeToOffset), value, timeZone);
-            return true;
-        }
-
-        if (targetType == typeof(DateTime))
-        {
-            projected = ColumnValueProjections.Call(nameof(ColumnValueProjections.DateTimeToDateTime), value, timeZone);
-            return true;
-        }
-
-        projected = null;
-        return false;
-    }
 
     /// <inheritdoc/>
     public bool CanWrite(IColumn column) => column is IColumn<uint> or IColumn<DateTimeOffset> or IColumn<DateTime>;
