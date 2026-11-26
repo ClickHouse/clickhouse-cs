@@ -1393,12 +1393,18 @@ Instead, always use `ClickHouseDataSource` or share a single `ClickHouseClient` 
 
 ```csharp
 await using var connection = await dataSource.OpenConnectionAsync();
-await connection.GetClient().InsertBinaryAsync("events", columns, rows);
+connection.ChangeDatabase("analytics");
+
+// The data source owns this client: do not dispose it.
+var client = connection.GetClient();
+
+// The client does not know about ChangeDatabase, so pass the database of the connection.
+await client.InsertBinaryAsync("events", columns, rows, new InsertOptions { Database = connection.Database });
 ```
 
 - Do not dispose the client: the connection or the data source owns it.
-- A change to `Settings` or `ConnectionString` gives the connection a new client. Call `GetClient()` again after such a change.
-- The client uses the database of its settings, not a database selected with `ChangeDatabase`. To use that database, pass it in `InsertOptions.Database` or `QueryOptions.Database`.
+- A change to `Settings` or `ConnectionString` gives the connection a new client. Call `GetClient()` again after such a change, and do not keep the client from before it.
+- The client uses the database of its settings, not a database selected with `ChangeDatabase`. To use that database, pass `connection.Database` in `InsertOptions.Database` or `QueryOptions.Database`, as above.
 
 A connection that you create from a connection string or from `ClickHouseClientSettings` owns its client. It disposes the client when you dispose the connection, with `using`, `await using` or `DbConnection.Dispose()`.
 
