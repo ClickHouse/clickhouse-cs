@@ -184,6 +184,42 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     public override void Prepare() { /* ClickHouse has no notion of prepared statements */ }
 
     /// <summary>
+    /// Executes the command and returns a typed <see cref="ClickHouseDataReader"/>.
+    /// </summary>
+    /// <param name="behavior">The command behavior.</param>
+    /// <returns>A new <see cref="ClickHouseDataReader"/> instance.</returns>
+    public new ClickHouseDataReader ExecuteReader(CommandBehavior behavior = CommandBehavior.Default)
+        => (ClickHouseDataReader)ExecuteDbDataReader(behavior);
+
+    /// <summary>
+    /// Executes the command asynchronously and returns a typed <see cref="ClickHouseDataReader"/>.
+    /// </summary>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
+    public new async Task<ClickHouseDataReader> ExecuteReaderAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var reader = await ExecuteDbDataReaderAsync(CommandBehavior.Default, cancellationToken)
+            .ConfigureAwait(false);
+        return (ClickHouseDataReader)reader;
+    }
+
+    /// <summary>
+    /// Executes the command asynchronously with the specified behavior and returns a typed <see cref="ClickHouseDataReader"/>.
+    /// </summary>
+    /// <param name="behavior">The command behavior.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
+    public new async Task<ClickHouseDataReader> ExecuteReaderAsync(
+        CommandBehavior behavior,
+        CancellationToken cancellationToken = default)
+    {
+        var reader = await ExecuteDbDataReaderAsync(behavior, cancellationToken)
+            .ConfigureAwait(false);
+        return (ClickHouseDataReader)reader;
+    }
+
+    /// <summary>
     /// Creates a new <see cref="ClickHouseDbParameter"/> for this command.
     /// </summary>
     /// <returns>A new parameter instance.</returns>
