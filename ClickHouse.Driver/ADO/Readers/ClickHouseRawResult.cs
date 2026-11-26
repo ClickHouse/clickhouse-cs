@@ -29,12 +29,15 @@ namespace ClickHouse.Driver.ADO;
 /// </para>
 /// <para>
 /// <b>In-band exceptions and compression.</b> A query that fails after its <c>200 OK</c> has been committed
-/// reports the failure inside the body (the <c>http_write_exception_in_output_format</c> setting), and the
-/// members below raise the server's error as a <see cref="ClickHouseServerException"/> rather than leaking
-/// that block or a truncated body. The server writes it into the <i>encoded</i> body, though, so it can only
-/// be found in plaintext: on a transport-compressed response — which a raw request only gets when the caller
-/// asked for a codec — the four verbatim members hand the compressed bytes over undetected, as they must,
-/// and <see cref="ReadDecompressedStreamAsync"/> is the member that surfaces the error.
+/// reports the failure inside the body, in a block marked with the token of the
+/// <c>X-ClickHouse-Exception-Tag</c> response header, and the members below raise the server's error as a
+/// <see cref="ClickHouseServerException"/>: the buffered members instead of returning a truncated body, the
+/// stream members at the end of the body, after they have returned the partial result and the block. The
+/// server writes the block into the <i>encoded</i> body, though, so it can only be found in plaintext: on a
+/// transport-compressed response — which a raw request only gets when the caller asked for a codec — the four
+/// verbatim members cannot find it and fail with the transport's <see cref="IOException"/> (the stream ones
+/// after returning the compressed bytes), and <see cref="ReadDecompressedStreamAsync"/> is the member that
+/// surfaces the error.
 /// </para>
 /// </remarks>
 public class ClickHouseRawResult : IDisposable
@@ -63,11 +66,11 @@ public class ClickHouseRawResult : IDisposable
     {
         this.response = response;
 
-        // When the server-side setting http_write_exception_in_output_format is enabled it sends this
-        // leading header carrying a per-query token, and — if the query fails after the 200 OK is already
+        // The server sends this header carrying a per-query token (with any value of
+        // http_write_exception_in_output_format), and — if the query fails after the 200 OK is already
         // committed and rows are streaming — appends an in-band exception block delimited by that token to
         // the body before closing the connection. Capture the token so the accessors below can surface a
-        // ClickHouseServerException instead of leaking the raw block / a truncated body to the caller.
+        // ClickHouseServerException instead of a transport IOException or a truncated body.
         if (response.Headers.TryGetValues(ExceptionTagAwareStream.HeaderName, out var tagValues))
             exceptionTag = tagValues.FirstOrDefault();
     }

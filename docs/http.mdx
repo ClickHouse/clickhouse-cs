@@ -1017,6 +1017,15 @@ var json = await reader.ReadToEndAsync();
 
 Common formats: `JSONEachRow`, `CSV`, `TSV`, `Parquet`, `Native`. See the [formats documentation](/reference/formats/index) for all options.
 
+#### Errors in the middle of a result {#raw-streaming-errors}
+
+A query can fail after the server sends `200 OK` and part of the result, for example when `throwIf` fails on a later row. The server then writes an exception block at the end of the body and closes the connection. It marks the block with the token from the `X-ClickHouse-Exception-Tag` response header. The `ClickHouseRawResult` read members find the block and raise the server error as a `ClickHouseServerException`:
+
+- `ReadAsByteArrayAsync` and `ReadAsStringAsync` throw. They do not return a truncated body.
+- `ReadAsStreamAsync`, `CopyToAsync` and `ReadDecompressedStreamAsync` throw only when you read to the end of the body. Before that, they give you part of the result and then the exception block, as data. A parser that reads the stream can fail on the block first, with its own error. Do not use data from a read or copy that failed.
+
+The server compresses the exception block with the rest of the body. Thus, on a compressed response, only `ReadDecompressedStreamAsync` finds the block. A raw request gets a compressed response only when you ask for a codec (see [Response decompression](#response-decompression)). The other four members do not find the block. They fail with the transport error (an `IOException`), and `ReadAsStreamAsync` and `CopyToAsync` return the compressed bytes before that.
+
 ---
 
 ### Per-query transport compression {#per-query-accept-encoding}
@@ -1110,7 +1119,7 @@ Because the decision is made from the response, a body is decoded whenever its `
 
 **Raw results advertise no codec.** `ExecuteRawResultAsync` (and the public `PostStreamAsync` / `InsertRawStreamAsync`) hand their body to you verbatim, so unless you name a codec yourself they ask for none at all — nothing in the driver decodes such a body, so offering a codec there would silently turn an export into a compressed file. The rule is therefore simple and independent of how any `HttpClient` is configured: **a verbatim body arrives exactly as the server sent it, and the server sends plaintext unless you asked for a codec.** Asking for one (client-wide or per query) is how you export compressed bytes on purpose.
 
-An explicit `AcceptEncoding` (at either level) still applies to raw requests, and `ClickHouseRawResult.ReadDecompressedStreamAsync()` decodes the result when you want that; `ReadAsStreamAsync`, `ReadAsByteArrayAsync`, `ReadAsStringAsync` and `CopyToAsync` always return the bytes exactly as they arrived.
+An explicit `AcceptEncoding` (at either level) still applies to raw requests, and `ClickHouseRawResult.ReadDecompressedStreamAsync()` decodes the result when you want that. `ReadAsStreamAsync`, `ReadAsByteArrayAsync`, `ReadAsStringAsync` and `CopyToAsync` never decode and never change the bytes. When an uncompressed body ends with an exception block, they raise a `ClickHouseServerException` (see [Errors in the middle of a result](#raw-streaming-errors)).
 
 ```csharp
 using var result = await client.ExecuteRawResultAsync(
@@ -1124,7 +1133,7 @@ using var bodyReader = new StreamReader(body);
 var json = await bodyReader.ReadToEndAsync();
 ```
 
-Read the returned stream to completion before it goes out of scope, as above. When the response *is* compressed you get a decoder created with `leaveOpen`, so disposing it leaves the response intact; when it is **not** compressed you get the HTTP content stream itself, so disposing it ends the body. Either way the `ClickHouseRawResult` owns the response — don't call its other read members after the stream has been disposed. Disposing the `ClickHouseRawResult` is always required and on its own sufficient: it releases both the response and any decoder inserted here (decoders hold pooled buffers). The `await using` above is therefore optional, and safe to keep. Repeated sequential calls hand back the same stream; the type is not safe to use concurrently.
+Read the returned stream to completion before it goes out of scope, as above. If the response is compressed or has an `X-ClickHouse-Exception-Tag` header, the returned stream (the decoder, the exception-block scanner, or both) has `leaveOpen` set. Disposing it does not end the body. In other cases, you get the HTTP content stream itself, and disposing it ends the body. Either way the `ClickHouseRawResult` owns the response — don't call its other read members after the stream has been disposed. Disposing the `ClickHouseRawResult` is always required and on its own sufficient: it releases both the response and any decoder inserted here (decoders hold pooled buffers). The `await using` above is therefore optional, and safe to keep. Repeated sequential calls hand back the same stream; the type is not safe to use concurrently.
 
 See [Select_007_ResponseCompression.cs](https://github.com/ClickHouse/clickhouse-cs/blob/main/examples/Http/Select/Select_007_ResponseCompression.cs) for a runnable example.
 
