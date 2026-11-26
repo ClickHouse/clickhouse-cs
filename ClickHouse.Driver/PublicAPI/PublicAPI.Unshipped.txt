@@ -180,6 +180,7 @@ ClickHouse.Driver.QueryOptions.ReadValueConverter.get -> ClickHouse.Driver.ADO.R
 ClickHouse.Driver.QueryOptions.ReadValueConverter.init -> void
 override ClickHouse.Driver.ADO.ClickHouseClientSettings.GetHashCode() -> int
 override ClickHouse.Driver.ADO.ClickHouseClientSettings.ToString() -> string
+override ClickHouse.Driver.ADO.ClickHouseConnection.Dispose(bool disposing) -> void
 override ClickHouse.Driver.ADO.ClickHouseConnectionFactory.CreateDataSource(string connectionString) -> System.Data.Common.DbDataSource
 override ClickHouse.Driver.ADO.ClickHouseDataSource.ConnectionString.get -> string
 override ClickHouse.Driver.ADO.QueryStats.Equals(object obj) -> bool

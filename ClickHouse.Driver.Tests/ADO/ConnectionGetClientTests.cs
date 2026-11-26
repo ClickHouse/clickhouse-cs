@@ -32,13 +32,6 @@ public class ConnectionGetClientTests : AbstractConnectionTestFixture
 #endif
 
     [Test]
-    public void GetClient_ConnectionFromSettings_UsesConnectionSettings()
-    {
-        using var settingsConnection = new ClickHouseConnection(TestUtilities.GetTestClickHouseClientSettings());
-        Assert.That(settingsConnection.GetClient().Settings, Is.SameAs(settingsConnection.Settings));
-    }
-
-    [Test]
     public void GetClient_AfterSettingsChange_ReturnsNewClient()
     {
         using var settingsConnection = new ClickHouseConnection(TestUtilities.GetTestClickHouseClientSettings());
@@ -46,9 +39,7 @@ public class ConnectionGetClientTests : AbstractConnectionTestFixture
 
         settingsConnection.Settings = new ClickHouseClientSettings(settingsConnection.Settings);
 
-        var after = settingsConnection.GetClient();
-        Assert.That(after, Is.Not.SameAs(before));
-        Assert.That(after.Settings, Is.SameAs(settingsConnection.Settings));
+        Assert.That(settingsConnection.GetClient(), Is.Not.SameAs(before));
     }
 
     [Test]

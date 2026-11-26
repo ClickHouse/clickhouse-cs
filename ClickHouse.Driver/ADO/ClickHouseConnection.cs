@@ -206,6 +206,11 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         selectedDatabase = databaseName;
     }
 
+    /// <summary>
+    /// Returns a connection that uses the same client, and so the same settings and HTTP connection pool.
+    /// The clone does not own the client. If this connection owns its client, the clone can run queries
+    /// only until this connection is disposed.
+    /// </summary>
     public object Clone() => new ClickHouseConnection(ClickHouseClient);
 
     /// <summary>
@@ -215,7 +220,8 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     /// <see cref="ClickHouseDataSource"/>, this is the client of the data source.
     /// </summary>
     /// <remarks>
-    /// Do not dispose the client: the connection or the data source owns it. A change to
+    /// Do not dispose the client: the connection or the data source owns it. A connection that owns its
+    /// client disposes it when the connection is disposed. A change to
     /// <see cref="Settings"/> or <see cref="ConnectionString"/> gives the connection a new client, so
     /// call this method again after such a change. The client uses the database of its settings, not a
     /// database selected with <see cref="ChangeDatabase(string)"/>; pass that database in
@@ -306,7 +312,10 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
     protected override void Dispose(bool disposing)
     {
         if (disposing)
+        {
+            Close();
             DisposeClientIfOwned();
+        }
 
         base.Dispose(disposing);
     }

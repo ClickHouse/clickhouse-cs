@@ -1,4 +1,5 @@
 using System;
+using System.Data;
 using System.Data.Common;
 using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
@@ -93,6 +94,20 @@ public class ConnectionDisposeTests : AbstractConnectionTestFixture
         Assert.That(Convert.ToInt32(await dataSource.GetClient().ExecuteScalarAsync("SELECT 1")), Is.EqualTo(1));
     }
 #endif
+
+    [TestCase(DisposeCall.IDisposable)]
+    [TestCase(DisposeCall.DbConnection)]
+    [TestCase(DisposeCall.DisposeAsync)]
+    public async Task Dispose_OpenConnection_ClosesConnection(DisposeCall call)
+    {
+        var owner = new ClickHouseConnection(TestUtilities.GetTestClickHouseClientSettings());
+        await owner.OpenAsync();
+        Assert.That(owner.State, Is.EqualTo(ConnectionState.Open));
+
+        await DisposeAsync(owner, call);
+
+        Assert.That(owner.State, Is.EqualTo(ConnectionState.Closed));
+    }
 
     [Test]
     public void Dispose_Twice_DoesNotThrow()
