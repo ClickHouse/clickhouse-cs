@@ -611,10 +611,17 @@ insert completes before that block is released.
     its bytes, and a NULL row stays NULL. When the target does not have an alternative of the
     source, the insert refuses the column, also when no row holds a value of that alternative.
     Convert the values with a `CAST` in the query.
-  - Any other part is converted as the next item says. A `String` part that is converted so, for
-    example into a `Dynamic`, or into a `Variant` that places text in a `FixedString(N)`
-    alternative or places a `byte[]` in an `Array(UInt8)` alternative, goes through the text of
-    its values, so a value that is not valid UTF-8 does not keep its bytes.
+  - Any other part is converted as the next item says, with one limit. When the type of such a part
+    holds a `String` (at any place, also in an `Array`, `Map`, `Tuple` or `Variant`), or is a
+    `Dynamic` or a `JSON`, the conversion would write its strings as text and change bytes that are
+    not valid UTF-8. So the insert refuses the column before it sends a row, by the two types only.
+    This applies, for example, to a `String` into a `Dynamic`, into a `Variant` that would put it
+    in a `FixedString(N)` alternative, or into a `Variant` that puts a `byte[]` in an `Array(UInt8)`
+    alternative, to a `Variant` with a `String` alternative into a `Dynamic`, to a `Dynamic` into
+    a `Variant`, and to a `LowCardinality(String)` into a `JSON`. A `String` into an `Enum8` or
+    `Enum16` is written, because its text is the label; a value that is not a label is refused.
+    To insert such values, convert them with a `CAST` in the query, or insert a column of `string`
+    values that you build from them with `ClickHouseTcpColumn.Create`.
 
   A value that a NULL hides in such a column (for example after `nullIf`) is not converted into
   another target type: the row gets the placeholder of the target. When the insert cannot write a

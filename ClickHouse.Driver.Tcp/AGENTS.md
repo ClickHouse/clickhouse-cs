@@ -79,7 +79,9 @@ Two layers handle a column type:
   discriminators (`Types/Codecs/VariantDenseWrite.cs`, the same write as the codec's), and is refused when the target
   does not have one of them; the offsets of an `Array` or a `Map` and
   the null map of a `Nullable` are written from their storage, so their bytes do not change; any other part goes to its codec when the codec writes it from its storage,
-  else to the converter tree of its CLR type (`Types/Converters/ConverterDerivation.DecodedColumns.cs`). A row that a
+  else to the converter tree of its CLR type, except that a part whose type holds a `String` (or is a `Dynamic` or a
+  `JSON`) is refused there, as the tree would write its strings as text (`RefusalOfStringText`; a `String` into an `Enum`
+  is written, the text is the label) (`Types/Converters/ConverterDerivation.DecodedColumns.cs`). A row that a
   NULL of an enclosing `Nullable` hides (also the elements of an `Array` or a `Map` in that row) is marked: every part of
   another type writes the placeholder of its target there and does not read, convert or check the hidden value; a part
   of the same type keeps its stored bytes.
