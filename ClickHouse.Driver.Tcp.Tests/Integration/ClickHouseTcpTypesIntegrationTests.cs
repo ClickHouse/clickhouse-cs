@@ -41,6 +41,9 @@ public class ClickHouseTcpTypesIntegrationTests
         yield return Candidate("LowCardinality(Nullable(String))", new byte[] { 0x61 });
         yield return Candidate("LowCardinality(String)", "a");
         yield return Candidate("Array(Enum8('a' = -1, 'b' = 127))", new[] { "a", "b" });
+        yield return Candidate("Array(LowCardinality(String))", new[] { new byte[] { 0x61 }, new byte[] { 0xFF } });
+        yield return Candidate("LowCardinality(FixedString(4))", "abcd");
+        yield return Candidate("Variant(String, UInt64)", (object)new byte[] { 0x61 });
     }
 
     private static IEnumerable<TestCaseData> ReadCandidates()
