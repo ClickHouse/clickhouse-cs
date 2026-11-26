@@ -262,6 +262,52 @@ public class PooledReadBufferStreamTests
         Assert.Throws<ObjectDisposedException>(() => buffered.ReadByte());
     }
 
+    // ----- Peek -----
+
+    [TestCase(0)]  // nothing buffered yet
+    [TestCase(1)]
+    [TestCase(60)] // 4 bytes left in the buffer: the rest comes from the next refill
+    [TestCase(64)] // buffer exhausted
+    public void Peek_ReadsAheadAcrossBufferRefills_WithoutConsumingBytes(int consumedFirst)
+    {
+        var payload = MakePayload(200);
+        using var source = new MemoryStream(payload);
+        using var buffered = new PooledReadBufferStream(source, bufferSize: 64, leaveOpen: true);
+
+        var result = new List<byte>();
+        for (int i = 0; i < consumedFirst; i++)
+            result.Add((byte)buffered.ReadByte());
+
+        var peeked = buffered.Peek(10).ToArray();
+
+        Assert.That(peeked.Length, Is.GreaterThanOrEqualTo(10));
+        CollectionAssert.AreEqual(payload.AsSpan(consumedFirst, peeked.Length).ToArray(), peeked);
+        result.AddRange(ReadAll(buffered, chunk: 7));
+        CollectionAssert.AreEqual(payload, result);
+    }
+
+    [Test]
+    public void Peek_AtEndOfStream_ReturnsTheBytesLeft()
+    {
+        var payload = MakePayload(5);
+        using var source = new MemoryStream(payload);
+        using var buffered = new PooledReadBufferStream(source, bufferSize: 64, leaveOpen: true);
+
+        CollectionAssert.AreEqual(payload, buffered.Peek(10).ToArray());
+        CollectionAssert.AreEqual(payload, ReadAll(buffered, chunk: 7));
+        Assert.That(buffered.Peek(10).Length, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void Peek_ZeroMinimumCount_DoesNotReadFromTheInnerStream()
+    {
+        using var source = new MemoryStream(MakePayload(5));
+        using var buffered = new PooledReadBufferStream(source, bufferSize: 64, leaveOpen: true);
+
+        Assert.That(buffered.Peek(0).Length, Is.EqualTo(0));
+        Assert.That(source.Position, Is.EqualTo(0));
+    }
+
     private static byte[] ReadAll(Stream stream, int chunk)
     {
         using var output = new MemoryStream();
