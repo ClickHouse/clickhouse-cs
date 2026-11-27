@@ -1,0 +1,1 @@
+* Fixed `CustomHeaders` throwing `InvalidOperationException` when content headers are supplied. Content headers are now silently ignored, while valid custom request headers continue to be applied. (#528)

@@ -1202,7 +1202,15 @@ public sealed class ClickHouseClient : IClickHouseClient
             {
                 if (!IsBlockedHeader(kvp.Key))
                 {
-                    requestHeaders.Remove(kvp.Key);
+                    try
+                    {
+                        requestHeaders.Remove(kvp.Key);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        continue;
+                    }
+
                     requestHeaders.TryAddWithoutValidation(kvp.Key, kvp.Value);
                 }
             }
