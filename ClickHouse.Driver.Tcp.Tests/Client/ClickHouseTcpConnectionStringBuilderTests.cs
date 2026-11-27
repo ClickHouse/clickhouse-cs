@@ -281,9 +281,20 @@ public class ClickHouseTcpConnectionStringBuilderTests
     }
 
     [Test]
-    public void SweepInterval_Unparseable_ReadsAsAbsentSoThePeriodIsDerived()
+    public void SweepInterval_UnparseableValue_ThrowsArgumentException()
     {
         var builder = new ClickHouseTcpConnectionStringBuilder("Host=h;SweepInterval=soon");
+
+        var exception = Assert.Throws<ArgumentException>(() => _ = builder.SweepInterval);
+
+        Assert.That(exception!.Message, Does.Contain("SweepInterval"));
+        Assert.That(exception.Message, Does.Contain("soon"));
+    }
+
+    [Test]
+    public void SweepInterval_NotSpecified_ReadsAsAbsentSoThePeriodIsDerived()
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder("Host=h");
 
         Assert.That(builder.SweepInterval, Is.Null);
     }
