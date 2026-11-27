@@ -205,6 +205,8 @@ Connection-string values for `TimeSpan` properties are expressed in seconds.
 | DialTimeout | `TimeSpan` | 30 seconds | `DialTimeout` | Timeout for the socket connection, TLS negotiation, and native-protocol handshake |
 | ReadTimeout | `TimeSpan` | 5 minutes | `ReadTimeout` | Maximum time for each transport read during an operation; zero disables the timeout |
 
+> **Invalid configuration values:** Integer connection-string values must contain valid integers, and timeout values must be specified as numeric seconds using invariant-culture formatting. If a supplied value cannot be parsed, the connection string builder throws an `ArgumentException` identifying the invalid key and value. Omitted keys continue to use their existing default or derived values.
+
 ### Data format and serialization {#data-format-serialization}
 
 | Property | Type | Default | Connection String Key | Description |
