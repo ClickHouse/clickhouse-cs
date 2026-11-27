@@ -141,18 +141,16 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     internal ClickHouseType GetEffectiveClickHouseType(int ordinal)
     {
-        var type = RawTypes[ordinal];
-        return type is NullableType nt ? nt.UnderlyingType : type;
+        var type = TransparentWrapper.Unwrap(RawTypes[ordinal]);
+        return type is NullableType nullable ? TransparentWrapper.Unwrap(nullable.UnderlyingType) : type;
     }
 
     internal ClickHouseType GetClickHouseType(int ordinal) => RawTypes[ordinal];
 
     /// <summary>
-    /// Attempts to read the underlying integer ordinal of an <c>Enum8</c>/<c>Enum16</c> (or
-    /// <c>Nullable(Enum...)</c>) column for the current row. Enum columns materialize as their
-    /// string label, so the standard numeric accessors (<c>GetInt32</c>, <c>GetByte</c>, …) throw
-    /// <see cref="InvalidCastException"/> on them, matching ADO.NET's behavior for a string-backed
-    /// column; use this method to obtain the underlying wire ordinal instead.
+    /// Gets the ordinal of the current <c>Enum8</c> or <c>Enum16</c> value, including in nullable and simple
+    /// aggregate columns. Standard numeric accessors throw <see cref="InvalidCastException"/> for these values
+    /// because the reader materializes enums as string labels.
     /// </summary>
     /// <param name="ordinal">The zero-based column ordinal.</param>
     /// <param name="value">
@@ -161,7 +159,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
     /// configured read value converter (which transforms the string label, not the ordinal).
     /// </param>
     /// <returns>
-    /// <see langword="true"/> if the column is an <c>Enum8</c>/<c>Enum16</c> type and the current
+    /// <see langword="true"/> if the underlying type is <c>Enum8</c>/<c>Enum16</c> and the current
     /// value is a known label; otherwise <see langword="false"/> (a non-enum column, a
     /// <see cref="DBNull"/> value, or a value that is not a known enum label).
     /// </returns>

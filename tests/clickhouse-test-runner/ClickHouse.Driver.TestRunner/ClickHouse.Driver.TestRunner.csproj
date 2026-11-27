@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A clickhouse-client imitation that runs the ClickHouse core SQL tests through ClickHouse.Driver.
+    It is a test tool: it is not in ClickHouse.Driver.sln and not in the NuGet package. See ../README.md.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>clickhouse-test-runner</AssemblyName>
+    <RootNamespace>ClickHouse.Driver.TestRunner</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- The program starts once per test. Without tiered PGO it starts about 10 ms faster. -->
+    <TieredPGO>false</TieredPGO>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- CHTCP0001: the native TCP client is experimental; the tcp protocol of the shim uses it on purpose. -->
+    <NoWarn>$(NoWarn);CHTCP0001</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The clients of this repository, not a NuGet package. ClickHouse.Driver references Tcp and Common
+         with PrivateAssets="all", so name them here too (as examples/ does). -->
+    <ProjectReference Include="..\..\..\ClickHouse.Driver\ClickHouse.Driver.csproj" />
+    <ProjectReference Include="..\..\..\ClickHouse.Driver.Tcp\ClickHouse.Driver.Tcp.csproj" />
+    <ProjectReference Include="..\..\..\ClickHouse.Driver.Common\ClickHouse.Driver.Common.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ClickHouse.Driver.TestRunner.Tests" />
+  </ItemGroup>
+
+</Project>

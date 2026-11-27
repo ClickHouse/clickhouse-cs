@@ -54,8 +54,7 @@ internal static class SchemaDescriber
             row["IsKey"] = false;
             row["IsAutoIncrement"] = false;
 
-            // Numeric precision/scale describe the underlying type, so unwrap Nullable(...)
-            // exactly as the DataType column above does.
+            // Numeric precision and scale describe the underlying type of wrapped columns.
             var effectiveType = reader.GetEffectiveClickHouseType(ordinal);
             if (effectiveType is DecimalType dt)
             {

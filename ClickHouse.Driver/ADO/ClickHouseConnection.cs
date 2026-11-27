@@ -206,7 +206,28 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         selectedDatabase = databaseName;
     }
 
+    /// <summary>
+    /// Returns a connection that uses the same client, and so the same settings and HTTP connection pool.
+    /// The clone does not own the client. If this connection owns its client, the clone can run queries
+    /// only until this connection is disposed.
+    /// </summary>
     public object Clone() => new ClickHouseConnection(ClickHouseClient);
+
+    /// <summary>
+    /// Returns the client that this connection uses, for example to call
+    /// <see cref="IClickHouseClient.InsertBinaryAsync(string, IEnumerable{string}, IEnumerable{object[]}, InsertOptions, CancellationToken)"/>
+    /// with the settings and the HTTP connection pool of the connection. For a connection from a
+    /// <see cref="ClickHouseDataSource"/>, this is the client of the data source.
+    /// </summary>
+    /// <remarks>
+    /// Do not dispose the client: the connection or the data source owns it. A connection that owns its
+    /// client disposes it when the connection is disposed. A change to
+    /// <see cref="Settings"/> or <see cref="ConnectionString"/> gives the connection a new client, so
+    /// call this method again after such a change. The client uses the database of its settings, not a
+    /// database selected with <see cref="ChangeDatabase(string)"/>; pass that database in
+    /// <see cref="QueryOptions.Database"/> or <see cref="InsertOptions"/> if you need it.
+    /// </remarks>
+    public IClickHouseClient GetClient() => ClickHouseClient;
 
     public override void Close() => state = ConnectionState.Closed;
 
@@ -279,10 +300,24 @@ public class ClickHouseConnection : DbConnection, IClickHouseConnection, IClonea
         where T : class
         => ClickHouseClient.RegisterPocoType<T>();
 
-    void IDisposable.Dispose()
+    /// <summary>
+    /// Disposes the client if this connection owns it, which is the case for a connection made from
+    /// a connection string or from <see cref="ClickHouseClientSettings"/>, and after a change to
+    /// <see cref="Settings"/> or <see cref="ConnectionString"/>. A client from a
+    /// <see cref="ClickHouseDataSource"/> or from <see cref="ClickHouseConnection(ClickHouseClient)"/>
+    /// stays open. <c>DbConnection.Dispose()</c>, which ORMs such as EF Core call,
+    /// <c>DbConnection.DisposeAsync()</c> (<c>await using</c>) and <c>IDisposable.Dispose()</c>
+    /// (<c>using</c>) all come here.
+    /// </summary>
+    protected override void Dispose(bool disposing)
     {
-        DisposeClientIfOwned();
-        GC.SuppressFinalize(this);
+        if (disposing)
+        {
+            Close();
+            DisposeClientIfOwned();
+        }
+
+        base.Dispose(disposing);
     }
 
     private void DisposeClientIfOwned()

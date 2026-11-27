@@ -1,3 +1,4 @@
+
 #if NET7_0_OR_GREATER
 using ClickHouse.Driver.ADO;
 using NUnit.Framework;
@@ -23,16 +24,15 @@ public class DataSourceTests
     public async Task DisposeAsync_DisposesOwnedHttpClient()
     {
         var handler = new TrackingHandler(new HttpClientHandler());
-    
         var httpClient = new HttpClient(handler);
-    
+
         var dataSource = new ClickHouseDataSource(
             "Host=localhost",
             httpClient,
             disposeHttpClient: true);
-    
+
         await dataSource.DisposeAsync();
-    
+
         Assert.That(handler.IsDisposed, Is.True);
     }
 
@@ -124,6 +124,22 @@ public class DataSourceTests
         }
 
         Assert.That(handler.IsDisposed, Is.True);
+    }
+
+    [Test]
+    public void ConnectionString_WithBearerTokenFromSettings_ShouldContainToken()
+    {
+        var settings = new ClickHouseClientSettings
+        {
+            Host = "localhost",
+            BearerToken = "settings-level-token"
+        };
+
+        using var dataSource = new ClickHouseDataSource(settings);
+
+        var reparsed = new ClickHouseConnectionStringBuilder(dataSource.ConnectionString);
+
+        Assert.That(reparsed.BearerToken, Is.EqualTo("settings-level-token"));
     }
 }
 #endif

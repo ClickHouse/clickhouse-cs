@@ -715,7 +715,7 @@ public class BulkCopyTests : AbstractConnectionTestFixture
         using var reader = await connection.ExecuteReaderAsync($"SELECT * from {targetTable}");
         while(reader.Read())
         {
-            Assert.That(reader.GetValue(0), Is.EqualTo(jsonObject).UsingPropertiesComparer());
+            Assert.That(reader.GetValue(0), Is.EqualTo(jsonObject).Using<JsonNode>(JsonNode.DeepEquals));
         }
     }
 

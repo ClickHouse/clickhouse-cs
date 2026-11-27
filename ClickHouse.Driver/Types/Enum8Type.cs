@@ -27,7 +27,9 @@ internal class Enum8Type : EnumType, ITypedReader<string>, ITypedReader<int>
 
     public override void Write(ExtendedBinaryWriter writer, object value)
     {
-        var enumIndex = value is string enumStr ? (sbyte)Lookup(enumStr) : Convert.ToSByte(value, CultureInfo.InvariantCulture);
+        var enumIndex = value is string enumStr
+            ? (sbyte)Lookup(enumStr)
+            : (sbyte)RequireDeclared(Convert.ToSByte(RequireNotNull(value), CultureInfo.InvariantCulture));
         writer.Write(enumIndex);
     }
 }

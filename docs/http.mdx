@@ -89,6 +89,7 @@ Below is a full list of all the settings, their default values, and their effect
 | Port | `ushort` | 8123 (HTTP) / 8443 (HTTPS) | `Port` | Port number; defaults based on protocol |
 | Username | `string` | `"default"` | `Username` | Authentication username |
 | Password | `string` | `""` | `Password` | Authentication password |
+| BearerToken | `string` | `null` | `BearerToken` | Token (for example a JWT) sent as `Authorization: Bearer <token>` instead of `Username`/`Password`; see [JWT authentication](#jwt-authentication) |
 | Database | `string` | `""` | `Database` | Default database; empty uses server/user default |
 | Protocol | `string` | `"http"` | `Protocol` | Connection protocol: `"http"` or `"https"` |
 | Path | `string` | `null` | `Path` | URL path for reverse proxy scenarios (e.g., `/clickhouse`) |
@@ -102,7 +103,7 @@ Below is a full list of all the settings, their default values, and their effect
 | AcceptEncoding | `string` | `null` | `AcceptEncoding` | `Accept-Encoding` sent with every request, replacing the codecs the driver advertises by default (`zstd, lz4, gzip, deflate`). Whatever the server answers with is decoded transparently. See [Response decompression](#response-decompression) |
 | UseCustomDecimals | `bool` | `true` | `UseCustomDecimals` | Use `ClickHouseDecimal` for arbitrary precision; if false, uses .NET `decimal` (128-bit limit) |
 | ReadStringsAsByteArrays | `bool` | `false` | `ReadStringsAsByteArrays` | Read `String` and `FixedString` columns as `byte[]` instead of `string`; useful for binary data |
-| UseFormDataParameters | `bool` | `false` | `UseFormDataParameters` | Send parameters as form data instead of URL query string |
+| UseFormDataParameters | `bool` | `false` | `UseFormDataParameters` | Send parameters as form data instead of URL query string. In both modes the server limits each parameter value to `http_max_field_value_size` (128 KiB by default; in the URL it applies to the encoded value), and a query setting cannot raise it |
 | ReadBufferSize | `int` | `65536` (64 KiB) | `ReadBufferSize` | Size in bytes of the buffer that reads HTTP query responses. The driver rents the buffer from a shared pool and returns it when it disposes the reader, so it is not an allocation for each query. Increase it to reduce buffer refills on large result sets. The driver holds one buffer for each concurrent reader, so memory use increases with the buffer size and the number of concurrent readers. See [Buffers](#perf-buffers). |
 | ParameterTypeResolver | `IParameterTypeResolver` | `null` | — | Custom resolver for `@`-style parameter type mapping; see [Custom parameter type mapping](#parameter-type-mapping) |
 | ParameterFormatter | `IParameterFormatter` | `null` | — | Custom formatter for parameter value serialization; see [Custom parameter value formatting](#parameter-value-formatting) |
@@ -130,6 +131,46 @@ The `ClickHouseConnection` class normally allows for parallel operation (multipl
 | Property | Type | Default | Connection String Key | Description |
 |----------|------|---------|----------------------|-------------|
 | SkipServerCertificateValidation | `bool` | `false` | — | Skip HTTPS certificate validation; **not for production use** |
+
+### JWT authentication {#jwt-authentication}
+
+ClickHouse Cloud can authenticate a request with a [JSON Web Token (JWT)](/concepts/features/security/external-authenticators/jwt). Set `BearerToken` to send the token in the `Authorization: Bearer <token>` header. When a bearer token is set, the client does not send `Username` and `Password`. The server runs the request as an ephemeral user named `JWT::<subject>::<claims_hash>`, with the rights that the token's claims give (see the server documentation).
+
+Set the token for all requests of a client:
+
+```csharp
+var settings = new ClickHouseClientSettings("Host=your-service.clickhouse.cloud;Protocol=https")
+{
+    BearerToken = jwt,
+};
+using var client = new ClickHouseClient(settings);
+```
+
+Or in the connection string:
+
+```text
+Host=your-service.clickhouse.cloud;Protocol=https;BearerToken=eyJhbGciOiJSUzI1NiIs...
+```
+
+A token set for one query (`QueryOptions.BearerToken` or `InsertOptions.BearerToken`) or for one ADO.NET command (`ClickHouseCommand.BearerToken`) replaces the client token for that request only:
+
+```csharp
+var user = await client.ExecuteScalarAsync(
+    "SELECT currentUser()", options: new QueryOptions { BearerToken = jwt });
+
+using var command = connection.CreateCommand();
+command.BearerToken = jwt;
+```
+
+A query or command token has priority over the client token. If no token is set, the client uses `Username` and `Password`.
+
+`ClickHouseConnection.ConnectionString` and `ClickHouseDataSource.ConnectionString` contain the token in clear text, as they contain `Password`.
+
+<Note>
+A JWT expires at the time in its `exp` claim. A client keeps the `ClickHouseClientSettings.BearerToken` that it was created with. To use a new token before the current one expires, pass it with each request (`QueryOptions.BearerToken` or `ClickHouseCommand.BearerToken`), or create a new client. If you create clients often, share one `HttpClient` or `IHttpClientFactory` between them (see [HTTP client configuration](#http-client-configuration)), so that the connection pool is kept.
+
+JWT authentication is intended for user-to-service access. For service-to-service access, use credentials that do not expire.
+</Note>
 
 ### HTTP client configuration {#http-client-configuration}
 
@@ -697,6 +738,10 @@ client-side convenience: before the request is sent, each one is rewritten to
 [type resolution](#parameter-type-mapping) for how the type is chosen. Use the explicit
 `{name:Type}` form where you can.
 
+The name is the whole run of letters, digits, `_`, and `$` after the `@`. Any other character,
+such as `.` or `-`, ends the name, so `@id_2` binds `id_2` and `@t.1` binds `t`. ClickHouse does
+not accept those characters in a parameter name either.
+
 A `@name` with no matching parameter is left untouched for the server to reject. Matching is
 case-sensitive, so `@ID` does not bind a parameter named `id`.
 
@@ -762,6 +807,8 @@ For `@`-style parameters with no `{name:Type}` hint in the SQL and no `ClickHous
 
 Explicit hints (`{name:DateTime}`) take precedence over inference and are the recommended way of building queries.
 </Warning>
+
+An inferred `decimal` parameter is sent as `Decimal128(S)`, where `S` is the scale of the value. An inferred `ClickHouseDecimal` parameter is sent as `Decimal128(9)` if that type holds the value exactly. Otherwise the driver uses the scale of the value without its trailing zeros, raised to 9 if the type has room, and `Decimal256` if the value needs more than 38 digits, so the server does not truncate it. A `ClickHouseDecimal` that needs more than 76 digits throws `ArgumentOutOfRangeException`. Decimals inside arrays and other composite parameters are inferred as `Decimal128(9)`; to keep more digits, set `ClickHouseType` or use a `{name:Type}` hint.
 
 To override these defaults, set `ParameterTypeResolver` on `ClickHouseClientSettings`. This is useful when you want all `DateTime` parameters to use `DateTime64(3)` for millisecond precision, or all decimals to use a specific scale, without setting `ClickHouseType` on every individual parameter.
 
@@ -1340,6 +1387,27 @@ await conn.OpenAsync();
 Instead, always use `ClickHouseDataSource` or share a single `ClickHouseClient` instance.
 </Warning>
 
+### Getting the client of a connection {#ado-net-get-client}
+
+`ClickHouseConnection.GetClient()` returns the `IClickHouseClient` that the connection uses. For a connection from a `ClickHouseDataSource`, this is the client of the data source. Use it when code gets a `ClickHouseConnection`, for example from an ORM, and needs a client API such as `InsertBinaryAsync` with the settings and the HTTP connection pool of that connection. Use it instead of the deprecated `ClickHouseBulkCopy`.
+
+```csharp
+await using var connection = dataSource.CreateConnection();
+connection.ChangeDatabase("analytics");
+
+// The data source owns this client: do not dispose it.
+var client = connection.GetClient();
+
+// The client does not know about ChangeDatabase, so pass the database of the connection.
+await client.InsertBinaryAsync("events", columns, rows, new InsertOptions { Database = connection.Database });
+```
+
+- Do not dispose the client: the connection or the data source owns it.
+- A change to `Settings` or `ConnectionString` gives the connection a new client. Call `GetClient()` again after such a change, and do not keep the client from before it.
+- The client uses the database of its settings, not a database selected with `ChangeDatabase`. To use that database, pass `connection.Database` in `InsertOptions.Database` or `QueryOptions.Database`, as above.
+
+A connection that you create from a connection string or from `ClickHouseClientSettings` owns its client. It disposes the client when you dispose the connection, with `using`, `await using` or `DbConnection.Dispose()`. `Clone()` returns a connection that uses the same client, so a clone of such a connection can run queries only until you dispose the original.
+
 ---
 
 ### Using ClickHouseCommand {#ado-net-command}
@@ -1424,11 +1492,9 @@ if (reader.TryGetEnumOrdinal(ordinal, out int value))
     Console.WriteLine(value);   // e.g. 1 for 'Active' in Enum8('Active' = 1)
 ```
 
-It returns `true` and sets `value` for an `Enum8`/`Enum16` column, and for a `Nullable(Enum...)`
-column whose cell is not NULL. It returns `false`, with `value` set to `0`, for a NULL cell or for
-any column that is not an enum. The ordinal is the
-signed value from the wire, so it can be negative, and an `Enum16` ordinal can be larger than a
-byte.
+It returns `true` for an `Enum8` or `Enum16` value, including `Nullable` and `SimpleAggregateFunction`
+columns. The signed wire ordinal can be negative or larger than a byte. For a NULL or non-enum
+value, it returns `false` and sets `value` to zero.
 
 ## Best practices {#best-practices}
 
@@ -1612,8 +1678,14 @@ await using var reader = await cmd3.ExecuteReaderAsync();
 | Decimal128(S) | `decimal` / `ClickHouseDecimal` |
 | Decimal256(S) | `decimal` / `ClickHouseDecimal` |
 
+`GetSchemaTable()` reports precision, scale, and size for decimals, including
+`SimpleAggregateFunction(any, Decimal(18, 4))`.
+
 <Note>
-Decimal type conversion is controlled via the UseCustomDecimals setting. When a value is read as `decimal` (with `UseCustomDecimals=false`, or through `GetDecimal`), it keeps the scale of the column, so `7` in a `Decimal(18, 4)` column is returned as `7.0000m`. `decimal` holds at most 28 fractional digits and a 96-bit mantissa, so when a value does not fit at the column's scale, trailing zeros are dropped where necessary, and a value that still does not fit throws an `OverflowException`.
+With `UseCustomDecimals=false` or `GetDecimal`, values read as `decimal` keep the column scale when
+possible. For example, `7` in a `Decimal(18, 4)` column becomes `7.0000m`. The driver drops trailing
+zeros if needed to fit `decimal`'s 28 fractional digits and 96-bit mantissa. A value that still
+does not fit throws `OverflowException`.
 </Note>
 
 ##### ClickHouseDecimal operations {#type-map-reading-clickhousedecimal}
@@ -1675,7 +1747,9 @@ When reading `DateTime` values, the `DateTime.Kind` property is set based on the
 | `DateTime('Europe/Amsterdam')` | `Unspecified` | Offset applied |
 | `DateTime` | `Unspecified` | Wall-clock time preserved as-is |
 
-For non-UTC columns, the returned `DateTime` represents the wall-clock time in that timezone. Use `ClickHouseDataReader.GetDateTimeOffset()` to get a `DateTimeOffset` with the correct offset for that timezone:
+For non-UTC columns, `GetDateTime` returns the wall-clock time in the column timezone.
+`GetDateTimeOffset` includes that timezone's offset, including for `LowCardinality` and
+`SimpleAggregateFunction` columns.
 
 ```csharp
 var reader = (ClickHouseDataReader)await connection.ExecuteReaderAsync(
@@ -1685,6 +1759,8 @@ reader.Read();
 var dt = reader.GetDateTime(0);    // 2024-06-15 14:30:00, Kind=Unspecified
 var dto = reader.GetDateTimeOffset(0); // 2024-06-15 14:30:00 +02:00 (CEST)
 ```
+
+`GetSchemaTable()` reports the scale of `DateTime64` columns through the same wrappers.
 
 For columns **without** an explicit timezone (i.e., `DateTime` instead of `DateTime('Europe/Amsterdam')`), the driver returns a `DateTime` with `Kind=Unspecified`. This preserves the wall-clock time exactly as stored without making assumptions about timezone.
 
@@ -1943,14 +2019,14 @@ When you write a `ClickHouseDecimal` to an `Int8`, `UInt8`, `Int16`, `UInt16`, `
 | Date32 | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Converted to Unix days as Int32; supported range `[1900-01-01, 2299-12-31]` |
 | DateTime | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | See below for details; supported range `[1970-01-01, 2106-02-07 06:28:15]` UTC |
 | DateTime32 | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Same as DateTime |
-| DateTime64 | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Precision based on Scale parameter |
+| DateTime64 | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Precision based on Scale parameter; `DateTime64(9)` accepts `[1677-09-21 00:12:43.1452242, 2262-04-11 23:47:16.8547758]` UTC, `DateTime64(8)` accepts values up to `4892-10-07 21:52:48.5477580` UTC |
 | Time | `TimeSpan`, `TimeOnly`, `int` | Clamped to ±999:59:59; int treated as seconds |
 | Time64 | `TimeSpan`, `TimeOnly`, `decimal`, `double`, `float`, `int`, `long`, `string` | String parsed as `[-]HHH:MM:SS[.fraction]`; clamped to ±999:59:59.999999999 |
 
 <Note>
 **Out-of-range values**
 
-On the binary write path, `Date`, `Date32`, `DateTime`, and `DateTime32` values outside their supported range throw `ArgumentOutOfRangeException` at `Write` time, naming the column type and the supported range. Previously, out-of-range values could be silently truncated through a 32-bit integer and reinterpreted by the server, producing real-but-wrong timestamps.
+On the binary write path, `Date`, `Date32`, `DateTime`, and `DateTime32` values outside their supported range throw `ArgumentOutOfRangeException` at `Write` time, naming the column type and the supported range. `DateTime64(8)` and `DateTime64(9)` values whose count of sub-second units since the epoch does not fit in an Int64 throw the same exception. Previously, out-of-range values could be silently truncated through a 32-bit integer and reinterpreted by the server, producing real-but-wrong timestamps.
 </Note>
 
 The driver respects `DateTime.Kind` when writing values:
@@ -2139,8 +2215,8 @@ Property name matching with column type hints is case-sensitive. A property `Use
 | Tuple(T1, T2, ...) | `ITuple`, `IList` | Element count must match tuple arity. See [ValueTuple caveat](#valuetuple-caveat) for >7 elements. |
 | Map(K, V) | `IDictionary`, `IEnumerable<KeyValuePair<K, V>>` | A pair sequence (for example the `List<KeyValuePair<K, V>>` produced by `MapReadMode=KeyValuePairs`) is accepted in either read mode, and can repeat a key. Applies to binary inserts and to query parameters |
 | Nullable(T) | `null`, `DBNull`, or types accepted by T | Writes null flag byte before value |
-| Enum8 | `string`, `sbyte`, numeric types | String looked up in enum dictionary |
-| Enum16 | `string`, `short`, numeric types | String looked up in enum dictionary |
+| Enum8 | `string`, `sbyte`, numeric types | String looked up in enum dictionary. A number must be a declared ordinal. `null`, `DBNull` and an undeclared ordinal throw `ArgumentException`; use `Nullable(Enum8(...))` to store nulls |
+| Enum16 | `string`, `short`, numeric types | String looked up in enum dictionary. A number must be a declared ordinal. `null`, `DBNull` and an undeclared ordinal throw `ArgumentException`; use `Nullable(Enum16(...))` to store nulls |
 | LowCardinality(T) | Types accepted by T | Delegates to underlying type |
 | SimpleAggregateFunction | Types accepted by underlying type | Delegates to underlying type |
 | Nested(...) | `IList` of tuples | Element count must match field count |
