@@ -1557,6 +1557,27 @@ public class ConnectionPoolTests
     }
 
     [Test]
+    public async Task RentAsync_WaitingForASlotWhenThePoolIsDisposed_ThrowsAndGivesTheSlotBack()
+    {
+        // The waiting checkout gets the slot the lease returns, then finds the pool disposed before it chooses
+        // between reuse and a dial. It must undo all of its accounting and release the slot, or disposal waits out
+        // PoolTimeout for it.
+        var factory = new FakeConnectionFactory();
+        var pool = new ConnectionPool(Options(maxPoolSize: 1), factory, new ControlledTimeProvider());
+        IConnectionLease lease = await pool.RentAsync(None);
+        ValueTask<IConnectionLease> waiting = pool.RentAsync(None);
+        Assert.That(waiting.IsCompleted, Is.False, "the only slot is taken");
+
+        ValueTask disposal = pool.DisposeAsync();
+        await lease.DisposeAsync();
+
+        Assert.ThrowsAsync<ObjectDisposedException>(async () => await waiting);
+        Task drained = disposal.AsTask();
+        Assert.That(await Task.WhenAny(drained, Task.Delay(TimeSpan.FromSeconds(10))), Is.SameAs(drained), "disposal got every slot back");
+        Assert.That(factory.CreateCount, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task DisposeAsync_WithALeaseHeldPastPoolTimeout_DisposesTheFactoryBeforeTheLeaseReturns()
     {
         var factory = new FakeConnectionFactory();

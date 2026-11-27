@@ -183,13 +183,13 @@ public sealed class TcpServerFixture
     {
         if (username is null && password is null)
         {
-            return await factory.CreateAsync(cancellationToken);
+            return await factory.CreateAsync(replicaTag: null, cancellationToken);
         }
 
         // Its own factory: a factory resolves the TLS configuration from one set of options. Disposing it here
         // releases that configuration, which CreateAsync has finished the handshake with by the time it returns.
         using var scoped = new TcpConnectionFactory(Options(username, password));
-        return await scoped.CreateAsync(cancellationToken);
+        return await scoped.CreateAsync(replicaTag: null, cancellationToken);
     }
 
     /// <summary>Builds client options pointed at the test server, optionally overriding the credentials.</summary>

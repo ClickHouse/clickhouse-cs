@@ -145,8 +145,35 @@ public sealed record ClickHouseTcpClientOptions
     /// hook receives it and may edit it. In that case .NET ignores <c>CertificateRevocationCheckMode</c>; configure
     /// revocation through the policy's own <c>RevocationMode</c> property instead.
     /// </para>
+    /// <para>
+    /// On a connection with a replica tag (see <see cref="ReplicaTag"/>), <c>TargetHost</c> is already the sticky
+    /// name <c>&lt;tag&gt;.sticky.&lt;host&gt;</c>, and a <c>RemoteCertificateValidationCallback</c> is in place that
+    /// accepts a certificate for the normal host name. Setting <c>TargetHost</c> turns the routing off. Replacing the
+    /// callback replaces that check, so the new callback must check the host name itself.
+    /// </para>
     /// </remarks>
     public Action<SslClientAuthenticationOptions> ConfigureTls { get; init; }
+
+    /// <summary>
+    /// The replica tag for ClickHouse Cloud replica-aware routing, or null (the default) for normal load balancing.
+    /// Every pooled connection of the client is opened with it. Connections with the same tag go to the same replica
+    /// while the number of replicas does not change. A session's <see cref="ClickHouseTcpSessionOptions.ReplicaTag"/>
+    /// overrides it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The client sends the tag in the TLS server name (SNI) as <c>&lt;tag&gt;.sticky.&lt;host&gt;</c>, where the host
+    /// is <see cref="TlsServerName"/> or <see cref="Host"/>, and still connects to <see cref="Host"/>. It checks the
+    /// server certificate against the normal host name. This needs <see cref="UseTls"/>, and the service must have
+    /// replica-aware routing for the native protocol turned on. Routing is best effort: when the number of replicas
+    /// changes, a tag can move to another replica.
+    /// </para>
+    /// <para>
+    /// A tag is one DNS label: 1 to 63 characters from A-Z, a-z, 0-9 and '-', not starting or ending with '-'.
+    /// Other values are refused. An empty string means no tag.
+    /// </para>
+    /// </remarks>
+    public string ReplicaTag { get; init; }
 
     /// <summary>The default database for queries. Defaults to <c>default</c>.</summary>
     public string Database { get; init; } = DefaultDatabase;
@@ -459,6 +486,8 @@ public sealed record ClickHouseTcpClientOptions
                 $"{nameof(TlsAllowInvalidCertificates)} and {nameof(TlsCaCertificatePath)} cannot both be set: with certificate validation off the authority is never consulted.",
                 nameof(TlsCaCertificatePath));
         }
+
+        ReplicaRouting.Validate(ReplicaTag, this, nameof(ReplicaTag));
 
         RequireUsableTimeout(DialTimeout, nameof(DialTimeout));
 

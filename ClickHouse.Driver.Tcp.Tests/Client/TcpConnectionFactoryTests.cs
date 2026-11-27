@@ -46,7 +46,7 @@ public class TcpConnectionFactoryTests
                 DialTimeout = TimeSpan.FromMilliseconds(250),
             });
 
-            var thrown = Assert.ThrowsAsync<ClickHouseTcpConnectionException>(async () => await factory.CreateAsync(CancellationToken.None));
+            var thrown = Assert.ThrowsAsync<ClickHouseTcpConnectionException>(async () => await factory.CreateAsync(replicaTag: null, CancellationToken.None));
 
             Assert.Multiple(() =>
             {
@@ -84,7 +84,7 @@ public class TcpConnectionFactoryTests
                 DialTimeout = TimeSpan.FromSeconds(10),
             });
 
-            ValueTask<ClickHouseTcpConnection> connecting = factory.CreateAsync(CancellationToken.None);
+            ValueTask<ClickHouseTcpConnection> connecting = factory.CreateAsync(replicaTag: null, CancellationToken.None);
 
             // Play the server's side of the handshake, then leave the connection idle as the pool would.
             using TcpClient server = await accepting;
@@ -215,7 +215,7 @@ public class TcpConnectionFactoryTests
 
             // The caller's own cancellation must stay a cancellation: the two share a linked token, and reporting
             // a timeout here would send the caller looking for a network fault they do not have.
-            Assert.CatchAsync<OperationCanceledException>(async () => await factory.CreateAsync(cts.Token));
+            Assert.CatchAsync<OperationCanceledException>(async () => await factory.CreateAsync(replicaTag: null, cts.Token));
         }
         finally
         {
@@ -303,7 +303,7 @@ public class TcpConnectionFactoryTests
                 DialTimeout = TimeSpan.FromSeconds(30),
             });
 
-            using ClickHouseTcpConnection connection = await factory.CreateAsync(CancellationToken.None);
+            using ClickHouseTcpConnection connection = await factory.CreateAsync(replicaTag: null, CancellationToken.None);
 
             Assert.Multiple(() =>
             {
@@ -339,7 +339,7 @@ public class TcpConnectionFactoryTests
                 DialTimeout = TimeSpan.FromSeconds(10),
             });
 
-            Assert.CatchAsync(async () => await factory.CreateAsync(CancellationToken.None));
+            Assert.CatchAsync(async () => await factory.CreateAsync(replicaTag: null, CancellationToken.None));
         }
         finally
         {

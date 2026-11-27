@@ -29,7 +29,11 @@ internal sealed class TlsParameters : IDisposable
 
     private bool disposed;
 
-    /// <summary>The host name presented as SNI and matched against the server certificate.</summary>
+    /// <summary>
+    /// The host name matched against the server certificate, and presented as SNI when the connection has no replica
+    /// tag. A connection with a tag presents <c>&lt;tag&gt;.sticky.&lt;TargetHost&gt;</c> instead (see
+    /// <see cref="ReplicaRouting"/>).
+    /// </summary>
     required public string TargetHost { get; init; }
 
     /// <summary>Whether to accept a certificate that fails validation. Development only — see the option that sets it.</summary>
@@ -88,14 +92,23 @@ internal sealed class TlsParameters : IDisposable
     /// and an <see cref="IOException"/> from it (loading a client certificate off disk, say) would be reported
     /// as a transient network error the caller should retry.
     /// </remarks>
+    /// <param name="replicaTag">
+    /// The connection's replica tag, already validated, or null for none. With a tag the SNI is the sticky name, and
+    /// the certificate may name either that or <see cref="TargetHost"/>.
+    /// </param>
     /// <returns>The options to hand to <see cref="WrapAsync"/>.</returns>
-    internal SslClientAuthenticationOptions BuildAuthenticationOptions()
+    internal SslClientAuthenticationOptions BuildAuthenticationOptions(string replicaTag = null)
     {
         // Refused rather than continued: the pinned authorities are gone once this is disposed. Carrying on could
         // otherwise negotiate with certificates whose native resources were already released.
         ObjectDisposedException.ThrowIf(disposed, this);
 
-        var authentication = new SslClientAuthenticationOptions { TargetHost = TargetHost };
+        // .NET sends TargetHost as SNI and also matches the certificate against it. There is no separate SNI field,
+        // so a tagged connection sets the sticky name here and checks the normal name in the callback below.
+        var authentication = new SslClientAuthenticationOptions
+        {
+            TargetHost = replicaTag is null ? TargetHost : ReplicaRouting.StickyServerName(replicaTag, TargetHost),
+        };
 
         if (AllowInvalidCertificates)
         {
@@ -106,9 +119,17 @@ internal sealed class TlsParameters : IDisposable
             authentication.RemoteCertificateValidationCallback = static (_, _, _, _) => true;
 #pragma warning restore CA5359
         }
-        else if (CaCertificates is { } roots)
+        else
         {
-            authentication.CertificateChainPolicy = PinnedRootPolicy(roots);
+            if (CaCertificates is { } roots)
+            {
+                authentication.CertificateChainPolicy = PinnedRootPolicy(roots);
+            }
+
+            if (replicaTag is not null)
+            {
+                authentication.RemoteCertificateValidationCallback = AcceptCertificateNaming(TargetHost);
+            }
         }
 
         // Last, so a caller can override any of the above. The pinned roots are expressed as a chain policy
@@ -217,6 +238,30 @@ internal sealed class TlsParameters : IDisposable
         policy.ApplicationPolicy.Add(ServerAuthentication);
         return policy;
     }
+
+    /// <summary>
+    /// The certificate check for a connection whose SNI is a sticky name: accept a certificate that names the sticky
+    /// name, or one whose only fault is that it names <paramref name="serverName"/> instead. Every other fault,
+    /// such as an untrusted or expired chain, still refuses the certificate.
+    /// </summary>
+    /// <remarks>
+    /// The sticky name is a subdomain of the server name, so a certificate for the server name proves the same
+    /// identity. The handshake has already built and checked the chain, with the pinned authorities when they are
+    /// configured, so this only replaces the name match.
+    /// </remarks>
+    /// <param name="serverName">The normal server name.</param>
+    /// <returns>The validation callback.</returns>
+    private static RemoteCertificateValidationCallback AcceptCertificateNaming(string serverName)
+        => (_, certificate, _, errors) => errors switch
+        {
+            SslPolicyErrors.None => true,
+
+            // SslStream passes an X509Certificate2 for the remote certificate. Any other type is refused rather
+            // than copied.
+            SslPolicyErrors.RemoteCertificateNameMismatch => certificate is X509Certificate2 received
+                && received.MatchesHostname(serverName),
+            _ => false,
+        };
 
     // Match the classification used by .NET's OpenSSL and Apple chain PALs: a self-issued certificate is a
     // configured trust anchor, while every other certificate is only available to build the chain.

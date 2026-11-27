@@ -561,9 +561,19 @@ public sealed class ClickHouseTcpClient : IClickHouseTcpClient, IDisposable
     }
 
     /// <inheritdoc/>
-    public async ValueTask<IClickHouseTcpSession> OpenSessionAsync(CancellationToken cancellationToken = default)
+    public ValueTask<IClickHouseTcpSession> OpenSessionAsync(CancellationToken cancellationToken = default)
+        => OpenSessionAsync(options: null, cancellationToken);
+
+    /// <inheritdoc/>
+    public async ValueTask<IClickHouseTcpSession> OpenSessionAsync(
+        ClickHouseTcpSessionOptions options,
+        CancellationToken cancellationToken = default)
     {
-        IConnectionLease lease = await source.RentAsync(cancellationToken).ConfigureAwait(false);
+        // Only the pool opens a connection with a tag of its own. The other source is a session's pinned connection,
+        // and a session opens no sessions.
+        IConnectionLease lease = source is ConnectionPool pool
+            ? await pool.RentAsync(options?.ReplicaTag, cancellationToken).ConfigureAwait(false)
+            : await source.RentAsync(cancellationToken).ConfigureAwait(false);
         var pinned = new PinnedConnectionSource(lease);
         try
         {

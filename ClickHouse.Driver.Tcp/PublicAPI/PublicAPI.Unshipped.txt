@@ -119,6 +119,8 @@ ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.QuotaKey.get -> string
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.QuotaKey.init -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.ReadTimeout.get -> System.TimeSpan
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.ReadTimeout.init -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.ReplicaTag.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.ReplicaTag.init -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.SendJsonAndDynamicSerializationSettings.get -> bool
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.SendJsonAndDynamicSerializationSettings.init -> void
 ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.StatementMaxLength.get -> int
@@ -430,6 +432,8 @@ override ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.Equals(object obj) -> 
 override ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.GetHashCode() -> int
 override ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions.ToString() -> string
 override ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.Remove(string keyword) -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.ReplicaTag.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.ReplicaTag.set -> void
 override ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.this[string keyword].get -> object
 override ClickHouse.Driver.Tcp.ClickHouseTcpConnectionStringBuilder.this[string keyword].set -> void
 override ClickHouse.Driver.Tcp.ClickHouseTcpDecimal.Equals(object obj) -> bool
@@ -492,6 +496,17 @@ static ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.operator !=(ClickHouse.Dr
 static ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions left, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions right) -> bool
 static ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.operator !=(ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo left, ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo right) -> bool
 static ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo left, ClickHouse.Driver.Tcp.ClickHouseTcpServerInfo right) -> bool
+ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions
+ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions.<Clone>$() -> ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions
+ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions.ClickHouseTcpSessionOptions() -> void
+ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions.Equals(ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions other) -> bool
+override ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions.Equals(object obj) -> bool
+override ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions.GetHashCode() -> int
+ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions.ReplicaTag.get -> string
+ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions.ReplicaTag.init -> void
+override ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions.ToString() -> string
+static ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions.operator !=(ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions left, ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions right) -> bool
+static ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions.operator ==(ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions left, ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions right) -> bool
 static ClickHouse.Driver.Tcp.ClickHouseTcpTypes.CanRead(string clickHouseType, System.Type elementType) -> bool
 static ClickHouse.Driver.Tcp.ClickHouseTcpTypes.CanWrite(string clickHouseType, System.Type elementType) -> bool
 static ClickHouse.Driver.Tcp.Int256.FromBigInteger(System.Numerics.BigInteger value) -> ClickHouse.Driver.Tcp.Int256
@@ -528,6 +543,7 @@ virtual ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.PrintMembers(System.Text
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.InsertRowsAsync(string sql, System.Collections.Generic.IReadOnlyList<object[]> rows, ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.InsertRowsAsync<T>(string sql, System.Collections.Generic.IReadOnlyList<T> rows, ClickHouse.Driver.Tcp.ClickHouseTcpInsertOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.OpenSessionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.IClickHouseTcpSession>
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.OpenSessionAsync(ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.IClickHouseTcpSession>
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.Options.get -> ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.PingAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpClient.QueryAsync(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<object[]>
@@ -540,12 +556,15 @@ virtual ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions.PrintMembers(System.Text
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpDataSource.DisposeAsync() -> System.Threading.Tasks.ValueTask
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpDataSource.GetClient() -> ClickHouse.Driver.Tcp.IClickHouseTcpClient
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpDataSource.OpenSessionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.IClickHouseTcpSession>
+[CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpDataSource.OpenSessionAsync(ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.IClickHouseTcpSession>
 [CHTCP0001]ClickHouse.Driver.Tcp.ClickHouseTcpDataSource.Options.get -> ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions
 [CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpClient
 [CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpClient.OpenSessionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.IClickHouseTcpSession>
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpClient.OpenSessionAsync(ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.IClickHouseTcpSession>
 [CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpDataSource
 [CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpDataSource.GetClient() -> ClickHouse.Driver.Tcp.IClickHouseTcpClient
 [CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpDataSource.OpenSessionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.IClickHouseTcpSession>
+[CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpDataSource.OpenSessionAsync(ClickHouse.Driver.Tcp.ClickHouseTcpSessionOptions options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<ClickHouse.Driver.Tcp.IClickHouseTcpSession>
 [CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpDataSource.Options.get -> ClickHouse.Driver.Tcp.ClickHouseTcpClientOptions
 [CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations
 [CHTCP0001]ClickHouse.Driver.Tcp.IClickHouseTcpOperations.ExecuteAsync(string sql, ClickHouse.Driver.Tcp.ClickHouseTcpQueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask

@@ -61,4 +61,10 @@ internal static partial class PoolLog
         Level = LogLevel.Debug,
         Message = "Draining the pool: closing {IdleCount} idle connections and waiting for {LeasedCount} in flight")]
     public static partial void Draining(ILogger logger, int idleCount, int leasedCount);
+
+    [LoggerMessage(
+        EventId = 3008,
+        Level = LogLevel.Debug,
+        Message = "Closed an idle connection to stay within MaxPoolSize {MaxPoolSize} while opening a session connection with replica tag {ReplicaTag}")]
+    public static partial void ClosedForSessionTag(ILogger logger, string replicaTag, int maxPoolSize);
 }
