@@ -1,0 +1,1 @@
+* Fixed TCP connection string parsing silently falling back to default or derived values when configured integer or timeout values are invalid. Invalid values now throw an `ArgumentException` identifying the connection string key and value. (#734)
