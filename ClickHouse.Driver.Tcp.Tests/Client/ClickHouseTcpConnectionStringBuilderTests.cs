@@ -523,4 +523,56 @@ public class ClickHouseTcpConnectionStringBuilderTests
             Assert.That(builder.ToOptions().ResolvedPort, Is.EqualTo(9440));
         });
     }
+
+    [TestCase("Port=abc")]
+    [TestCase("MaxSendBufferBytes=lots")]
+    [TestCase("MinPoolSize=abc")]
+    [TestCase("MaxPoolSize=abc")]
+    [TestCase("MaxPoolSize=1,000")]
+    public void ConnectionStringBuilder_UnparseableInteger_ThrowsArgumentException(
+        string connectionString)
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder(
+            $"Host=h;{connectionString}");
+
+        Assert.Throws<ArgumentException>(() => builder.ToOptions());
+    }
+
+    [TestCase("DialTimeout=abc")]
+    [TestCase("DialTimeout=00:00:05")]
+    [TestCase("DialTimeout=5s")]
+    [TestCase("ReadTimeout=none")]
+    [TestCase("PoolTimeout=abc")]
+    [TestCase("MaxConnectionLifetime=abc")]
+    [TestCase("IdleTimeout=abc")]
+    [TestCase("SweepInterval=soon")]
+    public void ConnectionStringBuilder_UnparseableTimeout_ThrowsArgumentException(
+        string connectionString)
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder(
+            $"Host=h;{connectionString}");
+
+        Assert.Throws<ArgumentException>(() => builder.ToOptions());
+    }
+
+    [TestCase("Port=abc", "Port", "abc")]
+    [TestCase("DialTimeout=00:00:05", "DialTimeout", "00:00:05")]
+    [TestCase("MaxPoolSize=1,000", "MaxPoolSize", "1,000")]
+    public void ConnectionStringBuilder_UnparseableValue_ThrowsWithKeyAndValue(
+        string connectionString,
+        string key,
+        string value)
+    {
+        var builder = new ClickHouseTcpConnectionStringBuilder(
+            $"Host=h;{connectionString}");
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => builder.ToOptions());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(exception.Message, Does.Contain(key));
+            Assert.That(exception.Message, Does.Contain(value));
+        });
+    }
 }

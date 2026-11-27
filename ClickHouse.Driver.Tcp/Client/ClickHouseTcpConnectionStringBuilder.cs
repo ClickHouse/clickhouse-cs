@@ -350,7 +350,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         {
             int i => i,
             string s when int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int result) => result,
-            _ => @default,
+            _ => throw new ArgumentException($"Connection-string key '{name}' has value '{value}', which is not an integer."),
         };
     }
 
@@ -366,7 +366,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         {
             int i => i,
             string s when int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out int result) => result,
-            _ => null,
+            _ => throw new ArgumentException($"Connection-string key '{name}' has value '{value}', which is not an integer."),
         };
     }
 
@@ -445,7 +445,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         {
             double d => TimeSpan.FromSeconds(d),
             string s when double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) => TimeSpan.FromSeconds(seconds),
-            _ => null,
+            _ => throw new ArgumentException($"Connection-string key '{name}' has value '{value}', which is not a number of seconds."),
         };
     }
 
@@ -460,7 +460,7 @@ public sealed class ClickHouseTcpConnectionStringBuilder : DbConnectionStringBui
         {
             double d => TimeSpan.FromSeconds(d),
             string s when double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) => TimeSpan.FromSeconds(seconds),
-            _ => @default,
+            _ => throw new ArgumentException($"Connection-string key '{name}' has value '{value}', which is not a number of seconds."),
         };
     }
 }
