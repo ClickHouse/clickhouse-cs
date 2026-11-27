@@ -1,0 +1,1 @@
+* Documented how to keep an HTTP session on one replica of a multi-replica ClickHouse Cloud service: turn on replica-aware routing and send `X-ClickHouse-Replica-Tag` with every query of the session (#765).

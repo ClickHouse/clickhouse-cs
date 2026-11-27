@@ -126,6 +126,25 @@ The `UseSession` flag enables persistence of the server session, allowing use of
 The `ClickHouseConnection` class normally allows for parallel operation (multiple threads can run queries concurrently). However, enabling `UseSession` flag will limit that to one active query per connection at any moment of time (this is a server-side limitation).
 </Note>
 
+<Note>
+**Sessions on ClickHouse Cloud.** A session's temporary tables and settings exist only on the replica that ran the query, and `SessionId` does not choose the replica. On a Cloud service with more than one replica, two queries of one session can reach different replicas, and a temporary table created by the first is missing in the second.
+
+To keep a session on one replica, turn on [replica-aware routing](https://clickhouse.com/docs/manage/replica-aware-routing) for HTTP on the service, and send the same `X-ClickHouse-Replica-Tag` header with every query of the session:
+
+```csharp
+var sessionId = Guid.NewGuid().ToString();
+var settings = new ClickHouseClientSettings
+{
+    Host = "<your-service>.clickhouse.cloud",
+    UseSession = true,
+    SessionId = sessionId,
+    CustomHeaders = new Dictionary<string, string> { ["X-ClickHouse-Replica-Tag"] = sessionId },
+};
+```
+
+For a session set per query, put the same header in `QueryOptions.CustomHeaders`. Routing is best-effort: when the service scales, a tag can move to another replica, so be ready to recreate session state.
+</Note>
+
 ### Security {#security}
 
 | Property | Type | Default | Connection String Key | Description |
@@ -1589,6 +1608,8 @@ Only enable sessions when you need stateful server-side features, e.g.:
 - Session-level settings (`SET max_threads = 4`)
 
 When sessions are enabled, requests are serialized to prevent concurrent use of the same session. This adds overhead for workloads that don't require session state.
+
+On a ClickHouse Cloud service with more than one replica, also send `X-ClickHouse-Replica-Tag` so that every query of the session reaches the same replica. See [Session management](#session-management).
 
 ```csharp
 var settings = new ClickHouseClientSettings
