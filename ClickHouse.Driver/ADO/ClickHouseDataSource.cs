@@ -131,6 +131,16 @@ public sealed class ClickHouseDataSource : DbDataSource, IClickHouseDataSource
         }
     }
 
+    protected override ValueTask DisposeAsyncCore()
+    {
+        if (disposeClient)
+        {
+            client?.Dispose();
+            httpClient?.Dispose();
+        }
+        return base.DisposeAsyncCore();
+    }
+
     protected override DbConnection CreateDbConnection()
     {
         return new ClickHouseConnection(client);
