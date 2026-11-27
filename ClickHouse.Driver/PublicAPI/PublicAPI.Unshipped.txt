@@ -66,6 +66,7 @@ ClickHouse.Driver.ADO.ClickHouseCommand.ServerTimezone.get -> string
 ClickHouse.Driver.ADO.ClickHouseConnection.ClickHouseConnection(ClickHouse.Driver.ADO.ClickHouseClientSettings settings) -> void
 ClickHouse.Driver.ADO.ClickHouseConnection.ClickHouseConnection(string connectionString, bool skipServerCertificateValidation) -> void
 ClickHouse.Driver.ADO.ClickHouseConnection.CreateCommand(string commandText = null) -> ClickHouse.Driver.ADO.ClickHouseCommand
+ClickHouse.Driver.ADO.ClickHouseConnection.GetClient() -> ClickHouse.Driver.IClickHouseClient
 ClickHouse.Driver.ADO.ClickHouseConnection.InsertRawStreamAsync(string table, System.IO.Stream stream, string format, System.Collections.Generic.IEnumerable<string> columns = null, bool useCompression = true, string queryId = null, System.Threading.CancellationToken token = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Net.Http.HttpResponseMessage>
 ClickHouse.Driver.ADO.ClickHouseConnection.PingAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<bool>
 ClickHouse.Driver.ADO.ClickHouseCommand.Roles.get -> System.Collections.Generic.IList<string>
@@ -179,6 +180,7 @@ ClickHouse.Driver.QueryOptions.ReadValueConverter.get -> ClickHouse.Driver.ADO.R
 ClickHouse.Driver.QueryOptions.ReadValueConverter.init -> void
 override ClickHouse.Driver.ADO.ClickHouseClientSettings.GetHashCode() -> int
 override ClickHouse.Driver.ADO.ClickHouseClientSettings.ToString() -> string
+override ClickHouse.Driver.ADO.ClickHouseConnection.Dispose(bool disposing) -> void
 override ClickHouse.Driver.ADO.ClickHouseConnectionFactory.CreateDataSource(string connectionString) -> System.Data.Common.DbDataSource
 override ClickHouse.Driver.ADO.ClickHouseDataSource.ConnectionString.get -> string
 override ClickHouse.Driver.ADO.QueryStats.Equals(object obj) -> bool
@@ -262,6 +264,8 @@ ClickHouse.Driver.ADO.ClickHouseClientSettings.AllowDuplicateJsonKeys.get -> boo
 ClickHouse.Driver.ADO.ClickHouseClientSettings.AllowDuplicateJsonKeys.init -> void
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.AllowDuplicateJsonKeys.get -> bool
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.AllowDuplicateJsonKeys.set -> void
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.BearerToken.get -> string
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.BearerToken.set -> void
 const ClickHouse.Driver.ADO.ClickHouseDefaults.AllowDuplicateJsonKeys = false -> bool
 ClickHouse.Driver.InsertOptions.QueryPlacement.get -> ClickHouse.Driver.InsertQueryPlacement
 ClickHouse.Driver.InsertOptions.QueryPlacement.init -> void

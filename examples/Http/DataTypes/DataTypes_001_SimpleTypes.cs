@@ -63,7 +63,8 @@ public static class SimpleTypes
         var uint64 = await client.ExecuteScalarAsync("SELECT toUInt64(18446744073709551615)");
         Console.WriteLine($"   UInt64             ulong           {uint64}");
 
-        var uint128 = await client.ExecuteScalarAsync("SELECT toUInt128(340282366920938463463374607431768211455)");
+        // Pass the maximum as decimal text to avoid rounding it as Float64.
+        var uint128 = await client.ExecuteScalarAsync("SELECT toUInt128('340282366920938463463374607431768211455')");
         Console.WriteLine($"   UInt128            BigInteger      {((BigInteger)uint128!).ToString().Substring(0, 20)}...");
 
         Console.WriteLine();
