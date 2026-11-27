@@ -14,7 +14,7 @@ internal class ObjectType : ParameterizedType
 
     public override ParameterizedType Parse(SyntaxTreeNode node, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings)
     {
-        return new SimpleAggregateFunctionType
+        return new ObjectType
         {
             UnderlyingType = parseClickHouseTypeFunc(node.ChildNodes[0]),
         };

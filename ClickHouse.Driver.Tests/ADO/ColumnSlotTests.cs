@@ -231,9 +231,8 @@ public class ColumnSlotTests
         Assert.That(ColumnSlotFactory.Create(Parse("Decimal(10, 2)", settings)), Is.TypeOf(expected));
     }
 
-    // Object(...) is wire-transparent too, but the grammar never yields an ObjectType instance —
-    // ObjectType.Parse returns a SimpleAggregateFunctionType — so the only way to reach that unwrap branch is
-    // to construct one. Worth pinning: if Parse is ever corrected, this is already covered.
+    // Object(...) is wire-transparent too, so its column slot resolves to the underlying type's slot.
+    // Constructed directly here to pin that unwrap branch independently of the grammar.
     [Test]
     public void Create_ObjectWrappedColumn_ResolvesToWrappedTypedSlot()
     {
