@@ -214,6 +214,30 @@ public class AcceptEncodingWireTests
             await stream.WriteAsync(response, 0, response.Length).ConfigureAwait(false);
             await stream.FlushAsync().ConfigureAwait(false);
 
+            // Close gracefully. A compressed request body is sent chunked, with no Content-Length, so
+            // DrainBodyAsync leaves it unread. Closing a socket that still holds unread data makes Windows
+            // reset the connection, and the client then fails before it can read the response above.
+            // Signal that the response is complete, then read until the client closes its end. The timeout
+            // only keeps a client that never closes from hanging the test.
+            connection.Client.Shutdown(SocketShutdown.Send);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var buffer = new byte[8192];
+            try
+            {
+                while (await stream.ReadAsync(buffer, 0, buffer.Length, cts.Token).ConfigureAwait(false) > 0)
+                {
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // The client did not close in time. The headers are already captured.
+            }
+            catch (IOException)
+            {
+                // The client dropped the connection. The headers are already captured.
+            }
+
             return headerLines;
         }
 
