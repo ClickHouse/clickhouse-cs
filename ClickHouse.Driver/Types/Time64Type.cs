@@ -87,12 +87,8 @@ internal class Time64Type : ParameterizedType, ITypedWriter<TimeSpan>, ITypedRea
     /// </summary>
     internal decimal ToClickHouseDecimal(TimeSpan timeSpan)
     {
-        // Convert TimeSpan to decimal seconds
-        var seconds = (decimal)timeSpan.TotalSeconds;
-
-        // Round to the appropriate precision for the scale
-        // This ensures we don't send more precision than ClickHouse expects
-        return Math.Round(seconds, Scale);
+        var seconds = (decimal)timeSpan.Ticks / TimeSpan.TicksPerSecond;
+        return Math.Round(seconds, Scale, MidpointRounding.ToZero);
     }
 
     public override ParameterizedType Parse(SyntaxTreeNode node, Func<SyntaxTreeNode, ClickHouseType> parseClickHouseTypeFunc, TypeSettings settings)

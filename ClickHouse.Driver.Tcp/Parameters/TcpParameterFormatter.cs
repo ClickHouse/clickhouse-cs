@@ -587,18 +587,18 @@ internal static class TcpParameterFormatter
             "no alternative of the Variant accepts it");
     }
 
-    private static string FormatTime(TimeSpan value) => FormatTime((int)Math.Round(value.TotalSeconds));
+    private static string FormatTime(TimeSpan value) => FormatTime(value.Ticks / TimeSpan.TicksPerSecond);
 
-    private static string FormatTime(int totalSeconds)
+    private static string FormatTime(long totalSeconds)
     {
-        int absolute = Math.Abs(totalSeconds);
+        long absolute = Math.Abs(totalSeconds);
         string text = $"{absolute / 3600}:{(absolute % 3600) / 60:D2}:{absolute % 60:D2}";
         return totalSeconds < 0 ? "-" + text : text;
     }
 
     private static string FormatTime64(TimeSpan value, int scale)
     {
-        decimal totalSeconds = (decimal)value.Ticks / TimeSpan.TicksPerSecond;
+        decimal totalSeconds = Math.Round((decimal)value.Ticks / TimeSpan.TicksPerSecond, scale, MidpointRounding.ToZero);
         bool negative = totalSeconds < 0;
         decimal absolute = Math.Abs(totalSeconds);
 
@@ -607,9 +607,7 @@ internal static class TcpParameterFormatter
         int minutes = (int)(remainder / 60m);
         decimal seconds = remainder % 60m;
 
-        // Pre-round to even because decimal formatting rounds midpoint digits away from zero.
-        string secondsText = Math.Round(seconds, scale, MidpointRounding.ToEven)
-            .ToString("00." + new string('0', scale), CultureInfo.InvariantCulture);
+        string secondsText = seconds.ToString("00." + new string('0', scale), CultureInfo.InvariantCulture);
         string text = $"{hours}:{minutes:D2}:{secondsText}";
         return negative ? "-" + text : text;
     }

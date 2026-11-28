@@ -35,23 +35,19 @@ internal class TimeType : ClickHouseType, ITypedWriter<TimeSpan>, ITypedReader<T
 
     public override void Write(ExtendedBinaryWriter writer, object value) => WriteSeconds(writer, CoerceToSeconds(value));
 
-    // Mirrors the TimeSpan branch of CoerceToSeconds, then the shared clamp-and-write core.
-    public void WriteValue(ExtendedBinaryWriter writer, TimeSpan value) => WriteSeconds(writer, (int)Math.Round(value.TotalSeconds));
+    public void WriteValue(ExtendedBinaryWriter writer, TimeSpan value) => WriteSeconds(writer, ToSeconds(value));
 
-    private static void WriteSeconds(ExtendedBinaryWriter writer, int seconds)
-    {
-        // Apply saturation to the valid range
-        seconds = Math.Max(MinSeconds, Math.Min(MaxSeconds, seconds));
+    private static void WriteSeconds(ExtendedBinaryWriter writer, long seconds)
+        => writer.Write((int)Math.Clamp(seconds, MinSeconds, MaxSeconds));
 
-        writer.Write(seconds);
-    }
+    private static long ToSeconds(TimeSpan value) => value.Ticks / TimeSpan.TicksPerSecond;
 
-    private static int CoerceToSeconds(object value)
+    private static long CoerceToSeconds(object value)
     {
         return value switch
         {
-            TimeSpan ts => (int)Math.Round(ts.TotalSeconds),
-            TimeOnly to => (int)Math.Round(to.ToTimeSpan().TotalSeconds),
+            TimeSpan ts => ToSeconds(ts),
+            TimeOnly to => ToSeconds(to.ToTimeSpan()),
             int i => i,
             _ => throw new NotSupportedException($"Cannot convert {value?.GetType().Name ?? "null"} to Time")
         };
@@ -62,13 +58,13 @@ internal class TimeType : ClickHouseType, ITypedWriter<TimeSpan>, ITypedReader<T
     /// </summary>
     public static string FormatTimeString(TimeSpan timeSpan)
     {
-        return FormatTimeString((int)Math.Round(timeSpan.TotalSeconds));
+        return FormatTimeString(ToSeconds(timeSpan));
     }
 
     /// <summary>
     /// Formats seconds as a time string in the format [-]HHH:MM:SS
     /// </summary>
-    public static string FormatTimeString(int totalSeconds)
+    public static string FormatTimeString(long totalSeconds)
     {
         var isNegative = totalSeconds < 0;
         var absSeconds = Math.Abs(totalSeconds);

@@ -902,15 +902,14 @@ await client.ExecuteAsync(
     queryOptions);
 ```
 
-On columnar reads, `DateTime` and `DateTime64` expose their raw `uint` or `long` counts by default.
-Use `Block.ReadAs<DateTimeOffset>`, `IDateTimeColumn.GetDateTimeOffset`, or a matching POCO property
-when a calendar value is more convenient. Keep the raw count when every digit matters:
-`DateTimeOffset` has 100-nanosecond resolution, so reading `DateTime64` at scale 8 or 9 through it
-loses sub-tick precision.
+Columnar reads expose raw `uint` or `long` counts for `DateTime` and `DateTime64`.
+For calendar values, use `Block.ReadAs<DateTimeOffset>`, `IDateTimeColumn.GetDateTimeOffset`, or a
+matching POCO property. Keep raw counts at scale 8 or 9 to retain fractions of a .NET tick
+(100 nanoseconds).
 
-Use `DateOnly` for `Date` and `Date32`. Use `TimeSpan` for `Time` and `Time64` values that may be
-negative or exceed 24 hours; `TimeOnly` is appropriate only when the column is constrained to a
-time of day.
+Use `DateOnly` for `Date` and `Date32`. For `Time` and `Time64`, use `TimeOnly` for times of day
+and `TimeSpan` for values that may be negative or at least 24 hours. Inserts and parameters truncate
+both toward zero to the target precision.
 
 ### Streaming and result lifetime {#best-practices-streaming}
 

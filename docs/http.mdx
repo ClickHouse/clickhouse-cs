@@ -2020,13 +2020,15 @@ When you write a `ClickHouseDecimal` to an `Int8`, `UInt8`, `Int16`, `UInt16`, `
 | DateTime | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | See below for details; supported range `[1970-01-01, 2106-02-07 06:28:15]` UTC |
 | DateTime32 | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Same as DateTime |
 | DateTime64 | `DateTime`, `DateTimeOffset`, `DateOnly`, NodaTime types | Precision based on Scale parameter; `DateTime64(9)` accepts `[1677-09-21 00:12:43.1452242, 2262-04-11 23:47:16.8547758]` UTC, `DateTime64(8)` accepts values up to `4892-10-07 21:52:48.5477580` UTC |
-| Time | `TimeSpan`, `TimeOnly`, `int` | Clamped to ±999:59:59; int treated as seconds |
-| Time64 | `TimeSpan`, `TimeOnly`, `decimal`, `double`, `float`, `int`, `long`, `string` | String parsed as `[-]HHH:MM:SS[.fraction]`; clamped to ±999:59:59.999999999 |
+| Time | `TimeSpan`, `TimeOnly`, `int` | `int` is seconds. Clamps to ±999:59:59. |
+| Time64 | `TimeSpan`, `TimeOnly`, `decimal`, `double`, `float`, `int`, `long`, `string` | Parses strings as `[-]HHH:MM:SS[.fraction]`. Clamps to ±999:59:59.999999999. |
+
+Binary inserts and query parameters truncate `TimeSpan` and `TimeOnly` toward zero to the target precision.
 
 <Note>
 **Out-of-range values**
 
-On the binary write path, `Date`, `Date32`, `DateTime`, and `DateTime32` values outside their supported range throw `ArgumentOutOfRangeException` at `Write` time, naming the column type and the supported range. `DateTime64(8)` and `DateTime64(9)` values whose count of sub-second units since the epoch does not fit in an Int64 throw the same exception. Previously, out-of-range values could be silently truncated through a 32-bit integer and reinterpreted by the server, producing real-but-wrong timestamps.
+Binary writes of out-of-range `Date`, `Date32`, `DateTime`, and `DateTime32` values throw `ArgumentOutOfRangeException`, naming the type and its range. `DateTime64(8)` and `DateTime64(9)` throw the same exception when the count of sub-second units since the epoch exceeds Int64 bounds. Earlier versions could silently truncate values through a 32-bit integer.
 </Note>
 
 The driver respects `DateTime.Kind` when writing values:

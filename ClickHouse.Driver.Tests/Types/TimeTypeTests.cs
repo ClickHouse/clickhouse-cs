@@ -97,11 +97,12 @@ public class TimeTypeTests
         Assert.That(actualSeconds, Is.EqualTo(seconds));
     }
 
-    [Test]
-    public void Write_TimeSpanWithMilliseconds_RoundsToNearestSecond()
+    [TestCase(5700, 5)]
+    [TestCase(-5700, -5)]
+    public void Write_TimeSpanWithMilliseconds_TruncatesTowardZero(int milliseconds, int expectedSeconds)
     {
         var type = new TimeType();
-        var timeSpan = TimeSpan.FromSeconds(5.7); // 5.7 seconds
+        var timeSpan = TimeSpan.FromMilliseconds(milliseconds);
 
         using var stream = new MemoryStream();
         using var writer = new ExtendedBinaryWriter(stream);
@@ -112,7 +113,7 @@ public class TimeTypeTests
         using var reader = new BinaryReader(stream);
         var actualSeconds = reader.ReadInt32();
 
-        Assert.That(actualSeconds, Is.EqualTo(6)); // Rounded up
+        Assert.That(actualSeconds, Is.EqualTo(expectedSeconds));
     }
 
     [Test]
