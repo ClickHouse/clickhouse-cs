@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Data;
 using System.Data.Common;
+using System.Threading;
 
 namespace ClickHouse.Driver.ADO.Parameters;
 
@@ -12,6 +13,9 @@ namespace ClickHouse.Driver.ADO.Parameters;
 /// </remarks>
 public class ClickHouseDbParameter : DbParameter
 {
+    private string parameterName;
+    private WeakReference<ClickHouseParameterCollection.NameIndex> nameObserver;
+
     /// <inheritdoc/>
     public override DbType DbType { get; set; }
 
@@ -33,7 +37,32 @@ public class ClickHouseDbParameter : DbParameter
     /// <summary>
     /// Gets or sets the parameter name (without the @ prefix).
     /// </summary>
-    public override string ParameterName { get; set; }
+    public override string ParameterName
+    {
+        get
+        {
+            return parameterName;
+        }
+
+        set
+        {
+            var changed = parameterName != value;
+            parameterName = value;
+            if (changed && Volatile.Read(ref nameObserver)?.TryGetTarget(out var index) == true)
+                index.Invalidate();
+        }
+    }
+
+    // A parameter can appear in multiple collections. One index can observe it, and others can scan.
+    internal bool TryObserveName(WeakReference<ClickHouseParameterCollection.NameIndex> observer)
+    {
+        var current = Volatile.Read(ref nameObserver);
+        if (current == observer)
+            return true;
+        if (current?.TryGetTarget(out var index) == true && index.IsValid)
+            return false;
+        return Interlocked.CompareExchange(ref nameObserver, observer, current) == current;
+    }
 
     /// <inheritdoc/>
     public override int Size { get; set; }
