@@ -194,11 +194,13 @@ public class ClickHouseTcpParameterIntegrationTests
         yield return new TestCaseData("Variant(Array(BIGINT), String)", new[] { 7L, 8L })
             .Returns("[7,8]").SetName("An alias nested inside a Variant alternative");
 
-        // Time values must match Time as well as Time64 alternatives.
-        yield return new TestCaseData("Variant(Time, String)", new TimeSpan(1, 1, 1))
-            .Returns("1:01:01").SetName("Variant picks the Time arm from a TimeSpan");
-        yield return new TestCaseData("Variant(Time, String)", new TimeOnly(1, 1, 1))
-            .Returns("1:01:01").SetName("Variant picks the Time arm from a TimeOnly");
+        // Time values must match Time as well as Time64 alternatives. The client sends 1:01:01, so 01:01:01 shows
+        // that the server stored the Time arm. The other alternative is not String: a server before 26.12 stores
+        // any text in a String alternative before it tries Time (ClickHouse/ClickHouse#132190).
+        yield return new TestCaseData("Variant(Time, Int64)", new TimeSpan(1, 1, 1))
+            .Returns("01:01:01").SetName("Variant picks the Time arm from a TimeSpan");
+        yield return new TestCaseData("Variant(Time, Int64)", new TimeOnly(1, 1, 1))
+            .Returns("01:01:01").SetName("Variant picks the Time arm from a TimeOnly");
 
         // Covers both JSON spellings and geo types backed by tuple/array shapes.
         yield return new TestCaseData("Json", "{\"a\":1}").Returns("{\"a\":1}").SetName("Json in the lowercase spelling");
